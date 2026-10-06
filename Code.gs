@@ -2145,7 +2145,41 @@ function getBookingByIdObject_(id){
 
 function appendObjectRow_(sheetName,source,values){
   var sheet=getSheet_(sheetName),headers=getHeaders_(sheet),v=values||{};
-  sheet.appendRow(headers.map(function(h){return Object.prototype.hasOwnProperty.call(v,h)?v[h]:(source&&Object.prototype.hasOwnProperty.call(source,h)?source[h]:'');}));
+
+  var rowValues=headers.map(function(h){
+    return Object.prototype.hasOwnProperty.call(v,h)
+      ? v[h]
+      : (source&&Object.prototype.hasOwnProperty.call(source,h)
+        ? source[h]
+        : '');
+  });
+
+  /*
+   * IMPORTANT:
+   * Jalali booking dates must remain TEXT in Google Sheets.
+   *
+   * If a value such as 1405/07/14 is written with appendRow()
+   * while the column is date-formatted, Google Sheets can interpret
+   * it as a Gregorian year/month/day and convert it to a Date object.
+   * The next read then turns 1405/07/14 into an unrelated Jalali date
+   * (for example 784/04/23).
+   *
+   * We therefore force the Appointment Date column to plain text
+   * BEFORE writing the row.
+   */
+  var dateColumnIndex=headers.indexOf('Appointment Date');
+
+  if(dateColumnIndex!==-1){
+    sheet
+      .getRange(1,dateColumnIndex+1,sheet.getMaxRows(),1)
+      .setNumberFormat('@');
+  }
+
+  var nextRow=sheet.getLastRow()+1;
+
+  sheet
+    .getRange(nextRow,1,1,headers.length)
+    .setValues([rowValues]);
 }
 
 function updateRowFields_(sheetName,rowNumber,fields){

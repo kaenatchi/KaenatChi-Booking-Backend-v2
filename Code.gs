@@ -3836,3 +3836,98 @@ function testVIPDiscountPaymentFlow() {
 
   return result;
 }
+
+
+
+function testPaymentVIPRegressionSuite() {
+  var result = {
+    ok: false,
+    suite: 'Payment + VIP Regression',
+    startedAt: new Date().toISOString(),
+    tests: [],
+    passed: 0,
+    failed: 0,
+    error: ''
+  };
+
+  var testCases = [
+    {
+      name: 'testPaymentFlowSubmitOnly',
+      fn: testPaymentFlowSubmitOnly
+    },
+    {
+      name: 'testPaymentFlowRejectWithoutProof',
+      fn: testPaymentFlowRejectWithoutProof
+    },
+    {
+      name: 'testApprovalBlockedBeforePayment',
+      fn: testApprovalBlockedBeforePayment
+    },
+    {
+      name: 'testPaymentFlowDuplicate',
+      fn: testPaymentFlowDuplicate
+    },
+    {
+      name: 'testPaymentApprovalFlow',
+      fn: testPaymentApprovalFlow
+    },
+    {
+      name: 'testVIPDiscountPaymentFlow',
+      fn: testVIPDiscountPaymentFlow
+    }
+  ];
+
+  for (var i = 0; i < testCases.length; i++) {
+    var testCase = testCases[i];
+
+    try {
+      var testResult = testCase.fn();
+
+      var passed = !!testResult && testResult.ok === true;
+
+      result.tests.push({
+        name: testCase.name,
+        ok: passed,
+        error: passed ? '' : String(
+          testResult && testResult.error
+            ? testResult.error
+            : 'Test returned ok=false'
+        )
+      });
+
+      if (passed) {
+        result.passed++;
+      } else {
+        result.failed++;
+      }
+
+    } catch (e) {
+      result.failed++;
+      result.tests.push({
+        name: testCase.name,
+        ok: false,
+        error: String(e && e.message ? e.message : e)
+      });
+    }
+  }
+
+  result.ok =
+    result.failed === 0 &&
+    result.passed === testCases.length;
+
+  result.completedAt = new Date().toISOString();
+
+  Logger.log('PAYMENT + VIP REGRESSION SUITE');
+  Logger.log(JSON.stringify(result, null, 2));
+  Logger.log(
+    'ALL REGRESSION CHECKS PASSED: ' +
+    result.ok +
+    ' (' +
+    result.passed +
+    '/' +
+    testCases.length +
+    ')'
+  );
+
+  return result;
+}

@@ -128,7 +128,7 @@ function doPost(e) {
       return jsonResponse_(legacyBookingSubmit_(request));
     }
 
-    return respond(routeRequest_(action, request));
+    return jsonResponse_(routeRequest_(action, request));
 
   } catch (error) {
     console.error(error);
@@ -361,7 +361,7 @@ function legacyBookingSubmit_(request) {
    3. HEALTH CHECK
    ===================================================== */
 
-function healthCheck() {
+function healthCheck_() {
 
   const spreadsheet = getSpreadsheet_();
 

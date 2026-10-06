@@ -600,11 +600,13 @@ function getSchedule_() {
 
 function getBlockedDates_() {
   /*
-   * BlockedDates may contain Jalali dates stored as Google Sheets
-   * date/text values. Read display values directly so the Web App
-   * never has to serialize raw Date objects from this sheet.
+   * BlockedDates is intentionally handled independently from the
+   * generic row reader. This sheet may be completely empty except
+   * for its header row, and in that case the Web App must return
+   * a clean empty array without touching any cell values.
    */
   const sheet = getSheet_(CONFIG.SHEETS.BLOCKED_DATES);
+
   const lastRow = sheet.getLastRow();
   const lastColumn = sheet.getLastColumn();
 
@@ -636,13 +638,27 @@ function getBlockedDates_() {
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
 
-    if (!row[dateIndex]) {
+    const rawDate = String(
+      row[dateIndex] === undefined || row[dateIndex] === null
+        ? ''
+        : row[dateIndex]
+    ).trim();
+
+    if (!rawDate) {
+      continue;
+    }
+
+    const normalizedDate = normalizeJalaliDate_(rawDate);
+
+    if (!normalizedDate) {
       continue;
     }
 
     result.push({
-      date: normalizeJalaliDate_(row[dateIndex]),
-      active: isTruthy_(row[activeIndex]),
+      date: normalizedDate,
+      active: activeIndex >= 0
+        ? isTruthy_(row[activeIndex])
+        : false,
       reason: reasonIndex >= 0 && row[reasonIndex]
         ? String(row[reasonIndex]).trim()
         : ''

@@ -1989,7 +1989,7 @@ function iframeBridgeResponse_(data) {
   const payload = JSON.stringify(data).replace(/</g, '\\u003c');
   const html = '<!doctype html><html><head><meta charset="utf-8"></head><body>' +
     '<script>' +
-    'window.parent.postMessage({source:"kaenatchi-booking-bridge",data:' + payload + '},"*");' +
+    'window.top.postMessage({source:"kaenatchi-booking-bridge",data:' + payload + '},"*");' +
     '</script>' +
     '</body></html>';
 

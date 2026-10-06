@@ -76,6 +76,7 @@ function doGet(e) {
   const request = (e && e.parameter) ? e.parameter : {};
   const action = String(request.action || '').trim();
   const callback = String(request.callback || '').trim();
+  const bridge = String(request.bridge || '').trim();
   const respond = function(data) {
     if (callback && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(callback)) {
       return jsonpResponse_(callback, data);

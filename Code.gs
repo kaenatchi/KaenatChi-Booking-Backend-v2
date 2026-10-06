@@ -97,7 +97,7 @@ function doGet(e) {
     }
 
     if (action) {
-      return respond(routeRequest_(action, request));
+      return jsonResponse_(routeRequest_(action, request));
     }
 
     return jsonResponse_({

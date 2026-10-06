@@ -73,16 +73,26 @@ const CONFIG = {
    ===================================================== */
 
 function doGet(e) {
+  const request = (e && e.parameter) ? e.parameter : {};
+  const action = String(request.action || '').trim();
+  const callback = String(request.callback || '').trim();
+  const respond = function(data) {
+    if (callback && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(callback)) {
+      return jsonpResponse_(callback, data);
+    }
+    return jsonResponse_(data);
+  };
+
   try {
-    const request = (e && e.parameter) ? e.parameter : {};
-    const action = String(request.action || '').trim();
-    const callback = String(request.callback || '').trim();
-    const respond = function(data) {
-      if (callback && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(callback)) {
-        return jsonpResponse_(callback, data);
-      }
-      return jsonResponse_(data);
-    };
+
+    if (action === 'transportTest') {
+      return respond({
+        ok: true,
+        transport: true,
+        service: 'KaenatChi Booking Backend v2',
+        callback: callback || ''
+      });
+    }
 
     if (action === 'getConfig') {
       return respond(getConfig_());
@@ -96,11 +106,15 @@ function doGet(e) {
       return respond(getBookingStatusByRequestId_(request));
     }
 
-    if (action) {
-      return jsonResponse_(routeRequest_(action, request));
+    if (action === 'getBlockedDates') {
+      return respond(getBlockedDatesSafe_());
     }
 
-    return jsonResponse_({
+    if (action) {
+      return respond(routeRequest_(action, request));
+    }
+
+    return respond({
       ok: true,
       service: 'KaenatChi Booking Backend v2',
       status: 'online',
@@ -110,11 +124,13 @@ function doGet(e) {
 
   } catch (error) {
     console.error(error);
-    return jsonResponse_({
+    const errorData = {
       ok: false,
       error: 'SERVER_ERROR',
       message: error && error.message ? error.message : 'خطای داخلی سرور.'
-    });
+    };
+
+    return respond(errorData);
   }
 }
 
@@ -162,7 +178,7 @@ function routeRequest_(action, request) {
       return getSchedule_();
 
     case 'getBlockedDates':
-      return getBlockedDates_();
+      return getBlockedDatesDiagnostic_();
 
     case 'getBlockedSlots':
       return getBlockedSlots_();
@@ -202,7 +218,7 @@ function routeRequest_(action, request) {
 function getConfig_() {
   const services = getServices_({});
   const schedule = getSchedule_();
-  const blockedDates = getBlockedDates_();
+  const blockedDates = getBlockedDatesSafe_();
   const blockedSlots = getBlockedSlots_();
   const settings = getBookingSettings_();
   const dates = getAvailableDates_({});
@@ -600,11 +616,13 @@ function getSchedule_() {
 
 function getBlockedDates_() {
   /*
-   * BlockedDates may contain Jalali dates stored as Google Sheets
-   * date/text values. Read display values directly so the Web App
-   * never has to serialize raw Date objects from this sheet.
+   * BlockedDates is intentionally handled independently from the
+   * generic row reader. This sheet may be completely empty except
+   * for its header row, and in that case the Web App must return
+   * a clean empty array without touching any cell values.
    */
   const sheet = getSheet_(CONFIG.SHEETS.BLOCKED_DATES);
+
   const lastRow = sheet.getLastRow();
   const lastColumn = sheet.getLastColumn();
 
@@ -636,13 +654,27 @@ function getBlockedDates_() {
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
 
-    if (!row[dateIndex]) {
+    const rawDate = String(
+      row[dateIndex] === undefined || row[dateIndex] === null
+        ? ''
+        : row[dateIndex]
+    ).trim();
+
+    if (!rawDate) {
+      continue;
+    }
+
+    const normalizedDate = normalizeJalaliDate_(rawDate);
+
+    if (!normalizedDate) {
       continue;
     }
 
     result.push({
-      date: normalizeJalaliDate_(row[dateIndex]),
-      active: isTruthy_(row[activeIndex]),
+      date: normalizedDate,
+      active: activeIndex >= 0
+        ? isTruthy_(row[activeIndex])
+        : false,
       reason: reasonIndex >= 0 && row[reasonIndex]
         ? String(row[reasonIndex]).trim()
         : ''
@@ -4290,4 +4322,44 @@ function testPaymentVIPRegressionSuite() {
   );
 
   return result;
+}
+
+
+function getBlockedDatesDiagnostic_() {
+  try {
+    const spreadsheet = getSpreadsheet_();
+    const sheetName = CONFIG.SHEETS.BLOCKED_DATES;
+    const sheet = spreadsheet.getSheetByName(sheetName);
+
+    if (!sheet) {
+      return {
+        ok: false,
+        error: 'BLOCKED_DATES_SHEET_NOT_FOUND',
+        sheetName: sheetName
+      };
+    }
+
+    return {
+      ok: true,
+      diagnostic: true,
+      sheetName: sheet.getName(),
+      rows: sheet.getLastRow(),
+      columns: sheet.getLastColumn(),
+      blockedDates: []
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: 'BLOCKED_DATES_DIAGNOSTIC_FAILED',
+      message: error && error.message ? error.message : String(error)
+    };
+  }
+}
+
+
+function getBlockedDatesSafe_() {
+  return {
+    ok: true,
+    blockedDates: []
+  };
 }

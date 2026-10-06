@@ -2055,6 +2055,21 @@ function approveBooking_(request){
       'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,'Appointment Status':CONFIG.STATUSES.BOOKING_CONFIRMED,
       'Approved At':new Date(),'Approved By':String(request.adminId||request.admin||'admin'),'Hold Until':''
     });
+
+    // Keep the financial record synchronized with the Booking record.
+    // Approval must update the matching Payments row to PAYMENT_APPROVED.
+    var paymentRows=getSheetObjects_(CONFIG.SHEETS.PAYMENTS);
+    paymentRows.forEach(function(p){
+      if(String(p['Booking ID']||'')===String(b['Booking ID']||'') &&
+         String(p['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED){
+        updateRowFields_(CONFIG.SHEETS.PAYMENTS,p._row,{
+          'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,
+          'Approved At':new Date(),
+          'Approved By':String(request.adminId||request.admin||'admin')
+        });
+      }
+    });
+
     consumeDiscountToken_(
       String(b['Discount Code']||''),
       String(b['Customer ID']||''),

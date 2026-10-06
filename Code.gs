@@ -114,11 +114,17 @@ function doGet(e) {
 
   } catch (error) {
     console.error(error);
-    return jsonResponse_({
+    const errorData = {
       ok: false,
       error: 'SERVER_ERROR',
       message: error && error.message ? error.message : 'خطای داخلی سرور.'
-    });
+    };
+
+    if (callback && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(callback)) {
+      return jsonpResponse_(callback, errorData);
+    }
+
+    return jsonResponse_(errorData);
   }
 }
 
@@ -206,7 +212,7 @@ function routeRequest_(action, request) {
 function getConfig_() {
   const services = getServices_({});
   const schedule = getSchedule_();
-  const blockedDates = getBlockedDates_();
+  const blockedDates = getBlockedDatesSafe_();
   const blockedSlots = getBlockedSlots_();
   const settings = getBookingSettings_();
   const dates = getAvailableDates_({});

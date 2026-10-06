@@ -25,6 +25,16 @@ const CONFIG = {
     BOOKING_LOGS: 'BookingLogs'
   },
 
+  VIP: {
+    SPREADSHEET_ID: '1TpljGwyRpHcxyyR6Zm1mbT2CPJBvFeHCvD3QH34BuGs',
+    CUSTOMERS_SHEET: 'مشتریان',
+    TOKENS_SHEET: 'توکن ها',
+    ACTIVE_STATUS: 'فعال',
+    ISSUED_STATUS: 'صادرشده',
+    USED_STATUS: 'مصرف‌شده',
+    EXPIRED_STATUS: 'منقضی‌شده'
+  },
+
   STATUSES: {
     PAYMENT_PENDING: 'در انتظار پرداخت',
     PAYMENT_RECEIVED: 'فیش دریافت شد',
@@ -1839,15 +1849,112 @@ function getServices_(request) {
 
 function validateDiscount_(request){
   var price=Math.max(0,toNumber_(request.price));
-  var code=String(request.code||request.discountCode||request.vipCode||'').trim();
-  if(!code)return {ok:true,valid:false,discountPercent:0,discountAmount:0,finalPrice:price};
-  var t=findDiscountToken_(code);
-  if(!t)return {ok:true,valid:false,discountPercent:0,discountAmount:0,finalPrice:price,message:'کد تخفیف معتبر نیست.'};
-  if(t.used)return {ok:true,valid:false,discountPercent:0,discountAmount:0,finalPrice:price,message:'کد تخفیف قبلاً استفاده شده است.'};
-  if(t.expiry&&t.expiry.getTime()<=Date.now())return {ok:true,valid:false,discountPercent:0,discountAmount:0,finalPrice:price,message:'کد تخفیف منقضی شده است.'};
-  var p=Math.max(0,Math.min(100,toNumber_(t.percent)));
+  var code=String(request.code||request.discountCode||request.vipCode||'').trim().toUpperCase();
+
+  if(!code){
+    return {
+      ok:true,
+      valid:false,
+      discountPercent:0,
+      discountAmount:0,
+      finalPrice:price
+    };
+  }
+
+  var token=findVIPDiscountToken_(code);
+
+  if(!token){
+    return {
+      ok:true,
+      valid:false,
+      discountPercent:0,
+      discountAmount:0,
+      finalPrice:price,
+      message:'کد تخفیف معتبر نیست.'
+    };
+  }
+
+  if(token.used){
+    return {
+      ok:true,
+      valid:false,
+      discountPercent:0,
+      discountAmount:0,
+      finalPrice:price,
+      message:'کد تخفیف قبلاً استفاده شده است.'
+    };
+  }
+
+  if(token.expiryMs && token.expiryMs<=Date.now()){
+    markVIPTokenExpired_(token);
+    return {
+      ok:true,
+      valid:false,
+      discountPercent:0,
+      discountAmount:0,
+      finalPrice:price,
+      message:'کد تخفیف منقضی شده است.'
+    };
+  }
+
+  if(token.status!==CONFIG.VIP.ACTIVE_STATUS){
+    return {
+      ok:true,
+      valid:false,
+      discountPercent:0,
+      discountAmount:0,
+      finalPrice:price,
+      message:'ابتدا توکن VIP را در پنل VIP فعال کنید.'
+    };
+  }
+
+  if(!token.customerActive){
+    return {
+      ok:true,
+      valid:false,
+      discountPercent:0,
+      discountAmount:0,
+      finalPrice:price,
+      message:'عضویت VIP این کد فعال نیست.'
+    };
+  }
+
+  var requestedCustomerId=String(request.customerId||'').trim();
+  if(requestedCustomerId && requestedCustomerId!==token.customerId){
+    return {
+      ok:true,
+      valid:false,
+      discountPercent:0,
+      discountAmount:0,
+      finalPrice:price,
+      message:'این کد تخفیف متعلق به این حساب VIP نیست.'
+    };
+  }
+
+  var requestedTelegramId=String(request.telegramId||'').trim();
+  if(requestedTelegramId && token.telegramId && requestedTelegramId!==token.telegramId){
+    return {
+      ok:true,
+      valid:false,
+      discountPercent:0,
+      discountAmount:0,
+      finalPrice:price,
+      message:'این کد تخفیف متعلق به این حساب Telegram نیست.'
+    };
+  }
+
+  var p=Math.max(0,Math.min(100,toNumber_(token.percent)));
   var a=Math.round(price*p/100);
-  return {ok:true,valid:p>0,discountPercent:p,discountAmount:a,finalPrice:Math.max(0,price-a),token:code};
+
+  return {
+    ok:true,
+    valid:p>0,
+    discountPercent:p,
+    discountAmount:a,
+    finalPrice:Math.max(0,price-a),
+    token:code,
+    vipCustomerId:token.customerId
+  };
 }
 
 function createBooking_(request){
@@ -1866,7 +1973,12 @@ function createBooking_(request){
     if(!service)return fail_('SERVICE_NOT_FOUND','خدمت انتخاب‌شده پیدا نشد.');
     var basePrice=toNumber_(service.price);
     var discountCode=String(request.discountCode||request.vipCode||'').trim();
-    var discount=validateDiscount_({price:basePrice,code:discountCode});
+    var discount=validateDiscount_({
+      price:basePrice,
+      code:discountCode,
+      customerId:String(request.customerId||'').trim(),
+      telegramId:String(request.telegramId||'').trim()
+    });
     if(discountCode&&!discount.valid)return fail_('INVALID_DISCOUNT',discount.message||'کد تخفیف معتبر نیست.');
 
     var booking={
@@ -1939,7 +2051,12 @@ function approveBooking_(request){
       'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,'Appointment Status':CONFIG.STATUSES.BOOKING_CONFIRMED,
       'Approved At':new Date(),'Approved By':String(request.adminId||request.admin||'admin'),'Hold Until':''
     });
-    consumeDiscountToken_(String(b['Discount Code']||''));
+    consumeDiscountToken_(
+      String(b['Discount Code']||''),
+      String(b['Customer ID']||''),
+      String(b['Telegram ID']||''),
+      String(b['Tracking Code']||'')
+    );
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_APPROVED,bookingId:b['Booking ID'],slotKey:slotKey,details:'Booking approved.'});
     return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_CONFIRMED,message:'نوبت تأیید شد.'};
   });
@@ -2058,32 +2175,167 @@ function saveReceiptToDrive_(data,fileName,mimeType,booking){
   return {id:file.getId(),url:file.getUrl(),name:file.getName()};
 }
 
-function findDiscountToken_(code){
-  var sheets=getSpreadsheet_().getSheets();
-  for(var i=0;i<sheets.length;i++){
-    var sheet=sheets[i],headers=getHeaders_(sheet);
-    var tokenHeader=findHeader_(headers,['Token','Token Code','Code','Discount Code','کد تخفیف']);
-    if(!tokenHeader)continue;
-    var rows=getSheetObjects_(sheet.getName());
-    var row=rows.find(function(r){return String(r[tokenHeader]||'').trim()===code;});
-    if(!row)continue;
+function getVIPSpreadsheet_(){
+  return SpreadsheetApp.openById(
+    CONFIG.VIP.SPREADSHEET_ID
+  );
+}
+
+function getVIPSheet_(sheetName){
+  var sheet=getVIPSpreadsheet_().getSheetByName(sheetName);
+  if(!sheet){
+    throw new Error('شیت VIP پیدا نشد: '+sheetName);
+  }
+  return sheet;
+}
+
+function findVIPDiscountToken_(code){
+  var cleanCode=String(code||'').trim().toUpperCase();
+  if(!cleanCode)return null;
+
+  var tokenSheet=getVIPSheet_(CONFIG.VIP.TOKENS_SHEET);
+  var customerSheet=getVIPSheet_(CONFIG.VIP.CUSTOMERS_SHEET);
+
+  var tokenLastRow=tokenSheet.getLastRow();
+  if(tokenLastRow<2)return null;
+
+  var tokenValues=tokenSheet.getRange(
+    2,
+    1,
+    tokenLastRow-1,
+    Math.max(10,tokenSheet.getLastColumn())
+  ).getValues();
+
+  var customerLastRow=customerSheet.getLastRow();
+  var customerValues=customerLastRow>=2
+    ? customerSheet.getRange(2,1,customerLastRow-1,8).getValues()
+    : [];
+
+  for(var i=0;i<tokenValues.length;i++){
+    var row=tokenValues[i];
+
+    if(String(row[0]||'').trim().toUpperCase()!==cleanCode){
+      continue;
+    }
+
+    var customerId=String(row[1]||'').trim();
+    var customer=null;
+
+    for(var j=0;j<customerValues.length;j++){
+      if(String(customerValues[j][0]||'').trim()===customerId){
+        customer=customerValues[j];
+        break;
+      }
+    }
+
     return {
-      sheetName:sheet.getName(),row:row,
-      percent:firstField_(row,['Discount Percent','Discount %','Percent','درصد تخفیف']),
-      used:isTruthy_(firstField_(row,['Used','Is Used','مصرف شده','Status Used'])),
-      expiry:parseDateValue_(firstField_(row,['Expiry Date','Expires At','Valid Until','تاریخ انقضا']))
+      sheet:tokenSheet,
+      rowNumber:i+2,
+      row:row,
+      code:cleanCode,
+      customerId:customerId,
+      percent:toNumber_(row[2]),
+      status:String(row[5]||'').trim(),
+      used:String(row[5]||'').trim()===CONFIG.VIP.USED_STATUS,
+      expiryMs:Number(row[9]||0),
+      customerActive:!!customer && String(customer[7]||'').trim()===CONFIG.VIP.ACTIVE_STATUS,
+      telegramId:customer ? String(customer[4]||'').trim() : ''
     };
   }
+
   return null;
 }
 
-function consumeDiscountToken_(code){
-  if(!code)return;
-  var found=findDiscountToken_(code);
-  if(!found)return;
-  var headers=getHeaders_(getSheet_(found.sheetName));
-  var h=findHeader_(headers,['Used','Is Used','مصرف شده','Status Used']);
-  if(h)updateRowFields_(found.sheetName,found.row._row,{[h]:true});
+function markVIPTokenExpired_(token){
+  if(!token || !token.sheet || !token.rowNumber)return;
+  token.sheet
+    .getRange(token.rowNumber,6)
+    .setValue(CONFIG.VIP.EXPIRED_STATUS);
+}
+
+function consumeDiscountToken_(code,customerId,telegramId,trackingCode){
+  if(!String(code||'').trim())return;
+
+  var found=findVIPDiscountToken_(String(code).trim().toUpperCase());
+
+  if(!found){
+    throw new Error('کد تخفیف معتبر نیست.');
+  }
+
+  if(found.used){
+    throw new Error('کد تخفیف قبلاً مصرف شده است.');
+  }
+
+  if(found.expiryMs && found.expiryMs<=Date.now()){
+    markVIPTokenExpired_(found);
+    throw new Error('کد تخفیف منقضی شده است.');
+  }
+
+  if(found.status!==CONFIG.VIP.ACTIVE_STATUS){
+    throw new Error('توکن VIP فعال نیست.');
+  }
+
+  if(!found.customerActive){
+    throw new Error('عضویت VIP این کد فعال نیست.');
+  }
+
+  var requestedCustomerId=String(customerId||'').trim();
+  if(requestedCustomerId && requestedCustomerId!==found.customerId){
+    throw new Error('این کد تخفیف متعلق به این حساب VIP نیست.');
+  }
+
+  var requestedTelegramId=String(telegramId||'').trim();
+  if(requestedTelegramId && found.telegramId && requestedTelegramId!==found.telegramId){
+    throw new Error('این کد تخفیف متعلق به این حساب Telegram نیست.');
+  }
+
+  var now=new Date();
+
+  found.sheet.getRange(found.rowNumber,6).setValue(CONFIG.VIP.USED_STATUS);
+  found.sheet.getRange(found.rowNumber,7).setValue(formatVIPDateTime_(now));
+  found.sheet.getRange(found.rowNumber,8).setValue(String(trackingCode||'').trim());
+
+  SpreadsheetApp.flush();
+}
+
+function formatVIPDateTime_(date){
+  if(!date)return '';
+  var d=date instanceof Date?date:new Date(date);
+  var parts=gregorianToJalali_(d);
+  return parts[0]+'/'+String(parts[1]).padStart(2,'0')+'/'+String(parts[2]).padStart(2,'0')
+    +' - '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+}
+
+function testVIPDiscountConnection(){
+  var tokenSheet=getVIPSheet_(CONFIG.VIP.TOKENS_SHEET);
+  var customerSheet=getVIPSheet_(CONFIG.VIP.CUSTOMERS_SHEET);
+
+  var tokenLastRow=tokenSheet.getLastRow();
+  var customerLastRow=customerSheet.getLastRow();
+
+  var activeCount=0;
+  var usableCount=0;
+
+  if(tokenLastRow>=2){
+    var rows=tokenSheet.getRange(2,1,tokenLastRow-1,Math.max(10,tokenSheet.getLastColumn())).getValues();
+    rows.forEach(function(row){
+      var status=String(row[5]||'').trim();
+      var expiryMs=Number(row[9]||0);
+      if(status===CONFIG.VIP.ACTIVE_STATUS){
+        activeCount++;
+        if(!expiryMs || expiryMs>Date.now())usableCount++;
+      }
+    });
+  }
+
+  return {
+    ok:true,
+    vipSpreadsheetConnected:true,
+    vipCustomersRows:Math.max(0,customerLastRow-1),
+    vipTokenRows:Math.max(0,tokenLastRow-1),
+    activeTokens:activeCount,
+    usableActiveTokens:usableCount
+  };
 }
 
 function firstField_(row,names){

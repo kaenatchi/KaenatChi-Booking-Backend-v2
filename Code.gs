@@ -134,6 +134,15 @@ function routeRequest_(action, request) {
     case 'getBooking':
       return getBooking_(request);
 
+    case 'getServices': return getServices_(request);
+    case 'validateDiscount': return validateDiscount_(request);
+    case 'createBooking': return createBooking_(request);
+    case 'submitPayment': return submitPayment_(request);
+    case 'approveBooking': return approveBooking_(request);
+    case 'rejectBooking': return rejectBooking_(request);
+    case 'cancelBooking': return cancelBooking_(request);
+    case 'releaseExpiredHolds': return releaseExpiredHolds_(request);
+
     default:
       return {
         ok: false,
@@ -1741,4 +1750,362 @@ function testJalaliWeekdays() {
       ranges: schedule.ranges
     }, null, 2));
   });
+}
+
+
+/* =====================================================
+   PHASE 2 - BACKEND CONTRACT VALIDATION
+   Safe test only. Does not change booking data.
+   ===================================================== */
+
+function testBookingBackendContract() {
+  const requiredSheets = CONFIG.SHEETS;
+  const result = {
+    ok: true,
+    sheets: {},
+    missingSheets: [],
+    headerWarnings: []
+  };
+
+  Object.keys(requiredSheets).forEach(function(key) {
+    const name = requiredSheets[key];
+    const sheet = getSpreadsheet_().getSheetByName(name);
+
+    if (!sheet) {
+      result.ok = false;
+      result.missingSheets.push(name);
+      result.sheets[name] = { exists: false };
+      return;
+    }
+
+    result.sheets[name] = {
+      exists: true,
+      rows: Math.max(0, sheet.getLastRow() - 1),
+      columns: sheet.getLastColumn(),
+      headers: getHeaders_(sheet)
+    };
+  });
+
+  const expectedHeaders = {
+    BookingSettings: ['Setting', 'Value'],
+    Schedule: ['Day', 'Active', 'Start Time', 'End Time', 'Slot Duration'],
+    BlockedDates: ['Date', 'Active', 'Reason'],
+    BlockedSlots: ['Date', 'Time', 'Active', 'Reason'],
+    Bookings: ['Slot Key', 'Appointment Status', 'Hold Until', 'Booking ID', 'Tracking Code']
+  };
+
+  Object.keys(expectedHeaders).forEach(function(sheetName) {
+    if (!result.sheets[sheetName] || !result.sheets[sheetName].exists) return;
+
+    expectedHeaders[sheetName].forEach(function(header) {
+      if (result.sheets[sheetName].headers.indexOf(header) === -1) {
+        result.ok = false;
+        result.headerWarnings.push(sheetName + ': missing "' + header + '"');
+      }
+    });
+  });
+
+  return result;
+}
+
+
+
+/* =====================================================
+   PHASE 2 - BOOKING CORE
+   ===================================================== */
+
+function getServices_(request) {
+  var names=['Services','services'];
+  for(var i=0;i<names.length;i++){
+    if(!getSpreadsheet_().getSheetByName(names[i])) continue;
+    var rows=getSheetObjects_(names[i]);
+    var services=rows.filter(function(r){
+      var a=firstField_(r,['Active','Is Active','فعال','وضعیت','Status']);
+      return a===''||isTruthy_(a);
+    }).map(function(r){
+      return {
+        id:String(firstField_(r,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||''),
+        name:String(firstField_(r,['نام خدمت','Service Name','Name','Title','عنوان'])||''),
+        category:String(firstField_(r,['دسته','Category','Service Category'])||''),
+        description:String(firstField_(r,['توضیح کوتاه','Description','Short Description','توضیحات'])||''),
+        price:toNumber_(firstField_(r,['قیمت','Price','Base Price','Original Price','مبلغ'])),
+        duration:toNumber_(firstField_(r,['مدت','Duration','مدت زمان']))
+      };
+    }).filter(function(s){return s.name;});
+    return {ok:true,services:services};
+  }
+  return {ok:true,services:[]};
+}
+
+function validateDiscount_(request){
+  var price=Math.max(0,toNumber_(request.price));
+  var code=String(request.code||request.discountCode||request.vipCode||'').trim();
+  if(!code)return {ok:true,valid:false,discountPercent:0,discountAmount:0,finalPrice:price};
+  var t=findDiscountToken_(code);
+  if(!t)return {ok:true,valid:false,discountPercent:0,discountAmount:0,finalPrice:price,message:'کد تخفیف معتبر نیست.'};
+  if(t.used)return {ok:true,valid:false,discountPercent:0,discountAmount:0,finalPrice:price,message:'کد تخفیف قبلاً استفاده شده است.'};
+  if(t.expiry&&t.expiry.getTime()<=Date.now())return {ok:true,valid:false,discountPercent:0,discountAmount:0,finalPrice:price,message:'کد تخفیف منقضی شده است.'};
+  var p=Math.max(0,Math.min(100,toNumber_(t.percent)));
+  var a=Math.round(price*p/100);
+  return {ok:true,valid:p>0,discountPercent:p,discountAmount:a,finalPrice:Math.max(0,price-a),token:code};
+}
+
+function createBooking_(request){
+  return withBookingLock_(function(){
+    var date=normalizeJalaliDate_(request.date||request.appointmentDate);
+    var time=normalizeTime_(request.time||request.appointmentTime);
+    if(!date||!time)return fail_('DATE_TIME_REQUIRED','تاریخ و ساعت الزامی است.');
+    if(!isDateAvailable_(date))return fail_('DATE_NOT_AVAILABLE','این تاریخ قابل رزرو نیست.');
+    var schedule=getScheduleForDate_(date);
+    var allowed=schedule.ranges.some(function(r){return generateSlots_(r.startTime,r.endTime,r.slotDuration).indexOf(time)!==-1;});
+    if(!allowed)return fail_('SLOT_NOT_AVAILABLE','این ساعت در برنامه کاری قرار ندارد.');
+    var slotKey=buildSlotKey_(date,time);
+    if(getSlotStatus_(slotKey,date,time)!==CONFIG.SLOT_STATUS.FREE)return fail_('SLOT_UNAVAILABLE','این زمان قبلاً رزرو یا موقتاً نگه داشته شده است.');
+
+    var service=findServiceRecord_(String(request.serviceId||''),String(request.serviceName||request.service||''));
+    if(!service)return fail_('SERVICE_NOT_FOUND','خدمت انتخاب‌شده پیدا نشد.');
+    var basePrice=toNumber_(service.price);
+    var discountCode=String(request.discountCode||request.vipCode||'').trim();
+    var discount=validateDiscount_({price:basePrice,code:discountCode});
+    if(discountCode&&!discount.valid)return fail_('INVALID_DISCOUNT',discount.message||'کد تخفیف معتبر نیست.');
+
+    var booking={
+      bookingId:generateId_('BK'),requestId:String(request.requestId||''),createdAt:new Date(),
+      telegramId:String(request.telegramId||''),customerId:String(request.customerId||''),
+      firstName:String(request.firstName||'').trim(),lastName:String(request.lastName||'').trim(),
+      mobile:String(request.mobile||request.phone||'').trim(),serviceId:String(service.id||request.serviceId||''),
+      serviceName:String(service.name),appointmentDate:date,appointmentTime:time,slotKey:slotKey,
+      originalPrice:basePrice,discountCode:discountCode,discountType:discountCode?'VIP':'',
+      discountPercent:discount.discountPercent,discountAmount:discount.discountAmount,finalPrice:discount.finalPrice,
+      paymentStatus:CONFIG.STATUSES.PAYMENT_PENDING,appointmentStatus:CONFIG.STATUSES.BOOKING_PENDING,
+      trackingCode:generateTrackingCode_(),holdUntil:new Date(Date.now()+Math.max(5,toNumber_(getSetting_('Hold Minutes',15)))*60000)
+    };
+    booking.customerId=upsertCustomer_(booking);
+
+    appendObjectRow_(CONFIG.SHEETS.BOOKINGS,{},{
+      'Booking ID':booking.bookingId,'Request ID':booking.requestId,'Created At':booking.createdAt,
+      'Telegram ID':booking.telegramId,'Customer ID':booking.customerId,'First Name':booking.firstName,'Last Name':booking.lastName,
+      'Mobile':booking.mobile,'Service ID':booking.serviceId,'Service Name':booking.serviceName,
+      'Appointment Date':booking.appointmentDate,'Appointment Time':booking.appointmentTime,'Slot Key':booking.slotKey,
+      'Original Price':booking.originalPrice,'Discount Code':booking.discountCode,'Discount Type':booking.discountType,
+      'Discount Amount':booking.discountAmount,'Final Price':booking.finalPrice,'Payment Status':booking.paymentStatus,
+      'Appointment Status':booking.appointmentStatus,'Tracking Code':booking.trackingCode,'Hold Until':booking.holdUntil
+    });
+    appendBookingLog_({action:CONFIG.LOG_ACTIONS.BOOKING_CREATED,bookingId:booking.bookingId,slotKey:slotKey,details:'Booking created.'});
+    appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_HELD,bookingId:booking.bookingId,slotKey:slotKey,details:'Slot held.'});
+    return {ok:true,booking:publicBooking_(booking),message:'نوبت موقتاً نگه داشته شد. پرداخت را ثبت کنید.'};
+  });
+}
+
+function submitPayment_(request){
+  return withBookingLock_(function(){
+    var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
+    if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+    if(String(b['Appointment Status']||'')!==CONFIG.STATUSES.BOOKING_PENDING)return fail_('BOOKING_NOT_PENDING','این نوبت در وضعیت قابل پرداخت نیست.');
+    var hold=parseDateValue_(b['Hold Until']);
+    if(!hold||hold.getTime()<=Date.now()){releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);return fail_('HOLD_EXPIRED','مهلت این نوبت تمام شده است.');}
+    var transaction=String(request.transactionNumber||request.paymentTrackingCode||request.paymentCode||'').trim();
+    var receipt=String(request.receiptData||request.receiptBase64||'').trim();
+    if(!receipt&&!transaction)return fail_('PAYMENT_PROOF_REQUIRED','تصویر فیش یا کد پیگیری پرداخت الزامی است.');
+    var saved={id:'',url:'',name:''};
+    if(receipt)saved=saveReceiptToDrive_(receipt,request.receiptFileName,request.receiptMimeType,b);
+    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+      'Payment Status':CONFIG.STATUSES.PAYMENT_RECEIVED,'Transaction Number':transaction,'Receipt Link':saved.url,
+      'Receipt URL':saved.url,'Receipt File ID':saved.id,'Payment Submitted At':new Date(),
+      'Hold Until':new Date(Date.now()+Math.max(15,toNumber_(getSetting_('Payment Review Hold Minutes',120)))*60000)
+    });
+    appendObjectRow_(CONFIG.SHEETS.PAYMENTS,{},{
+      'Payment ID':generateId_('PAY'),'Booking ID':b['Booking ID'],'Customer ID':b['Customer ID'],
+      'Amount':toNumber_(b['Final Price']),'Receipt Link':saved.url,'Receipt URL':saved.url,'Receipt File ID':saved.id,
+      'Transaction Number':transaction,'Tracking Code':transaction,'Payment Status':CONFIG.STATUSES.PAYMENT_RECEIVED,'Submitted At':new Date()
+    });
+    appendBookingLog_({action:CONFIG.LOG_ACTIONS.PAYMENT_SUBMITTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Payment proof submitted.'});
+    return {ok:true,bookingId:b['Booking ID'],paymentStatus:CONFIG.STATUSES.PAYMENT_RECEIVED,message:'فیش دریافت شد و برای بررسی ارسال شد.'};
+  });
+}
+
+function approveBooking_(request){
+  return withBookingLock_(function(){
+    var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
+    if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+    var ps=String(b['Payment Status']||'');
+    if(ps!==CONFIG.STATUSES.PAYMENT_RECEIVED&&ps!==CONFIG.STATUSES.PAYMENT_APPROVED)return fail_('PAYMENT_NOT_READY','ابتدا باید فیش پرداخت دریافت شود.');
+    var date=normalizeJalaliDate_(b['Appointment Date']),time=normalizeTime_(b['Appointment Time']);
+    var slotKey=String(b['Slot Key']||buildSlotKey_(date,time));
+    var status=getSlotStatus_(slotKey,date,time);
+    if(status===CONFIG.SLOT_STATUS.CONFIRMED)return fail_('SLOT_ALREADY_CONFIRMED','این زمان قبلاً تأیید شده است.');
+    if(status===CONFIG.SLOT_STATUS.BLOCKED)return fail_('SLOT_BLOCKED','این زمان مسدود شده است.');
+    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+      'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,'Appointment Status':CONFIG.STATUSES.BOOKING_CONFIRMED,
+      'Approved At':new Date(),'Approved By':String(request.adminId||request.admin||'admin'),'Hold Until':''
+    });
+    consumeDiscountToken_(String(b['Discount Code']||''));
+    appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_APPROVED,bookingId:b['Booking ID'],slotKey:slotKey,details:'Booking approved.'});
+    return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_CONFIRMED,message:'نوبت تأیید شد.'};
+  });
+}
+
+function rejectBooking_(request){
+  return withBookingLock_(function(){
+    var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
+    if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+      'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
+      'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),
+      'Admin Note':String(request.note||request.reason||''),'Hold Until':''
+    });
+    appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.note||request.reason||'')});
+    return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_REJECTED};
+  });
+}
+
+function cancelBooking_(request){
+  return withBookingLock_(function(){
+    var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
+    if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{'Appointment Status':CONFIG.STATUSES.BOOKING_CANCELLED,'Cancelled At':new Date(),'Hold Until':'','Cancel Reason':String(request.reason||'')});
+    appendBookingLog_({action:CONFIG.LOG_ACTIONS.BOOKING_CANCELLED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.reason||'')});
+    return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_CANCELLED};
+  });
+}
+
+function releaseExpiredHolds_(request){
+  return withBookingLock_(function(){
+    var rows=getSheetObjects_(CONFIG.SHEETS.BOOKINGS),released=0,now=Date.now();
+    rows.forEach(function(r){
+      var hold=parseDateValue_(r['Hold Until']);
+      if(String(r['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING&&hold&&hold.getTime()<=now){
+        updateRowFields_(CONFIG.SHEETS.BOOKINGS,r._row,{'Appointment Status':CONFIG.STATUSES.BOOKING_CANCELLED,'Hold Until':'','Admin Note':'Expired hold released.'});
+        appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_RELEASED,bookingId:r['Booking ID'],slotKey:r['Slot Key'],details:'Expired hold released.'});
+        released++;
+      }
+    });
+    return {ok:true,released:released};
+  });
+}
+
+function findServiceRecord_(serviceId,serviceName){
+  var names=['Services','services'];
+  for(var i=0;i<names.length;i++){
+    if(!getSpreadsheet_().getSheetByName(names[i]))continue;
+    var rows=getSheetObjects_(names[i]);
+    var found=rows.find(function(r){
+      var id=String(firstField_(r,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||'');
+      var name=String(firstField_(r,['نام خدمت','Service Name','Name','Title','عنوان'])||'');
+      return (serviceId&&id===serviceId)||(!serviceId&&serviceName&&name===serviceName);
+    });
+    if(found)return {
+      id:String(firstField_(found,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||serviceId||''),
+      name:String(firstField_(found,['نام خدمت','Service Name','Name','Title','عنوان'])||serviceName||''),
+      price:toNumber_(firstField_(found,['قیمت','Price','Base Price','Original Price','مبلغ']))
+    };
+  }
+  return null;
+}
+
+function upsertCustomer_(booking){
+  var sheet=getSheet_(CONFIG.SHEETS.CUSTOMERS),headers=getHeaders_(sheet),rows=getSheetObjects_(CONFIG.SHEETS.CUSTOMERS);
+  var idHeader=findHeader_(headers,['Customer ID','CustomerId','ID','Id','شناسه مشتری']);
+  var mobileHeader=findHeader_(headers,['Mobile','Phone','Phone Number','شماره موبایل','موبایل']);
+  var row=null;
+  if(booking.customerId&&idHeader)row=rows.find(function(r){return String(r[idHeader]||'')===booking.customerId;});
+  if(!row&&booking.mobile&&mobileHeader)row=rows.find(function(r){return String(r[mobileHeader]||'')===booking.mobile;});
+  var id=booking.customerId||(row&&idHeader?String(row[idHeader]):'')||generateId_('CUS');
+  var v={'Customer ID':id,'Telegram ID':booking.telegramId,'Telegram Username':booking.telegramUsername||'','Telegram First Name':booking.firstName,'Telegram Last Name':booking.lastName,'Booking First Name':booking.firstName,'Booking Last Name':booking.lastName,'Mobile':booking.mobile,'Last Booking At':new Date()};
+  if(row)updateRowFields_(CONFIG.SHEETS.CUSTOMERS,row._row,v);else appendObjectRow_(CONFIG.SHEETS.CUSTOMERS,{},v);
+  return id;
+}
+
+function getBookingByIdObject_(id){
+  var value=String(id||'').trim();
+  if(!value)return null;
+  return getSheetObjects_(CONFIG.SHEETS.BOOKINGS).find(function(r){return String(r['Booking ID']||'')===value||String(r['Tracking Code']||'')===value;})||null;
+}
+
+function appendObjectRow_(sheetName,source,values){
+  var sheet=getSheet_(sheetName),headers=getHeaders_(sheet),v=values||{};
+  sheet.appendRow(headers.map(function(h){return Object.prototype.hasOwnProperty.call(v,h)?v[h]:(source&&Object.prototype.hasOwnProperty.call(source,h)?source[h]:'');}));
+}
+
+function updateRowFields_(sheetName,rowNumber,fields){
+  var sheet=getSheet_(sheetName),headers=getHeaders_(sheet);
+  Object.keys(fields).forEach(function(h){var actual=findHeader_(headers,[h]);if(actual)sheet.getRange(rowNumber,headers.indexOf(actual)+1).setValue(fields[h]);});
+}
+
+function appendBookingLog_(entry){
+  appendObjectRow_(CONFIG.SHEETS.BOOKING_LOGS,{},{
+    'Log ID':generateId_('LOG'),'Booking ID':entry.bookingId||'','Action':entry.action||'','Slot Key':entry.slotKey||'','Details':entry.details||'','Created At':new Date()
+  });
+}
+
+function releaseBookingRow_(row,bookingId,slotKey){
+  updateRowFields_(CONFIG.SHEETS.BOOKINGS,row,{'Appointment Status':CONFIG.STATUSES.BOOKING_CANCELLED,'Hold Until':'','Admin Note':'Expired hold released before payment submission.'});
+  appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_RELEASED,bookingId:bookingId||'',slotKey:slotKey||'',details:'Expired booking hold released.'});
+}
+
+function publicBooking_(b){
+  return {bookingId:b.bookingId||b['Booking ID']||'',trackingCode:b.trackingCode||b['Tracking Code']||'',date:b.appointmentDate||b['Appointment Date']||'',time:b.appointmentTime||b['Appointment Time']||'',serviceId:b.serviceId||b['Service ID']||'',serviceName:b.serviceName||b['Service Name']||'',basePrice:toNumber_(b.originalPrice||b['Original Price']),discountPercent:toNumber_(b.discountPercent||b['Discount Percent']),discountAmount:toNumber_(b.discountAmount||b['Discount Amount']),finalPrice:toNumber_(b.finalPrice||b['Final Price']),appointmentStatus:b.appointmentStatus||b['Appointment Status']||'',paymentStatus:b.paymentStatus||b['Payment Status']||'',holdUntil:b.holdUntil||b['Hold Until']||''};
+}
+
+function saveReceiptToDrive_(data,fileName,mimeType,booking){
+  var raw=String(data||''),mime=String(mimeType||'image/jpeg');
+  if(raw.indexOf('data:')===0){var comma=raw.indexOf(',');if(comma<0)throw new Error('تصویر فیش نامعتبر است.');var meta=raw.substring(5,comma);raw=raw.substring(comma+1);var m=meta.match(/^([^;]+)/);if(m)mime=m[1];}
+  var bytes=Utilities.base64Decode(raw);
+  var name=String(fileName||('receipt-'+String(booking['Booking ID']||generateId_('PAY'))+'.jpg')).replace(/[^\w\-.\u0600-\u06FF]+/g,'_');
+  var blob=Utilities.newBlob(bytes,mime,name);
+  var folderId=String(getSetting_('Receipt Folder ID','')||'').trim();
+  var file=folderId?DriveApp.getFolderById(folderId).createFile(blob):DriveApp.createFile(blob);
+  return {id:file.getId(),url:file.getUrl(),name:file.getName()};
+}
+
+function findDiscountToken_(code){
+  var sheets=getSpreadsheet_().getSheets();
+  for(var i=0;i<sheets.length;i++){
+    var sheet=sheets[i],headers=getHeaders_(sheet);
+    var tokenHeader=findHeader_(headers,['Token','Token Code','Code','Discount Code','کد تخفیف']);
+    if(!tokenHeader)continue;
+    var rows=getSheetObjects_(sheet.getName());
+    var row=rows.find(function(r){return String(r[tokenHeader]||'').trim()===code;});
+    if(!row)continue;
+    return {
+      sheetName:sheet.getName(),row:row,
+      percent:firstField_(row,['Discount Percent','Discount %','Percent','درصد تخفیف']),
+      used:isTruthy_(firstField_(row,['Used','Is Used','مصرف شده','Status Used'])),
+      expiry:parseDateValue_(firstField_(row,['Expiry Date','Expires At','Valid Until','تاریخ انقضا']))
+    };
+  }
+  return null;
+}
+
+function consumeDiscountToken_(code){
+  if(!code)return;
+  var found=findDiscountToken_(code);
+  if(!found)return;
+  var headers=getHeaders_(getSheet_(found.sheetName));
+  var h=findHeader_(headers,['Used','Is Used','مصرف شده','Status Used']);
+  if(h)updateRowFields_(found.sheetName,found.row._row,{[h]:true});
+}
+
+function firstField_(row,names){
+  for(var i=0;i<names.length;i++)if(Object.prototype.hasOwnProperty.call(row,names[i])&&row[names[i]]!=='')return row[names[i]];
+  return '';
+}
+
+function findHeader_(headers,aliases){
+  for(var i=0;i<aliases.length;i++)if(headers.indexOf(aliases[i])!==-1)return aliases[i];
+  return '';
+}
+
+function toNumber_(value){
+  if(typeof value==='number')return value;
+  var n=Number(String(value==null?'':value).replace(/[,٬\s]/g,''));
+  return isNaN(n)?0:n;
+}
+
+function generateId_(prefix){return prefix+'-'+Utilities.getUuid().replace(/-/g,'').substring(0,12).toUpperCase();}
+function generateTrackingCode_(){return String(Math.floor(100000+Math.random()*900000));}
+function fail_(error,message){return {ok:false,error:error,message:message};}
+
+function testPhase2ReadOnly(){
+  return {ok:true,services:getServices_({}),settings:getBookingSettings_(),schedule:getSchedule_(),dates:getAvailableDates_({})};
 }

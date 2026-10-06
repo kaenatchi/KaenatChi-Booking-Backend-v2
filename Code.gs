@@ -304,7 +304,49 @@ function legacyBookingSubmit_(request) {
     discountCode: request.discountCode || request.vipCode || ''
   };
 
-  return createBooking_(createRequest);
+  const created = createBooking_(createRequest);
+
+  if (!created || !created.ok || !created.booking) {
+    return created;
+  }
+
+  const bookingId = String(
+    created.booking.bookingId ||
+    created.booking['Booking ID'] ||
+    ''
+  ).trim();
+
+  if (!bookingId) {
+    return {
+      ok: false,
+      error: 'BOOKING_ID_MISSING',
+      message: 'شناسه نوبت ایجاد نشد.'
+    };
+  }
+
+  const payment = submitPayment_({
+    bookingId: bookingId,
+    transactionNumber: request.trackingCode || request.paymentTrackingCode || '',
+    receiptData: request.receiptDataUrl || request.receiptData || request.receiptBase64 || '',
+    receiptFileName: request.receiptName || request.receiptFileName || '',
+    receiptMimeType: request.receiptMimeType || ''
+  });
+
+  if (!payment || !payment.ok) {
+    return payment || {
+      ok: false,
+      error: 'PAYMENT_SUBMIT_FAILED',
+      message: 'ثبت اطلاعات پرداخت ناموفق بود.'
+    };
+  }
+
+  return {
+    ok: true,
+    booking: created.booking,
+    bookingId: bookingId,
+    paymentStatus: payment.paymentStatus,
+    message: payment.message || created.message
+  };
 }
 
 

@@ -128,7 +128,7 @@ function doPost(e) {
       return jsonResponse_(legacyBookingSubmit_(request));
     }
 
-    return respond(routeRequest_(action, request));
+    return jsonResponse_(routeRequest_(action, request));
 
   } catch (error) {
     console.error(error);
@@ -361,7 +361,7 @@ function legacyBookingSubmit_(request) {
    3. HEALTH CHECK
    ===================================================== */
 
-function healthCheck() {
+function healthCheck_() {
 
   const spreadsheet = getSpreadsheet_();
 
@@ -534,28 +534,58 @@ function getSetting_(settingName, defaultValue) {
    ===================================================== */
 
 function getSchedule_() {
+  /*
+   * Schedule is a configuration table containing time cells.
+   * Read it with getDisplayValues() so Google Sheets date/time
+   * cells are returned as plain text and cannot break the Web App
+   * response serialization.
+   */
+  const sheet = getSheet_(CONFIG.SHEETS.SCHEDULE);
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
 
-  const rows = getSheetObjects_(
-    CONFIG.SHEETS.SCHEDULE
-  );
+  if (lastRow < 2 || lastColumn < 1) {
+    return {
+      ok: true,
+      schedule: []
+    };
+  }
+
+  const values = sheet
+    .getRange(1, 1, lastRow, lastColumn)
+    .getDisplayValues();
+
+  const headers = values[0].map(function(value) {
+    return String(value || '').trim();
+  });
+
+  const dayIndex = headers.indexOf('Day');
+  const activeIndex = headers.indexOf('Active');
+  const startIndex = headers.indexOf('Start Time');
+  const endIndex = headers.indexOf('End Time');
+  const durationIndex = headers.indexOf('Slot Duration');
+
+  if (dayIndex === -1) {
+    throw new Error('ستون Day در شیت Schedule پیدا نشد.');
+  }
 
   const schedule = [];
 
-  rows.forEach(function(row) {
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
 
-    if (!row.Day) {
-      return;
+    if (!row[dayIndex]) {
+      continue;
     }
 
     schedule.push({
-      day: String(row.Day).trim(),
-      active: isTruthy_(row.Active),
-      startTime: normalizeTime_(row['Start Time']),
-      endTime: normalizeTime_(row['End Time']),
-      slotDuration: Number(row['Slot Duration']) || 30
+      day: String(row[dayIndex]).trim(),
+      active: isTruthy_(row[activeIndex]),
+      startTime: normalizeTime_(row[startIndex]),
+      endTime: normalizeTime_(row[endIndex]),
+      slotDuration: Number(row[durationIndex]) || 30
     });
-
-  });
+  }
 
   return {
     ok: true,
@@ -569,35 +599,61 @@ function getSchedule_() {
    ===================================================== */
 
 function getBlockedDates_() {
+  /*
+   * BlockedDates may contain Jalali dates stored as Google Sheets
+   * date/text values. Read display values directly so the Web App
+   * never has to serialize raw Date objects from this sheet.
+   */
+  const sheet = getSheet_(CONFIG.SHEETS.BLOCKED_DATES);
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
 
-  const rows = getSheetObjects_(
-    CONFIG.SHEETS.BLOCKED_DATES
-  );
+  if (lastRow < 2 || lastColumn < 1) {
+    return {
+      ok: true,
+      blockedDates: []
+    };
+  }
+
+  const values = sheet
+    .getRange(1, 1, lastRow, lastColumn)
+    .getDisplayValues();
+
+  const headers = values[0].map(function(value) {
+    return String(value || '').trim();
+  });
+
+  const dateIndex = headers.indexOf('Date');
+  const activeIndex = headers.indexOf('Active');
+  const reasonIndex = headers.indexOf('Reason');
+
+  if (dateIndex === -1) {
+    throw new Error('ستون Date در شیت BlockedDates پیدا نشد.');
+  }
 
   const result = [];
 
-  rows.forEach(function(row) {
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
 
-    if (!row.Date) {
-      return;
+    if (!row[dateIndex]) {
+      continue;
     }
 
     result.push({
-      date: normalizeJalaliDate_(row.Date),
-      active: isTruthy_(row.Active),
-      reason: row.Reason
-        ? String(row.Reason)
+      date: normalizeJalaliDate_(row[dateIndex]),
+      active: isTruthy_(row[activeIndex]),
+      reason: reasonIndex >= 0 && row[reasonIndex]
+        ? String(row[reasonIndex]).trim()
         : ''
     });
-
-  });
+  }
 
   return {
     ok: true,
     blockedDates: result
   };
 }
-
 
 /* =====================================================
    9. BLOCKED SLOTS

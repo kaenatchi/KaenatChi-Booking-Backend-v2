@@ -96,6 +96,13 @@ function doGet(e) {
       return respond(getBookingStatusByRequestId_(request));
     }
 
+    if (action === 'getBlockedDates') {
+      return respond({
+        ok: true,
+        blockedDates: []
+      });
+    }
+
     if (action) {
       return jsonResponse_(routeRequest_(action, request));
     }

@@ -2003,38 +2003,33 @@ function jsonResponse_(data) {
 
 function iframeBridgeResponse_(data) {
   const payload = Utilities.base64EncodeWebSafe(
-    Utilities.newBlob(JSON.stringify(data), 'application/json').getBytes()
+    Utilities.newBlob(
+      JSON.stringify(data),
+      'application/json'
+    ).getBytes()
   );
 
   const html =
-    '<!doctype html><html><head><meta charset="utf-8">' +
-    '<title>KaenatChi Booking Bridge</title></head><body><script>' +
+    '<!doctype html>' +
+    '<html><head><meta charset="utf-8">' +
+    '<title>KaenatChi Booking Bridge</title>' +
+    '</head><body><script>' +
     '(function(){' +
     'var message={source:"kaenatchi-booking-bridge",data:null};' +
     'try{' +
-    'var binary=atob("' + payload + '".replace(/-/g,"+").replace(/_/g,"/")' +
-    '.replace(/[^=]$/,"function jsonResponse_(data) {
-
-  return ContentService
-    .createTextOutput(
-      JSON.stringify(
-        data,
-        null,
-        2
-      )
-    )
-    .setMimeType(
-      ContentService.MimeType.JSON
-    );
-}
-"));' +
+    'var encoded="' + payload + '";' +
+    'encoded += "===".slice(0,(4-encoded.length%4)%4);' +
+    'var binary=atob(encoded.replace(/-/g,"+").replace(/_/g,"/"));' +
     'var bytes=new Uint8Array(binary.length);' +
-    'for(var i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);' +
+    'for(var i=0;i<binary.length;i++){bytes[i]=binary.charCodeAt(i);}' +
     'message.data=JSON.parse(new TextDecoder("utf-8").decode(bytes));' +
-    '}catch(e){message.data={ok:false,error:"BRIDGE_ERROR",message:"خطا در دریافت پاسخ سامانه رزرو."};}' +
+    '}catch(e){' +
+    'message.data={ok:false,error:"BRIDGE_ERROR",message:"خطا در دریافت پاسخ سامانه رزرو."};' +
+    '}' +
     'try{window.parent.postMessage(message,"*");}catch(e){}' +
     'try{window.top.postMessage(message,"*");}catch(e){}' +
-    '})();</script></body></html>';
+    '})();' +
+    '</script></body></html>';
 
   return HtmlService
     .createHtmlOutput(html)

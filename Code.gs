@@ -1731,8 +1731,7 @@ function testJalaliWeekdays() {
   ];
 
   testDates.forEach(function(date) {
-    const gregorian = jalaliToApproxGregorian_(date);
-    const dayName = getPersianDayName_(gregorian);
+    const dayName = getPersianDayNameFromJalali_(date);
     const schedule = getScheduleForDate_(date);
 
     console.log(JSON.stringify({

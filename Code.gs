@@ -97,10 +97,7 @@ function doGet(e) {
     }
 
     if (action === 'getBlockedDates') {
-      return respond({
-        ok: true,
-        blockedDates: []
-      });
+      return respond(getBlockedDatesSafe_());
     }
 
     if (action) {
@@ -4345,4 +4342,12 @@ function getBlockedDatesDiagnostic_() {
       message: error && error.message ? error.message : String(error)
     };
   }
+}
+
+
+function getBlockedDatesSafe_() {
+  return {
+    ok: true,
+    blockedDates: []
+  };
 }

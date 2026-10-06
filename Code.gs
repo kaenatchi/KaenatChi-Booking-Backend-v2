@@ -1293,17 +1293,7 @@ function jalaliMonthLength_(jy, jm) {
  */
 function isJalaliLeapYear_(jy) {
 
-  const current =
-    jalaliToGregorian_(
-      jy + '/12/30'
-    );
-
-  return (
-    current.getUTCFullYear() ===
-    jalaliToGregorian_(
-      (jy + 1) + '/01/01'
-    ).getUTCFullYear()
-  );
+  return isJalaliLeapYearSimple_(jy);
 }
 
 

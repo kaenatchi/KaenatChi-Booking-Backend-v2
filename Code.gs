@@ -599,35 +599,61 @@ function getSchedule_() {
    ===================================================== */
 
 function getBlockedDates_() {
+  /*
+   * BlockedDates may contain Jalali dates stored as Google Sheets
+   * date/text values. Read display values directly so the Web App
+   * never has to serialize raw Date objects from this sheet.
+   */
+  const sheet = getSheet_(CONFIG.SHEETS.BLOCKED_DATES);
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
 
-  const rows = getSheetObjects_(
-    CONFIG.SHEETS.BLOCKED_DATES
-  );
+  if (lastRow < 2 || lastColumn < 1) {
+    return {
+      ok: true,
+      blockedDates: []
+    };
+  }
+
+  const values = sheet
+    .getRange(1, 1, lastRow, lastColumn)
+    .getDisplayValues();
+
+  const headers = values[0].map(function(value) {
+    return String(value || '').trim();
+  });
+
+  const dateIndex = headers.indexOf('Date');
+  const activeIndex = headers.indexOf('Active');
+  const reasonIndex = headers.indexOf('Reason');
+
+  if (dateIndex === -1) {
+    throw new Error('ستون Date در شیت BlockedDates پیدا نشد.');
+  }
 
   const result = [];
 
-  rows.forEach(function(row) {
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
 
-    if (!row.Date) {
-      return;
+    if (!row[dateIndex]) {
+      continue;
     }
 
     result.push({
-      date: normalizeJalaliDate_(row.Date),
-      active: isTruthy_(row.Active),
-      reason: row.Reason
-        ? String(row.Reason)
+      date: normalizeJalaliDate_(row[dateIndex]),
+      active: isTruthy_(row[activeIndex]),
+      reason: reasonIndex >= 0 && row[reasonIndex]
+        ? String(row[reasonIndex]).trim()
         : ''
     });
-
-  });
+  }
 
   return {
     ok: true,
     blockedDates: result
   };
 }
-
 
 /* =====================================================
    9. BLOCKED SLOTS

@@ -73,16 +73,17 @@ const CONFIG = {
    ===================================================== */
 
 function doGet(e) {
+  const request = (e && e.parameter) ? e.parameter : {};
+  const action = String(request.action || '').trim();
+  const callback = String(request.callback || '').trim();
+  const respond = function(data) {
+    if (callback && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(callback)) {
+      return jsonpResponse_(callback, data);
+    }
+    return jsonResponse_(data);
+  };
+
   try {
-    const request = (e && e.parameter) ? e.parameter : {};
-    const action = String(request.action || '').trim();
-    const callback = String(request.callback || '').trim();
-    const respond = function(data) {
-      if (callback && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(callback)) {
-        return jsonpResponse_(callback, data);
-      }
-      return jsonResponse_(data);
-    };
 
     if (action === 'getConfig') {
       return respond(getConfig_());
@@ -101,7 +102,7 @@ function doGet(e) {
     }
 
     if (action) {
-      return jsonResponse_(routeRequest_(action, request));
+      return respond(routeRequest_(action, request));
     }
 
     return jsonResponse_({
@@ -120,11 +121,7 @@ function doGet(e) {
       message: error && error.message ? error.message : 'خطای داخلی سرور.'
     };
 
-    if (callback && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(callback)) {
-      return jsonpResponse_(callback, errorData);
-    }
-
-    return jsonResponse_(errorData);
+    return respond(errorData);
   }
 }
 

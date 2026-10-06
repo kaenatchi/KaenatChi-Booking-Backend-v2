@@ -76,7 +76,11 @@ function doGet(e) {
   const request = (e && e.parameter) ? e.parameter : {};
   const action = String(request.action || '').trim();
   const callback = String(request.callback || '').trim();
+  const bridge = String(request.bridge || '').trim();
   const respond = function(data) {
+    if (bridge === 'iframe') {
+      return iframeBridgeResponse_(data);
+    }
     if (callback && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(callback)) {
       return jsonpResponse_(callback, data);
     }
@@ -1979,6 +1983,19 @@ function jsonpResponse_(callback, data) {
   return ContentService
     .createTextOutput(callback + '(' + JSON.stringify(data) + ');')
     .setMimeType(ContentService.MimeType.JAVASCRIPT);
+}
+
+function iframeBridgeResponse_(data) {
+  const payload = JSON.stringify(data).replace(/</g, '\\u003c');
+  const html = '<!doctype html><html><head><meta charset="utf-8"></head><body>' +
+    '<script>' +
+    'window.parent.postMessage({source:"kaenatchi-booking-bridge",data:' + payload + '},"*");' +
+    '</script>' +
+    '</body></html>';
+
+  return HtmlService
+    .createHtmlOutput(html)
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 function jsonResponse_(data) {

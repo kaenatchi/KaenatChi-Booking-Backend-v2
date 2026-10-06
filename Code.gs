@@ -3514,3 +3514,325 @@ function testApprovalBlockedBeforePayment() {
   Logger.log('ALL CHECKS PASSED: '+result.ok);
   return result;
 }
+
+
+
+function testVIPDiscountPaymentFlow() {
+  var result = {
+    ok: false,
+    tokenFound: false,
+    tokenValid: false,
+    serviceFound: false,
+    basePrice: 0,
+    discountPercent: 0,
+    discountAmount: 0,
+    finalPrice: 0,
+    bookingCreated: false,
+    bookingFinalPriceVerified: false,
+    paymentSubmitted: false,
+    paymentAmount: 0,
+    paymentEqualsFinalPrice: false,
+    tokenUsedBeforeApproval: false,
+    approvalSucceeded: false,
+    tokenUsedAfterApproval: false,
+    tokenReuseAttempted: false,
+    tokenReuseRejected: false,
+    cleanedUp: false,
+    bookingId: '',
+    tokenCode: '',
+    error: ''
+  };
+
+  var createdBookingId = '';
+
+  try {
+    var tokenSheet = getVIPSheet_(CONFIG.VIP.TOKENS_SHEET);
+    var tokenLastRow = tokenSheet.getLastRow();
+    if (tokenLastRow < 2) throw new Error('هیچ توکن VIP برای تست پیدا نشد.');
+
+    var tokenRows = tokenSheet.getRange(
+      2, 1, tokenLastRow - 1, Math.max(10, tokenSheet.getLastColumn())
+    ).getValues();
+
+    var selected = null;
+
+    for (var i = 0; i < tokenRows.length; i++) {
+      var row = tokenRows[i];
+      var status = String(row[5] || '').trim();
+      var expiryMs = Number(row[9] || 0);
+
+      if (
+        status === CONFIG.VIP.ACTIVE_STATUS &&
+        (!expiryMs || expiryMs > Date.now()) &&
+        String(row[0] || '').trim()
+      ) {
+        selected = {
+          code: String(row[0] || '').trim().toUpperCase(),
+          customerId: String(row[1] || '').trim()
+        };
+        break;
+      }
+    }
+
+    if (!selected) {
+      throw new Error('هیچ توکن VIP فعال و قابل استفاده‌ای برای تست پیدا نشد.');
+    }
+
+    result.tokenFound = true;
+    result.tokenCode = selected.code;
+
+    var token = findVIPDiscountToken_(selected.code);
+    if (!token) throw new Error('توکن فعال از مسیر Booking قابل خواندن نیست.');
+
+    var customerId = token.customerId;
+    var telegramId = token.telegramId;
+
+    var validation = validateDiscount_({
+      price: 1000000,
+      code: selected.code,
+      customerId: customerId,
+      telegramId: telegramId
+    });
+
+    if (!validation.ok || !validation.valid) {
+      throw new Error('VIP Token validation failed: ' + JSON.stringify(validation));
+    }
+
+    result.tokenValid = true;
+
+    var services = getSheetObjects_('Services');
+    var service = services.find(function(row) {
+      var active = row['فعال'] === undefined ? true : isTruthy_(row['فعال']);
+      var name = String(firstField_(row, [
+        'نام خدمت', 'Service Name', 'Name', 'Title', 'عنوان'
+      ]) || '').trim();
+      var price = toNumber_(firstField_(row, [
+        'قیمت', 'Price', 'Base Price', 'Original Price', 'مبلغ'
+      ]));
+      return active && name && price > 0;
+    });
+
+    if (!service) throw new Error('هیچ خدمت فعال و دارای قیمت برای تست پیدا نشد.');
+
+    result.serviceFound = true;
+    result.basePrice = toNumber_(firstField_(service, [
+      'قیمت', 'Price', 'Base Price', 'Original Price', 'مبلغ'
+    ]));
+
+    var dates = getAvailableDates_({});
+    if (!dates.ok || !dates.dates || !dates.dates.length) {
+      throw new Error('هیچ تاریخ قابل رزروی برای تست پیدا نشد.');
+    }
+
+    var date = normalizeJalaliDate_(dates.dates[0].date);
+    var slots = getAvailableSlots_({ date: date });
+
+    var free = slots.slots && slots.slots.find(function(slot) {
+      return slot.available === true &&
+             String(slot.status) === CONFIG.SLOT_STATUS.FREE;
+    });
+
+    if (!free) throw new Error('هیچ Slot آزاد برای تست پیدا نشد.');
+
+    var time = normalizeTime_(free.time);
+    var unique = String(new Date().getTime());
+
+    var create = createBooking_({
+      requestId: 'VIPPAY-' + unique,
+      telegramId: telegramId || ('VIPPAY-TG-' + unique),
+      customerId: customerId || ('VIPPAY-CUS-' + unique),
+      firstName: 'VIP',
+      lastName: 'PAYMENT',
+      mobile: 'VIPPAY-' + unique,
+      serviceId: String(firstField_(service, [
+        'Service ID', 'ServiceId', 'ID', 'Id', 'id', 'شناسه خدمت'
+      ]) || ''),
+      serviceName: String(firstField_(service, [
+        'نام خدمت', 'Service Name', 'Name', 'Title', 'عنوان'
+      ]) || ''),
+      appointmentDate: date,
+      appointmentTime: time,
+      discountCode: selected.code
+    });
+
+    if (!create || !create.ok) {
+      throw new Error('Create Booking failed: ' + JSON.stringify(create));
+    }
+
+    result.bookingCreated = true;
+    result.bookingId = String(create.booking.bookingId || '').trim();
+    createdBookingId = result.bookingId;
+
+    if (!result.bookingId) throw new Error('Booking ID برای تست برگشت داده نشد.');
+
+    var booking = getBookingByIdObject_(result.bookingId);
+    if (!booking) throw new Error('Booking در Sheet پیدا نشد.');
+
+    result.basePrice = toNumber_(booking['Original Price']);
+    result.discountPercent = toNumber_(booking['Discount Percent'] || booking['Discount %'] || booking['discountPercent']);
+    if (!result.discountPercent) {
+      result.discountPercent = toNumber_(booking['Discount Amount']) > 0 && result.basePrice > 0
+        ? Math.round(toNumber_(booking['Discount Amount']) * 100 / result.basePrice)
+        : toNumber_(validation.discountPercent);
+    }
+    result.discountAmount = toNumber_(booking['Discount Amount']);
+    result.finalPrice = toNumber_(booking['Final Price']);
+
+    var expectedFinalPrice = Math.max(
+      0,
+      result.basePrice - Math.round(result.basePrice * result.discountPercent / 100)
+    );
+
+    result.bookingFinalPriceVerified =
+      result.discountPercent === toNumber_(validation.discountPercent) &&
+      result.discountAmount === Math.round(result.basePrice * result.discountPercent / 100) &&
+      result.finalPrice === expectedFinalPrice &&
+      result.finalPrice === Math.max(
+        0,
+        result.basePrice - Math.round(result.basePrice * result.discountPercent / 100)
+      );
+
+    if (!result.bookingFinalPriceVerified) {
+      throw new Error('Final Price/Discount در Booking صحیح نیست.');
+    }
+
+    var tokenBeforePayment = findVIPDiscountToken_(selected.code);
+    result.tokenUsedBeforeApproval =
+      !!tokenBeforePayment && tokenBeforePayment.used === true;
+
+    if (result.tokenUsedBeforeApproval) {
+      throw new Error('Token قبل از Approval مصرف شده است.');
+    }
+
+    var submit = submitPayment_({
+      bookingId: result.bookingId,
+      transactionNumber: 'MOCK-VIP-PAY-' + unique,
+      receiptData: 'data:text/plain;base64,VklQIFBBWU1FTlQgVEVTVA==',
+      receiptFileName: 'vip-payment-test-' + unique + '.txt',
+      receiptMimeType: 'text/plain'
+    });
+
+    if (!submit || !submit.ok) {
+      throw new Error('Submit Payment failed: ' + JSON.stringify(submit));
+    }
+
+    result.paymentSubmitted = true;
+
+    var payments = getSheetObjects_(CONFIG.SHEETS.PAYMENTS);
+    var paymentRows = payments.filter(function(p) {
+      return String(p['Booking ID'] || '') === result.bookingId;
+    });
+
+    if (paymentRows.length !== 1) {
+      throw new Error('تعداد رکورد Payment برای Booking برابر 1 نیست.');
+    }
+
+    result.paymentAmount = toNumber_(paymentRows[0]['Amount']);
+    result.paymentEqualsFinalPrice =
+      result.paymentAmount === result.finalPrice;
+
+    if (!result.paymentEqualsFinalPrice) {
+      throw new Error(
+        'Payment Amount با Final Price برابر نیست: ' +
+        result.paymentAmount + ' != ' + result.finalPrice
+      );
+    }
+
+    var tokenAfterPayment = findVIPDiscountToken_(selected.code);
+    result.tokenUsedBeforeApproval =
+      !!tokenAfterPayment && tokenAfterPayment.used === true;
+
+    if (result.tokenUsedBeforeApproval) {
+      throw new Error('Token بعد از Payment و قبل از Approval مصرف شده است.');
+    }
+
+    var approved = approveBooking_({
+      bookingId: result.bookingId,
+      adminId: 'VIP-PAYMENT-FLOW-TEST'
+    });
+
+    if (!approved || !approved.ok) {
+      throw new Error('Approve Booking failed: ' + JSON.stringify(approved));
+    }
+
+    result.approvalSucceeded = true;
+
+    var tokenAfterApproval = findVIPDiscountToken_(selected.code);
+    result.tokenUsedAfterApproval =
+      !!tokenAfterApproval && tokenAfterApproval.used === true;
+
+    if (!result.tokenUsedAfterApproval) {
+      throw new Error('Token بعد از Approval مصرف نشده است.');
+    }
+
+    result.tokenReuseAttempted = true;
+
+    var reuseValidation = validateDiscount_({
+      price: result.basePrice,
+      code: selected.code,
+      customerId: customerId,
+      telegramId: telegramId
+    });
+
+    result.tokenReuseRejected =
+      !!reuseValidation &&
+      reuseValidation.ok === true &&
+      reuseValidation.valid === false &&
+      String(reuseValidation.message || '').indexOf('قبلاً استفاده') !== -1;
+
+    if (!result.tokenReuseRejected) {
+      throw new Error(
+        'استفاده مجدد از Token رد نشد: ' +
+        JSON.stringify(reuseValidation)
+      );
+    }
+
+    result.ok = true;
+
+  } catch (e) {
+    result.error = String(e && e.message ? e.message : e);
+
+  } finally {
+    try {
+      if (createdBookingId) {
+        var cleanupBooking = getBookingByIdObject_(createdBookingId);
+
+        if (
+          cleanupBooking &&
+          String(cleanupBooking['Appointment Status'] || '') ===
+            CONFIG.STATUSES.BOOKING_CONFIRMED
+        ) {
+          var cancelled = cancelBooking_({
+            bookingId: createdBookingId,
+            reason: 'VIP discount payment flow test cleanup'
+          });
+          result.cleanedUp = !!cancelled && cancelled.ok === true;
+        } else if (
+          cleanupBooking &&
+          String(cleanupBooking['Appointment Status'] || '') ===
+            CONFIG.STATUSES.BOOKING_PENDING
+        ) {
+          releaseBookingRow_(
+            cleanupBooking._row,
+            cleanupBooking['Booking ID'],
+            cleanupBooking['Slot Key']
+          );
+          result.cleanedUp = true;
+        }
+      }
+    } catch (cleanupError) {
+      result.error +=
+        (result.error ? ' | ' : '') +
+        'Cleanup failed: ' +
+        String(cleanupError && cleanupError.message
+          ? cleanupError.message
+          : cleanupError);
+    }
+  }
+
+  Logger.log('PAYMENT FLOW - VIP DISCOUNT + PAYMENT TEST');
+  Logger.log(JSON.stringify(result, null, 2));
+  Logger.log('ALL CHECKS PASSED: ' + result.ok);
+
+  return result;
+}

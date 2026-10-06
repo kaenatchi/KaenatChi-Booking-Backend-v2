@@ -162,7 +162,7 @@ function routeRequest_(action, request) {
       return getSchedule_();
 
     case 'getBlockedDates':
-      return getBlockedDates_();
+      return getBlockedDatesDiagnostic_();
 
     case 'getBlockedSlots':
       return getBlockedSlots_();
@@ -4306,4 +4306,36 @@ function testPaymentVIPRegressionSuite() {
   );
 
   return result;
+}
+
+
+function getBlockedDatesDiagnostic_() {
+  try {
+    const spreadsheet = getSpreadsheet_();
+    const sheetName = CONFIG.SHEETS.BLOCKED_DATES;
+    const sheet = spreadsheet.getSheetByName(sheetName);
+
+    if (!sheet) {
+      return {
+        ok: false,
+        error: 'BLOCKED_DATES_SHEET_NOT_FOUND',
+        sheetName: sheetName
+      };
+    }
+
+    return {
+      ok: true,
+      diagnostic: true,
+      sheetName: sheet.getName(),
+      rows: sheet.getLastRow(),
+      columns: sheet.getLastColumn(),
+      blockedDates: []
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: 'BLOCKED_DATES_DIAGNOSTIC_FAILED',
+      message: error && error.message ? error.message : String(error)
+    };
+  }
 }

@@ -2362,6 +2362,70 @@ function generateId_(prefix){return prefix+'-'+Utilities.getUuid().replace(/-/g,
 function generateTrackingCode_(){return String(Math.floor(100000+Math.random()*900000));}
 function fail_(error,message){return {ok:false,error:error,message:message};}
 
+function testVIPDiscountValidation(){
+  var tokenSheet=getVIPSheet_(CONFIG.VIP.TOKENS_SHEET);
+  var lastRow=tokenSheet.getLastRow();
+
+  if(lastRow<2){
+    throw new Error('هیچ توکنی برای تست پیدا نشد.');
+  }
+
+  var rows=tokenSheet.getRange(
+    2,
+    1,
+    lastRow-1,
+    Math.max(10,tokenSheet.getLastColumn())
+  ).getValues();
+
+  var testToken=null;
+
+  for(var i=0;i<rows.length;i++){
+    var row=rows[i];
+    var status=String(row[5]||'').trim();
+    var expiryMs=Number(row[9]||0);
+
+    if(
+      status===CONFIG.VIP.ACTIVE_STATUS &&
+      (!expiryMs || expiryMs>Date.now())
+    ){
+      testToken={
+        code:String(row[0]||'').trim().toUpperCase(),
+        customerId:String(row[1]||'').trim()
+      };
+      break;
+    }
+  }
+
+  if(!testToken || !testToken.code){
+    throw new Error('هیچ توکن VIP فعال و قابل استفاده‌ای برای تست پیدا نشد.');
+  }
+
+  var found=findVIPDiscountToken_(testToken.code);
+
+  if(!found){
+    throw new Error('توکن فعال در VIP پیدا شد اما از مسیر Booking قابل خواندن نیست.');
+  }
+
+  var result=validateDiscount_({
+    price:1000000,
+    code:testToken.code,
+    customerId:found.customerId,
+    telegramId:found.telegramId
+  });
+
+  return {
+    ok:!!result.ok,
+    valid:!!result.valid,
+    discountPercent:result.discountPercent,
+    discountAmount:result.discountAmount,
+    finalPrice:result.finalPrice,
+    vipCustomerId:result.vipCustomerId||'',
+    tokenStatus:found.status,
+    customerActive:found.customerActive,
+    tokenConsumed:false
+  };
+}
+
 function testPhase2ReadOnly(){
   return {ok:true,services:getServices_({}),settings:getBookingSettings_(),schedule:getSchedule_(),dates:getAvailableDates_({})};
 }

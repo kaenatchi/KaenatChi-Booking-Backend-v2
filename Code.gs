@@ -73,30 +73,62 @@ const CONFIG = {
    ===================================================== */
 
 function doGet(e) {
-  return jsonResponse_({
-    ok: true,
-    service: 'KaenatChi Booking Backend v2',
-    status: 'online',
-    version: '1.0.0',
-    timestamp: new Date().toISOString()
-  });
+  try {
+    const request = (e && e.parameter) ? e.parameter : {};
+    const action = String(request.action || '').trim();
+    const callback = String(request.callback || '').trim();
+    const respond = function(data) {
+      if (callback && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(callback)) {
+        return jsonpResponse_(callback, data);
+      }
+      return jsonResponse_(data);
+    };
+
+    if (action === 'getConfig') {
+      return respond(getConfig_());
+    }
+
+    if (action === 'getBookedSlots') {
+      return respond(getBookedSlots_());
+    }
+
+    if (action === 'bookingStatus') {
+      return respond(getBookingStatusByRequestId_(request));
+    }
+
+    if (action) {
+      return jsonResponse_(routeRequest_(action, request));
+    }
+
+    return jsonResponse_({
+      ok: true,
+      service: 'KaenatChi Booking Backend v2',
+      status: 'online',
+      version: '1.0.0',
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error(error);
+    return jsonResponse_({
+      ok: false,
+      error: 'SERVER_ERROR',
+      message: error && error.message ? error.message : 'خطای داخلی سرور.'
+    });
+  }
 }
 
 
 function doPost(e) {
   try {
     const request = parseRequest_(e);
-    const action = request.action || '';
+    const action = String(request.action || '').trim();
 
     if (!action) {
-      return jsonResponse_({
-        ok: false,
-        error: 'ACTION_REQUIRED',
-        message: 'عملیات مشخص نشده است.'
-      });
+      return jsonResponse_(legacyBookingSubmit_(request));
     }
 
-    return jsonResponse_(routeRequest_(action, request));
+    return respond(routeRequest_(action, request));
 
   } catch (error) {
     console.error(error);
@@ -160,6 +192,168 @@ function routeRequest_(action, request) {
         message: 'عملیات موردنظر شناخته نشد.'
       };
   }
+}
+
+
+/* =====================================================
+   2A. BOOKING MINI APP COMPATIBILITY
+   ===================================================== */
+
+function getConfig_() {
+  const services = getServices_({});
+  const schedule = getSchedule_();
+  const blockedDates = getBlockedDates_();
+  const blockedSlots = getBlockedSlots_();
+  const settings = getBookingSettings_();
+  const dates = getAvailableDates_({});
+  const booked = getBookedSlots_();
+
+  return {
+    ok: true,
+    services: services.services || [],
+    workHours: schedule.schedule || [],
+    closures: blockedDates.blockedDates || [],
+    blockedSlots: blockedSlots.blockedSlots || [],
+    bookedSlots: booked.bookedSlots || [],
+    availableDates: dates.dates || [],
+    settings: settings.settings || {}
+  };
+}
+
+function getBookedSlots_() {
+  const rows = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
+  const bookedSlots = [];
+
+  rows.forEach(function(row) {
+    const status = String(row['Appointment Status'] || '');
+    const date = normalizeJalaliDate_(row['Appointment Date']);
+    const time = normalizeTime_(row['Appointment Time']);
+
+    if (!date || !time) return;
+
+    if (
+      status === CONFIG.STATUSES.BOOKING_PENDING ||
+      status === CONFIG.STATUSES.BOOKING_CONFIRMED
+    ) {
+      bookedSlots.push({
+        date: date,
+        time: time,
+        slotKey: String(row['Slot Key'] || buildSlotKey_(date, time)),
+        status: status
+      });
+    }
+  });
+
+  return { ok: true, bookedSlots: bookedSlots };
+}
+
+function getBookingStatusByRequestId_(request) {
+  const requestId = String(
+    request.requestId ||
+    request.clientRequestId ||
+    request.clientTrackingCode ||
+    ''
+  ).trim();
+
+  if (!requestId) {
+    return {
+      ok: false,
+      found: false,
+      error: 'REQUEST_ID_REQUIRED',
+      message: 'شناسه درخواست الزامی است.'
+    };
+  }
+
+  const rows = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
+
+  const booking = rows.find(function(row) {
+    return String(row['Request ID'] || '').trim() === requestId;
+  });
+
+  if (!booking) {
+    return {
+      ok: true,
+      found: false,
+      requestId: requestId
+    };
+  }
+
+  return {
+    ok: true,
+    found: true,
+    requestId: requestId,
+    bookingId: String(booking['Booking ID'] || ''),
+    trackingCode: String(booking['Tracking Code'] || ''),
+    paymentStatus: String(booking['Payment Status'] || ''),
+    appointmentStatus: String(booking['Appointment Status'] || '')
+  };
+}
+
+function legacyBookingSubmit_(request) {
+  const createRequest = {
+    requestId: String(
+      request.clientRequestId ||
+      request.clientTrackingCode ||
+      request.requestId ||
+      ''
+    ).trim(),
+    telegramId: String(
+      request.telegramChatId ||
+      request.telegramId ||
+      ''
+    ).trim(),
+    firstName: request.firstName || '',
+    lastName: request.lastName || '',
+    mobile: request.mobile || request.phone || '',
+    serviceName: request.serviceName || request.service || '',
+    date: request.date || request.appointmentDate || '',
+    time: request.time || request.appointmentTime || '',
+    discountCode: request.discountCode || request.vipCode || ''
+  };
+
+  const created = createBooking_(createRequest);
+
+  if (!created || !created.ok || !created.booking) {
+    return created;
+  }
+
+  const bookingId = String(
+    created.booking.bookingId ||
+    created.booking['Booking ID'] ||
+    ''
+  ).trim();
+
+  if (!bookingId) {
+    return {
+      ok: false,
+      error: 'BOOKING_ID_MISSING',
+      message: 'شناسه نوبت ایجاد نشد.'
+    };
+  }
+
+  const payment = submitPayment_({
+    bookingId: bookingId,
+    transactionNumber: request.trackingCode || request.paymentTrackingCode || '',
+    receiptData: request.receiptDataUrl || request.receiptData || request.receiptBase64 || '',
+    receiptFileName: request.receiptName || request.receiptFileName || '',
+    receiptMimeType: request.receiptMimeType || ''
+  });
+
+  if (!payment || !payment.ok) {
+    return payment || {
+      ok: false,
+      error: 'PAYMENT_SUBMIT_FAILED',
+      message: 'ثبت اطلاعات پرداخت ناموفق بود.'
+    };
+  }
+
+  return {
+    ok: true,
+    booking: created.booking,
+    bookingId: bookingId,
+    paymentStatus: payment.paymentStatus,
+    message: payment.message || created.message
+  };
 }
 
 
@@ -1692,6 +1886,12 @@ function parseRequest_(e) {
 /* =====================================================
    24. JSON RESPONSE
    ===================================================== */
+
+function jsonpResponse_(callback, data) {
+  return ContentService
+    .createTextOutput(callback + '(' + JSON.stringify(data) + ');')
+    .setMimeType(ContentService.MimeType.JAVASCRIPT);
+}
 
 function jsonResponse_(data) {
 

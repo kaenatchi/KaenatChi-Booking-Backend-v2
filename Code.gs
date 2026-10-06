@@ -68,6 +68,60 @@ const CONFIG = {
 };
 
 
+
+function iframeBridgeResponse_(data) {
+  const payload = Utilities.base64EncodeWebSafe(
+    Utilities.newBlob(
+      JSON.stringify(data),
+      'application/json'
+    ).getBytes()
+  );
+
+  const html =
+    '<!doctype html>' +
+    '<html><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '</head><body>' +
+    '<script>' +
+    '(function(){' +
+    'var message={source:"kaenatchi-booking-bridge",data:null};' +
+    'try{' +
+      'var encoded="' + payload + '";' +
+      'var pad=encoded.length%4;' +
+      'if(pad){encoded+="====".slice(0,4-pad);}' +
+      'var binary=atob(encoded.replace(/-/g,"+").replace(/_/g,"/"));' +
+      'var bytes="";' +
+      'for(var i=0;i<binary.length;i++){' +
+        'bytes+=String.fromCharCode(binary.charCodeAt(i));' +
+      '}' +
+      'message.data=JSON.parse(decodeURIComponent(escape(bytes)));' +
+    '}catch(error){' +
+      'message.data={' +
+        'ok:false,' +
+        'error:"BRIDGE_ERROR",' +
+        'message:"خطا در دریافت پاسخ سامانه رزرو."' +
+      '};' +
+    '}' +
+    'try{' +
+      'window.parent.postMessage(message,"*");' +
+    '}catch(error){}' +
+    'try{' +
+      'if(window.top!==window.parent){' +
+        'window.top.postMessage(message,"*");' +
+      '}' +
+    '}catch(error){}' +
+    '})();' +
+    '</script>' +
+    '</body></html>';
+
+  return HtmlService
+    .createHtmlOutput(html)
+    .setXFrameOptionsMode(
+      HtmlService.XFrameOptionsMode.ALLOWALL
+    );
+}
+
+
 /* =====================================================
    1. WEB APP ENTRY POINTS
    ===================================================== */

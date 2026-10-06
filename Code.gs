@@ -1992,7 +1992,11 @@ function createBooking_(request){
       paymentStatus:CONFIG.STATUSES.PAYMENT_PENDING,appointmentStatus:CONFIG.STATUSES.BOOKING_PENDING,
       trackingCode:generateTrackingCode_(),holdUntil:new Date(Date.now()+Math.max(5,toNumber_(getSetting_('Hold Minutes',15)))*60000)
     };
-    booking.customerId=upsertCustomer_(booking);
+    if(discountCode&&discount.valid&&discount.vipCustomerId&&!booking.customerId){
+      booking.customerId=discount.vipCustomerId;
+    } else {
+      booking.customerId=upsertCustomer_(booking);
+    }
 
     appendObjectRow_(CONFIG.SHEETS.BOOKINGS,{},{
       'Booking ID':booking.bookingId,'Request ID':booking.requestId,'Created At':booking.createdAt,

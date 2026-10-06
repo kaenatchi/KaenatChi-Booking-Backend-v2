@@ -1742,3 +1742,60 @@ function testJalaliWeekdays() {
     }, null, 2));
   });
 }
+
+
+/* =====================================================
+   PHASE 2 - BACKEND CONTRACT VALIDATION
+   Safe test only. Does not change booking data.
+   ===================================================== */
+
+function testBookingBackendContract() {
+  const requiredSheets = CONFIG.SHEETS;
+  const result = {
+    ok: true,
+    sheets: {},
+    missingSheets: [],
+    headerWarnings: []
+  };
+
+  Object.keys(requiredSheets).forEach(function(key) {
+    const name = requiredSheets[key];
+    const sheet = getSpreadsheet_().getSheetByName(name);
+
+    if (!sheet) {
+      result.ok = false;
+      result.missingSheets.push(name);
+      result.sheets[name] = { exists: false };
+      return;
+    }
+
+    result.sheets[name] = {
+      exists: true,
+      rows: Math.max(0, sheet.getLastRow() - 1),
+      columns: sheet.getLastColumn(),
+      headers: getHeaders_(sheet)
+    };
+  });
+
+  const expectedHeaders = {
+    BookingSettings: ['Setting', 'Value'],
+    Schedule: ['Day', 'Active', 'Start Time', 'End Time', 'Slot Duration'],
+    BlockedDates: ['Date', 'Active', 'Reason'],
+    BlockedSlots: ['Date', 'Time', 'Active', 'Reason'],
+    Bookings: ['Slot Key', 'Appointment Status', 'Hold Until', 'Booking ID', 'Tracking Code']
+  };
+
+  Object.keys(expectedHeaders).forEach(function(sheetName) {
+    if (!result.sheets[sheetName] || !result.sheets[sheetName].exists) return;
+
+    expectedHeaders[sheetName].forEach(function(header) {
+      if (result.sheets[sheetName].headers.indexOf(header) === -1) {
+        result.ok = false;
+        result.headerWarnings.push(sheetName + ': missing "' + header + '"');
+      }
+    });
+  });
+
+  return result;
+}
+

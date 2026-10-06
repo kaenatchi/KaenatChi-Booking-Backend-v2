@@ -85,6 +85,15 @@ function doGet(e) {
 
   try {
 
+    if (action === 'transportTest') {
+      return respond({
+        ok: true,
+        transport: true,
+        service: 'KaenatChi Booking Backend v2',
+        callback: callback || ''
+      });
+    }
+
     if (action === 'getConfig') {
       return respond(getConfig_());
     }
@@ -105,7 +114,7 @@ function doGet(e) {
       return respond(routeRequest_(action, request));
     }
 
-    return jsonResponse_({
+    return respond({
       ok: true,
       service: 'KaenatChi Booking Backend v2',
       status: 'online',

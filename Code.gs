@@ -25,6 +25,16 @@ const CONFIG = {
     BOOKING_LOGS: 'BookingLogs'
   },
 
+  VIP: {
+    SPREADSHEET_ID: '1TpljGwyRpHcxyyR6Zm1mbT2CPJBvFeHCvD3QH34BuGs',
+    CUSTOMERS_SHEET: 'مشتریان',
+    TOKENS_SHEET: 'توکن ها',
+    ACTIVE_STATUS: 'فعال',
+    ISSUED_STATUS: 'صادرشده',
+    USED_STATUS: 'مصرف‌شده',
+    EXPIRED_STATUS: 'منقضی‌شده'
+  },
+
   STATUSES: {
     PAYMENT_PENDING: 'در انتظار پرداخت',
     PAYMENT_RECEIVED: 'فیش دریافت شد',
@@ -1839,15 +1849,112 @@ function getServices_(request) {
 
 function validateDiscount_(request){
   var price=Math.max(0,toNumber_(request.price));
-  var code=String(request.code||request.discountCode||request.vipCode||'').trim();
-  if(!code)return {ok:true,valid:false,discountPercent:0,discountAmount:0,finalPrice:price};
-  var t=findDiscountToken_(code);
-  if(!t)return {ok:true,valid:false,discountPercent:0,discountAmount:0,finalPrice:price,message:'کد تخفیف معتبر نیست.'};
-  if(t.used)return {ok:true,valid:false,discountPercent:0,discountAmount:0,finalPrice:price,message:'کد تخفیف قبلاً استفاده شده است.'};
-  if(t.expiry&&t.expiry.getTime()<=Date.now())return {ok:true,valid:false,discountPercent:0,discountAmount:0,finalPrice:price,message:'کد تخفیف منقضی شده است.'};
-  var p=Math.max(0,Math.min(100,toNumber_(t.percent)));
+  var code=String(request.code||request.discountCode||request.vipCode||'').trim().toUpperCase();
+
+  if(!code){
+    return {
+      ok:true,
+      valid:false,
+      discountPercent:0,
+      discountAmount:0,
+      finalPrice:price
+    };
+  }
+
+  var token=findVIPDiscountToken_(code);
+
+  if(!token){
+    return {
+      ok:true,
+      valid:false,
+      discountPercent:0,
+      discountAmount:0,
+      finalPrice:price,
+      message:'کد تخفیف معتبر نیست.'
+    };
+  }
+
+  if(token.used){
+    return {
+      ok:true,
+      valid:false,
+      discountPercent:0,
+      discountAmount:0,
+      finalPrice:price,
+      message:'کد تخفیف قبلاً استفاده شده است.'
+    };
+  }
+
+  if(token.expiryMs && token.expiryMs<=Date.now()){
+    markVIPTokenExpired_(token);
+    return {
+      ok:true,
+      valid:false,
+      discountPercent:0,
+      discountAmount:0,
+      finalPrice:price,
+      message:'کد تخفیف منقضی شده است.'
+    };
+  }
+
+  if(token.status!==CONFIG.VIP.ACTIVE_STATUS){
+    return {
+      ok:true,
+      valid:false,
+      discountPercent:0,
+      discountAmount:0,
+      finalPrice:price,
+      message:'ابتدا توکن VIP را در پنل VIP فعال کنید.'
+    };
+  }
+
+  if(!token.customerActive){
+    return {
+      ok:true,
+      valid:false,
+      discountPercent:0,
+      discountAmount:0,
+      finalPrice:price,
+      message:'عضویت VIP این کد فعال نیست.'
+    };
+  }
+
+  var requestedCustomerId=String(request.customerId||'').trim();
+  if(requestedCustomerId && requestedCustomerId!==token.customerId){
+    return {
+      ok:true,
+      valid:false,
+      discountPercent:0,
+      discountAmount:0,
+      finalPrice:price,
+      message:'این کد تخفیف متعلق به این حساب VIP نیست.'
+    };
+  }
+
+  var requestedTelegramId=String(request.telegramId||'').trim();
+  if(requestedTelegramId && token.telegramId && requestedTelegramId!==token.telegramId){
+    return {
+      ok:true,
+      valid:false,
+      discountPercent:0,
+      discountAmount:0,
+      finalPrice:price,
+      message:'این کد تخفیف متعلق به این حساب Telegram نیست.'
+    };
+  }
+
+  var p=Math.max(0,Math.min(100,toNumber_(token.percent)));
   var a=Math.round(price*p/100);
-  return {ok:true,valid:p>0,discountPercent:p,discountAmount:a,finalPrice:Math.max(0,price-a),token:code};
+
+  return {
+    ok:true,
+    valid:p>0,
+    discountPercent:p,
+    discountAmount:a,
+    finalPrice:Math.max(0,price-a),
+    token:code,
+    vipCustomerId:token.customerId
+  };
 }
 
 function createBooking_(request){
@@ -1866,7 +1973,12 @@ function createBooking_(request){
     if(!service)return fail_('SERVICE_NOT_FOUND','خدمت انتخاب‌شده پیدا نشد.');
     var basePrice=toNumber_(service.price);
     var discountCode=String(request.discountCode||request.vipCode||'').trim();
-    var discount=validateDiscount_({price:basePrice,code:discountCode});
+    var discount=validateDiscount_({
+      price:basePrice,
+      code:discountCode,
+      customerId:String(request.customerId||'').trim(),
+      telegramId:String(request.telegramId||'').trim()
+    });
     if(discountCode&&!discount.valid)return fail_('INVALID_DISCOUNT',discount.message||'کد تخفیف معتبر نیست.');
 
     var booking={
@@ -1880,7 +1992,11 @@ function createBooking_(request){
       paymentStatus:CONFIG.STATUSES.PAYMENT_PENDING,appointmentStatus:CONFIG.STATUSES.BOOKING_PENDING,
       trackingCode:generateTrackingCode_(),holdUntil:new Date(Date.now()+Math.max(5,toNumber_(getSetting_('Hold Minutes',15)))*60000)
     };
-    booking.customerId=upsertCustomer_(booking);
+    if(discountCode&&discount.valid&&discount.vipCustomerId&&!booking.customerId){
+      booking.customerId=discount.vipCustomerId;
+    } else {
+      booking.customerId=upsertCustomer_(booking);
+    }
 
     appendObjectRow_(CONFIG.SHEETS.BOOKINGS,{},{
       'Booking ID':booking.bookingId,'Request ID':booking.requestId,'Created At':booking.createdAt,
@@ -1939,7 +2055,12 @@ function approveBooking_(request){
       'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,'Appointment Status':CONFIG.STATUSES.BOOKING_CONFIRMED,
       'Approved At':new Date(),'Approved By':String(request.adminId||request.admin||'admin'),'Hold Until':''
     });
-    consumeDiscountToken_(String(b['Discount Code']||''));
+    consumeDiscountToken_(
+      String(b['Discount Code']||''),
+      String(b['Customer ID']||''),
+      String(b['Telegram ID']||''),
+      String(b['Tracking Code']||'')
+    );
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_APPROVED,bookingId:b['Booking ID'],slotKey:slotKey,details:'Booking approved.'});
     return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_CONFIRMED,message:'نوبت تأیید شد.'};
   });
@@ -2058,32 +2179,167 @@ function saveReceiptToDrive_(data,fileName,mimeType,booking){
   return {id:file.getId(),url:file.getUrl(),name:file.getName()};
 }
 
-function findDiscountToken_(code){
-  var sheets=getSpreadsheet_().getSheets();
-  for(var i=0;i<sheets.length;i++){
-    var sheet=sheets[i],headers=getHeaders_(sheet);
-    var tokenHeader=findHeader_(headers,['Token','Token Code','Code','Discount Code','کد تخفیف']);
-    if(!tokenHeader)continue;
-    var rows=getSheetObjects_(sheet.getName());
-    var row=rows.find(function(r){return String(r[tokenHeader]||'').trim()===code;});
-    if(!row)continue;
+function getVIPSpreadsheet_(){
+  return SpreadsheetApp.openById(
+    CONFIG.VIP.SPREADSHEET_ID
+  );
+}
+
+function getVIPSheet_(sheetName){
+  var sheet=getVIPSpreadsheet_().getSheetByName(sheetName);
+  if(!sheet){
+    throw new Error('شیت VIP پیدا نشد: '+sheetName);
+  }
+  return sheet;
+}
+
+function findVIPDiscountToken_(code){
+  var cleanCode=String(code||'').trim().toUpperCase();
+  if(!cleanCode)return null;
+
+  var tokenSheet=getVIPSheet_(CONFIG.VIP.TOKENS_SHEET);
+  var customerSheet=getVIPSheet_(CONFIG.VIP.CUSTOMERS_SHEET);
+
+  var tokenLastRow=tokenSheet.getLastRow();
+  if(tokenLastRow<2)return null;
+
+  var tokenValues=tokenSheet.getRange(
+    2,
+    1,
+    tokenLastRow-1,
+    Math.max(10,tokenSheet.getLastColumn())
+  ).getValues();
+
+  var customerLastRow=customerSheet.getLastRow();
+  var customerValues=customerLastRow>=2
+    ? customerSheet.getRange(2,1,customerLastRow-1,8).getValues()
+    : [];
+
+  for(var i=0;i<tokenValues.length;i++){
+    var row=tokenValues[i];
+
+    if(String(row[0]||'').trim().toUpperCase()!==cleanCode){
+      continue;
+    }
+
+    var customerId=String(row[1]||'').trim();
+    var customer=null;
+
+    for(var j=0;j<customerValues.length;j++){
+      if(String(customerValues[j][0]||'').trim()===customerId){
+        customer=customerValues[j];
+        break;
+      }
+    }
+
     return {
-      sheetName:sheet.getName(),row:row,
-      percent:firstField_(row,['Discount Percent','Discount %','Percent','درصد تخفیف']),
-      used:isTruthy_(firstField_(row,['Used','Is Used','مصرف شده','Status Used'])),
-      expiry:parseDateValue_(firstField_(row,['Expiry Date','Expires At','Valid Until','تاریخ انقضا']))
+      sheet:tokenSheet,
+      rowNumber:i+2,
+      row:row,
+      code:cleanCode,
+      customerId:customerId,
+      percent:toNumber_(row[2]),
+      status:String(row[5]||'').trim(),
+      used:String(row[5]||'').trim()===CONFIG.VIP.USED_STATUS,
+      expiryMs:Number(row[9]||0),
+      customerActive:!!customer && String(customer[7]||'').trim()===CONFIG.VIP.ACTIVE_STATUS,
+      telegramId:customer ? String(customer[4]||'').trim() : ''
     };
   }
+
   return null;
 }
 
-function consumeDiscountToken_(code){
-  if(!code)return;
-  var found=findDiscountToken_(code);
-  if(!found)return;
-  var headers=getHeaders_(getSheet_(found.sheetName));
-  var h=findHeader_(headers,['Used','Is Used','مصرف شده','Status Used']);
-  if(h)updateRowFields_(found.sheetName,found.row._row,{[h]:true});
+function markVIPTokenExpired_(token){
+  if(!token || !token.sheet || !token.rowNumber)return;
+  token.sheet
+    .getRange(token.rowNumber,6)
+    .setValue(CONFIG.VIP.EXPIRED_STATUS);
+}
+
+function consumeDiscountToken_(code,customerId,telegramId,trackingCode){
+  if(!String(code||'').trim())return;
+
+  var found=findVIPDiscountToken_(String(code).trim().toUpperCase());
+
+  if(!found){
+    throw new Error('کد تخفیف معتبر نیست.');
+  }
+
+  if(found.used){
+    throw new Error('کد تخفیف قبلاً مصرف شده است.');
+  }
+
+  if(found.expiryMs && found.expiryMs<=Date.now()){
+    markVIPTokenExpired_(found);
+    throw new Error('کد تخفیف منقضی شده است.');
+  }
+
+  if(found.status!==CONFIG.VIP.ACTIVE_STATUS){
+    throw new Error('توکن VIP فعال نیست.');
+  }
+
+  if(!found.customerActive){
+    throw new Error('عضویت VIP این کد فعال نیست.');
+  }
+
+  var requestedCustomerId=String(customerId||'').trim();
+  if(requestedCustomerId && requestedCustomerId!==found.customerId){
+    throw new Error('این کد تخفیف متعلق به این حساب VIP نیست.');
+  }
+
+  var requestedTelegramId=String(telegramId||'').trim();
+  if(requestedTelegramId && found.telegramId && requestedTelegramId!==found.telegramId){
+    throw new Error('این کد تخفیف متعلق به این حساب Telegram نیست.');
+  }
+
+  var now=new Date();
+
+  found.sheet.getRange(found.rowNumber,6).setValue(CONFIG.VIP.USED_STATUS);
+  found.sheet.getRange(found.rowNumber,7).setValue(formatVIPDateTime_(now));
+  found.sheet.getRange(found.rowNumber,8).setValue(String(trackingCode||'').trim());
+
+  SpreadsheetApp.flush();
+}
+
+function formatVIPDateTime_(date){
+  if(!date)return '';
+  var d=date instanceof Date?date:new Date(date);
+  var parts=gregorianToJalali_(d);
+  return parts[0]+'/'+String(parts[1]).padStart(2,'0')+'/'+String(parts[2]).padStart(2,'0')
+    +' - '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+}
+
+function testVIPDiscountConnection(){
+  var tokenSheet=getVIPSheet_(CONFIG.VIP.TOKENS_SHEET);
+  var customerSheet=getVIPSheet_(CONFIG.VIP.CUSTOMERS_SHEET);
+
+  var tokenLastRow=tokenSheet.getLastRow();
+  var customerLastRow=customerSheet.getLastRow();
+
+  var activeCount=0;
+  var usableCount=0;
+
+  if(tokenLastRow>=2){
+    var rows=tokenSheet.getRange(2,1,tokenLastRow-1,Math.max(10,tokenSheet.getLastColumn())).getValues();
+    rows.forEach(function(row){
+      var status=String(row[5]||'').trim();
+      var expiryMs=Number(row[9]||0);
+      if(status===CONFIG.VIP.ACTIVE_STATUS){
+        activeCount++;
+        if(!expiryMs || expiryMs>Date.now())usableCount++;
+      }
+    });
+  }
+
+  return {
+    ok:true,
+    vipSpreadsheetConnected:true,
+    vipCustomersRows:Math.max(0,customerLastRow-1),
+    vipTokenRows:Math.max(0,tokenLastRow-1),
+    activeTokens:activeCount,
+    usableActiveTokens:usableCount
+  };
 }
 
 function firstField_(row,names){
@@ -2106,6 +2362,590 @@ function generateId_(prefix){return prefix+'-'+Utilities.getUuid().replace(/-/g,
 function generateTrackingCode_(){return String(Math.floor(100000+Math.random()*900000));}
 function fail_(error,message){return {ok:false,error:error,message:message};}
 
+function testVIPDiscountValidation(){
+  var tokenSheet=getVIPSheet_(CONFIG.VIP.TOKENS_SHEET);
+  var lastRow=tokenSheet.getLastRow();
+
+  if(lastRow<2){
+    throw new Error('هیچ توکنی برای تست پیدا نشد.');
+  }
+
+  var rows=tokenSheet.getRange(
+    2,
+    1,
+    lastRow-1,
+    Math.max(10,tokenSheet.getLastColumn())
+  ).getValues();
+
+  var testToken=null;
+
+  for(var i=0;i<rows.length;i++){
+    var row=rows[i];
+    var status=String(row[5]||'').trim();
+    var expiryMs=Number(row[9]||0);
+
+    if(
+      status===CONFIG.VIP.ACTIVE_STATUS &&
+      (!expiryMs || expiryMs>Date.now())
+    ){
+      testToken={
+        code:String(row[0]||'').trim().toUpperCase(),
+        customerId:String(row[1]||'').trim()
+      };
+      break;
+    }
+  }
+
+  if(!testToken || !testToken.code){
+    throw new Error('هیچ توکن VIP فعال و قابل استفاده‌ای برای تست پیدا نشد.');
+  }
+
+  var found=findVIPDiscountToken_(testToken.code);
+
+  if(!found){
+    throw new Error('توکن فعال در VIP پیدا شد اما از مسیر Booking قابل خواندن نیست.');
+  }
+
+  var result=validateDiscount_({
+    price:1000000,
+    code:testToken.code,
+    customerId:found.customerId,
+    telegramId:found.telegramId
+  });
+
+  return {
+    ok:!!result.ok,
+    valid:!!result.valid,
+    discountPercent:result.discountPercent,
+    discountAmount:result.discountAmount,
+    finalPrice:result.finalPrice,
+    vipCustomerId:result.vipCustomerId||'',
+    tokenStatus:found.status,
+    customerActive:found.customerActive,
+    tokenConsumed:false
+  };
+}
+
 function testPhase2ReadOnly(){
   return {ok:true,services:getServices_({}),settings:getBookingSettings_(),schedule:getSchedule_(),dates:getAvailableDates_({})};
+}
+
+
+/* =====================================================
+   CONTROLLED BOOKING CORE TEST
+   Create -> Hold -> Verify -> Release
+   - Uses a real priced service and real available slot.
+   - Uses Jalali dates exactly as production code does.
+   - Automatically releases the test booking on ANY failure.
+   - Does not use VIP and does not submit/approve payment.
+   ===================================================== */
+
+function testCreateBookingCore() {
+
+  var result = {
+    ok: false,
+    serviceFound: false,
+    servicePriceValid: false,
+    dateFound: false,
+    slotFound: false,
+    bookingCreated: false,
+    bookingStored: false,
+    dateVerified: false,
+    timeVerified: false,
+    slotKeyVerified: false,
+    priceVerified: false,
+    pendingVerified: false,
+    paymentPendingVerified: false,
+    holdVerified: false,
+    slotHeldVerified: false,
+    released: false,
+    slotFreeVerified: false,
+    vipTouched: false,
+    tokenConsumed: false,
+    bookingId: '',
+    requestId: '',
+    error: ''
+  };
+
+  var createdBooking = null;
+
+  try {
+
+    /* -------------------------------------------------
+       1. Select a REAL priced service
+       ------------------------------------------------- */
+
+    var serviceRows = getSheetObjects_('Services');
+
+    var serviceRow = serviceRows.find(function(row) {
+      var active =
+        row['فعال'] === undefined
+          ? true
+          : isTruthy_(row['فعال']);
+
+      var price =
+        toNumber_(
+          firstField_(
+            row,
+            ['قیمت', 'Price', 'Base Price', 'Original Price', 'مبلغ']
+          )
+        );
+
+      var name =
+        String(
+          firstField_(
+            row,
+            ['نام خدمت', 'Service Name', 'Name', 'Title', 'عنوان']
+          ) || ''
+        ).trim();
+
+      return active && name && price > 0;
+    });
+
+    if (!serviceRow) {
+      throw new Error('هیچ خدمت فعال و دارای قیمت برای تست پیدا نشد.');
+    }
+
+    var serviceName =
+      String(
+        firstField_(
+          serviceRow,
+          ['نام خدمت', 'Service Name', 'Name', 'Title', 'عنوان']
+        )
+      ).trim();
+
+    var serviceId =
+      String(
+        firstField_(
+          serviceRow,
+          ['Service ID', 'ServiceId', 'ID', 'Id', 'id', 'شناسه خدمت']
+        ) || ''
+      ).trim();
+
+    var servicePrice =
+      toNumber_(
+        firstField_(
+          serviceRow,
+          ['قیمت', 'Price', 'Base Price', 'Original Price', 'مبلغ']
+        )
+      );
+
+    result.serviceFound = true;
+    result.servicePriceValid = servicePrice > 0;
+
+    /* -------------------------------------------------
+       2. Select first real available Jalali date
+       ------------------------------------------------- */
+
+    var availableDates =
+      getAvailableDates_({});
+
+    if (
+      !availableDates ||
+      !availableDates.ok ||
+      !availableDates.dates ||
+      !availableDates.dates.length
+    ) {
+      throw new Error('هیچ تاریخ شمسی قابل رزروی برای تست پیدا نشد.');
+    }
+
+    var jalaliDate =
+      normalizeJalaliDate_(
+        availableDates.dates[0].date
+      );
+
+    if (!jalaliDate) {
+      throw new Error('تاریخ شمسی تست معتبر نیست.');
+    }
+
+    result.dateFound = true;
+
+    /* -------------------------------------------------
+       3. Select first FREE slot
+       ------------------------------------------------- */
+
+    var slotData =
+      getAvailableSlots_({
+        date: jalaliDate
+      });
+
+    if (
+      !slotData ||
+      !slotData.ok ||
+      !slotData.slots ||
+      !slotData.slots.length
+    ) {
+      throw new Error('هیچ ساعت قابل رزروی برای تاریخ تست پیدا نشد.');
+    }
+
+    var freeSlot =
+      slotData.slots.find(function(slot) {
+        return (
+          slot.available === true &&
+          String(slot.status) === CONFIG.SLOT_STATUS.FREE
+        );
+      });
+
+    if (!freeSlot) {
+      throw new Error('هیچ Slot آزاد برای تست پیدا نشد.');
+    }
+
+    var testTime =
+      normalizeTime_(freeSlot.time);
+
+    var expectedSlotKey =
+      buildSlotKey_(
+        jalaliDate,
+        testTime
+      );
+
+    result.slotFound = true;
+
+    /* -------------------------------------------------
+       4. Create REAL test booking
+       ------------------------------------------------- */
+
+    var unique =
+      String(new Date().getTime());
+
+    var requestId =
+      'TESTREQ-' + unique;
+
+    result.requestId = requestId;
+
+    var createResult =
+      createBooking_({
+        requestId: requestId,
+        telegramId: 'TEST-TG-' + unique,
+        customerId: 'TESTCUS-' + unique,
+        firstName: 'TEST',
+        lastName: 'KaenatChi',
+        mobile: 'TEST-' + unique,
+        serviceId: serviceId,
+        serviceName: serviceName,
+        appointmentDate: jalaliDate,
+        appointmentTime: testTime,
+        discountCode: ''
+      });
+
+    if (!createResult || !createResult.ok) {
+      throw new Error(
+        'Create Booking failed: ' +
+        JSON.stringify(createResult)
+      );
+    }
+
+    result.bookingCreated = true;
+
+    createdBooking =
+      createResult.booking || {};
+
+    result.bookingId =
+      String(
+        createdBooking.bookingId ||
+        createdBooking['Booking ID'] ||
+        ''
+      ).trim();
+
+    if (!result.bookingId) {
+      throw new Error('Booking ساخته شد اما Booking ID برنگشت.');
+    }
+
+    /* -------------------------------------------------
+       5. Read the SAME booking back from Sheet
+       ------------------------------------------------- */
+
+    var stored =
+      getBookingByIdObject_(
+        result.bookingId
+      );
+
+    if (!stored) {
+      throw new Error(
+        'Booking ساخته شد اما از Sheet قابل خواندن نیست.'
+      );
+    }
+
+    result.bookingStored = true;
+
+    /* -------------------------------------------------
+       6. Production-compatible verification
+       ------------------------------------------------- */
+
+    var storedDate =
+      normalizeJalaliDate_(
+        stored['Appointment Date']
+      );
+
+    var expectedDate =
+      normalizeJalaliDate_(
+        jalaliDate
+      );
+
+    result.dateVerified =
+      storedDate === expectedDate;
+
+    if (!result.dateVerified) {
+      throw new Error(
+        'تاریخ Jalali ذخیره‌شده صحیح نیست. ' +
+        'Expected=' + expectedDate +
+        ' Stored=' + storedDate
+      );
+    }
+
+    var storedTime =
+      normalizeTime_(
+        stored['Appointment Time']
+      );
+
+    result.timeVerified =
+      storedTime === testTime;
+
+    if (!result.timeVerified) {
+      throw new Error(
+        'ساعت ذخیره‌شده صحیح نیست. ' +
+        'Expected=' + testTime +
+        ' Stored=' + storedTime
+      );
+    }
+
+    result.slotKeyVerified =
+      String(
+        stored['Slot Key'] || ''
+      ).trim() === expectedSlotKey;
+
+    if (!result.slotKeyVerified) {
+      throw new Error(
+        'Slot Key ذخیره‌شده صحیح نیست.'
+      );
+    }
+
+    var storedPrice =
+      toNumber_(
+        stored['Original Price']
+      );
+
+    result.priceVerified =
+      storedPrice === servicePrice;
+
+    if (!result.priceVerified) {
+      throw new Error(
+        'قیمت ذخیره‌شده صحیح نیست. ' +
+        'Expected=' + servicePrice +
+        ' Stored=' + storedPrice
+      );
+    }
+
+    result.pendingVerified =
+      String(
+        stored['Appointment Status'] || ''
+      ) ===
+      CONFIG.STATUSES.BOOKING_PENDING;
+
+    if (!result.pendingVerified) {
+      throw new Error(
+        'وضعیت Booking در حالت انتظار نیست.'
+      );
+    }
+
+    result.paymentPendingVerified =
+      String(
+        stored['Payment Status'] || ''
+      ) ===
+      CONFIG.STATUSES.PAYMENT_PENDING;
+
+    if (!result.paymentPendingVerified) {
+      throw new Error(
+        'وضعیت پرداخت در حالت انتظار نیست.'
+      );
+    }
+
+    var holdUntil =
+      parseDateValue_(
+        stored['Hold Until']
+      );
+
+    result.holdVerified =
+      !!holdUntil &&
+      holdUntil.getTime() > Date.now();
+
+    if (!result.holdVerified) {
+      throw new Error(
+        'Hold Until معتبر و آینده‌دار نیست.'
+      );
+    }
+
+    /* -------------------------------------------------
+       7. Verify slot is HELD
+       ------------------------------------------------- */
+
+    result.slotHeldVerified =
+      getSlotStatus_(
+        expectedSlotKey,
+        jalaliDate,
+        testTime
+      ) === CONFIG.SLOT_STATUS.HELD;
+
+    if (!result.slotHeldVerified) {
+      throw new Error(
+        'Slot بعد از Create در وضعیت HELD نیست.'
+      );
+    }
+
+    /* -------------------------------------------------
+       8. Release test booking
+       ------------------------------------------------- */
+
+    releaseBookingRow_(
+      stored._row,
+      stored['Booking ID'],
+      stored['Slot Key']
+    );
+
+    result.released = true;
+
+    /* -------------------------------------------------
+       9. Verify slot is FREE
+       ------------------------------------------------- */
+
+    result.slotFreeVerified =
+      getSlotStatus_(
+        expectedSlotKey,
+        jalaliDate,
+        testTime
+      ) === CONFIG.SLOT_STATUS.FREE;
+
+    if (!result.slotFreeVerified) {
+      throw new Error(
+        'Slot بعد از Release آزاد نشده است.'
+      );
+    }
+
+    result.ok = true;
+
+  } catch (error) {
+
+    result.error =
+      String(
+        error && error.message
+          ? error.message
+          : error
+      );
+
+    /*
+     * Safety net:
+     * If Create succeeded but a later verification failed,
+     * release ONLY this test booking.
+     */
+    try {
+
+      if (
+        !result.released &&
+        result.bookingId
+      ) {
+
+        var cleanupBooking =
+          getBookingByIdObject_(
+            result.bookingId
+          );
+
+        if (
+          cleanupBooking &&
+          String(
+            cleanupBooking['Appointment Status'] || ''
+          ) ===
+          CONFIG.STATUSES.BOOKING_PENDING
+        ) {
+
+          releaseBookingRow_(
+            cleanupBooking._row,
+            cleanupBooking['Booking ID'],
+            cleanupBooking['Slot Key']
+          );
+
+          result.released = true;
+        }
+      }
+
+    } catch (cleanupError) {
+
+      result.error +=
+        ' | Cleanup failed: ' +
+        String(
+          cleanupError && cleanupError.message
+            ? cleanupError.message
+            : cleanupError
+        );
+    }
+
+  }
+
+  /* ---------------------------------------------------
+     10. Safety guarantees
+     --------------------------------------------------- */
+
+  result.vipTouched = false;
+  result.tokenConsumed = false;
+
+  Logger.log(
+    'REAL BOOKING CREATE + HOLD + VERIFY + RELEASE TEST'
+  );
+
+  Logger.log(
+    JSON.stringify(
+      result,
+      null,
+      2
+    )
+  );
+
+  Logger.log('--- TEST DATA ---');
+  Logger.log(
+    'Service: ' +
+    String(
+      serviceName || ''
+    )
+  );
+  Logger.log(
+    'Service Price: ' +
+    String(
+      servicePrice || 0
+    )
+  );
+  Logger.log(
+    'Jalali Date: ' +
+    String(
+      jalaliDate || ''
+    )
+  );
+  Logger.log(
+    'Time: ' +
+    String(
+      testTime || ''
+    )
+  );
+  Logger.log(
+    'Booking ID: ' +
+    String(
+      result.bookingId || ''
+    )
+  );
+
+  Logger.log('--- SAFETY ---');
+  Logger.log(
+    'VIP TOUCHED: false'
+  );
+  Logger.log(
+    'VIP TOKEN CONSUMED: false'
+  );
+  Logger.log(
+    'TEST BOOKING RELEASED: ' +
+    result.released
+  );
+  Logger.log(
+    'ALL CHECKS PASSED: ' +
+    result.ok
+  );
+
+  return result;
 }

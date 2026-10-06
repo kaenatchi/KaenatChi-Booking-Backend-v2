@@ -2145,7 +2145,41 @@ function getBookingByIdObject_(id){
 
 function appendObjectRow_(sheetName,source,values){
   var sheet=getSheet_(sheetName),headers=getHeaders_(sheet),v=values||{};
-  sheet.appendRow(headers.map(function(h){return Object.prototype.hasOwnProperty.call(v,h)?v[h]:(source&&Object.prototype.hasOwnProperty.call(source,h)?source[h]:'');}));
+
+  var rowValues=headers.map(function(h){
+    return Object.prototype.hasOwnProperty.call(v,h)
+      ? v[h]
+      : (source&&Object.prototype.hasOwnProperty.call(source,h)
+        ? source[h]
+        : '');
+  });
+
+  /*
+   * IMPORTANT:
+   * Jalali booking dates must remain TEXT in Google Sheets.
+   *
+   * If a value such as 1405/07/14 is written with appendRow()
+   * while the column is date-formatted, Google Sheets can interpret
+   * it as a Gregorian year/month/day and convert it to a Date object.
+   * The next read then turns 1405/07/14 into an unrelated Jalali date
+   * (for example 784/04/23).
+   *
+   * We therefore force the Appointment Date column to plain text
+   * BEFORE writing the row.
+   */
+  var dateColumnIndex=headers.indexOf('Appointment Date');
+
+  if(dateColumnIndex!==-1){
+    sheet
+      .getRange(1,dateColumnIndex+1,sheet.getMaxRows(),1)
+      .setNumberFormat('@');
+  }
+
+  var nextRow=sheet.getLastRow()+1;
+
+  sheet
+    .getRange(nextRow,1,1,headers.length)
+    .setValues([rowValues]);
 }
 
 function updateRowFields_(sheetName,rowNumber,fields){
@@ -2947,5 +2981,189 @@ function testCreateBookingCore() {
     result.ok
   );
 
+  return result;
+}
+
+
+
+/* =====================================================
+   PHASE 3 - PAYMENT FLOW TESTS
+   Controlled integration tests.
+   - Uses real service / real available Jalali slot.
+   - Uses mock payment proof only; NO real bank gateway.
+   - Never consumes VIP tokens.
+   - Cleans up only test bookings.
+   ===================================================== */
+
+function testPaymentFlowSubmitOnly() {
+  var result = {
+    ok:false,
+    serviceFound:false,
+    dateFound:false,
+    slotFound:false,
+    bookingCreated:false,
+    paymentSubmitted:false,
+    paymentRowCreated:false,
+    paymentStatusVerified:false,
+    appointmentStillPending:false,
+    vipTouched:false,
+    tokenConsumed:false,
+    cleanedUp:false,
+    bookingId:'',
+    error:''
+  };
+
+  var created = null;
+
+  try {
+    var services = getSheetObjects_('Services');
+    var service = services.find(function(row) {
+      var active = row['فعال'] === undefined ? true : isTruthy_(row['فعال']);
+      var name = String(firstField_(row,['نام خدمت','Service Name','Name','Title','عنوان'])||'').trim();
+      var price = toNumber_(firstField_(row,['قیمت','Price','Base Price','Original Price','مبلغ']));
+      return active && name && price > 0;
+    });
+    if(!service) throw new Error('هیچ خدمت فعال و دارای قیمت برای تست پیدا نشد.');
+    result.serviceFound = true;
+
+    var serviceName = String(firstField_(service,['نام خدمت','Service Name','Name','Title','عنوان'])||'').trim();
+    var serviceId = String(firstField_(service,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||'').trim();
+
+    var dates = getAvailableDates_({});
+    if(!dates.ok || !dates.dates || !dates.dates.length) throw new Error('هیچ تاریخ شمسی قابل رزروی برای تست پیدا نشد.');
+    var date = normalizeJalaliDate_(dates.dates[0].date);
+    result.dateFound = !!date;
+
+    var slots = getAvailableSlots_({date:date});
+    var free = slots.slots && slots.slots.find(function(s){ return s.available===true && String(s.status)===CONFIG.SLOT_STATUS.FREE; });
+    if(!free) throw new Error('هیچ Slot آزاد برای تست پیدا نشد.');
+    var time = normalizeTime_(free.time);
+    result.slotFound = true;
+
+    var unique=String(new Date().getTime());
+    var create=createBooking_({
+      requestId:'PAYTEST-'+unique,
+      telegramId:'PAYTEST-TG-'+unique,
+      customerId:'PAYTEST-CUS-'+unique,
+      firstName:'PAYMENT',
+      lastName:'TEST',
+      mobile:'PAYTEST-'+unique,
+      serviceId:serviceId,
+      serviceName:serviceName,
+      appointmentDate:date,
+      appointmentTime:time,
+      discountCode:''
+    });
+    if(!create || !create.ok) throw new Error('Create Booking failed: '+JSON.stringify(create));
+    result.bookingCreated=true;
+    created=create.booking||{};
+    result.bookingId=String(created.bookingId||created['Booking ID']||'').trim();
+    if(!result.bookingId) throw new Error('Booking ID برای تست برگشت داده نشد.');
+
+    var before=getBookingByIdObject_(result.bookingId);
+    if(!before) throw new Error('Booking تست در Sheet پیدا نشد.');
+
+    var submit=submitPayment_({
+      bookingId:result.bookingId,
+      transactionNumber:'MOCK-PAY-'+unique,
+      receiptData:'data:text/plain;base64,UEFZTUVOVCBURVNU',
+      receiptFileName:'payment-test-'+unique+'.txt',
+      receiptMimeType:'text/plain'
+    });
+    if(!submit || !submit.ok) throw new Error('Submit Payment failed: '+JSON.stringify(submit));
+    result.paymentSubmitted=true;
+
+    var after=getBookingByIdObject_(result.bookingId);
+    if(!after) throw new Error('Booking بعد از پرداخت پیدا نشد.');
+
+    result.paymentStatusVerified=String(after['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED;
+    result.appointmentStillPending=String(after['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING;
+
+    if(!result.paymentStatusVerified) throw new Error('Payment Status بعد از Submit صحیح نیست.');
+    if(!result.appointmentStillPending) throw new Error('Booking نباید قبل از تأیید ادمین Confirm شود.');
+
+    var payments=getSheetObjects_(CONFIG.SHEETS.PAYMENTS);
+    result.paymentRowCreated=payments.some(function(p){
+      return String(p['Booking ID']||'')===result.bookingId &&
+             String(p['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED;
+    });
+    if(!result.paymentRowCreated) throw new Error('رکورد پرداخت در Payments ساخته نشد.');
+
+    result.ok=true;
+
+  } catch(e) {
+    result.error=String(e && e.message ? e.message : e);
+  }
+
+  try {
+    if(result.bookingId){
+      var b=getBookingByIdObject_(result.bookingId);
+      if(b && String(b['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING){
+        releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);
+        result.cleanedUp=true;
+      }
+    }
+  } catch(cleanup){
+    result.error+=(result.error?' | ':'')+'Cleanup failed: '+String(cleanup && cleanup.message ? cleanup.message : cleanup);
+  }
+
+  result.vipTouched=false;
+  result.tokenConsumed=false;
+  Logger.log('PAYMENT FLOW - SUBMIT TEST');
+  Logger.log(JSON.stringify(result,null,2));
+  Logger.log('ALL CHECKS PASSED: '+result.ok);
+  return result;
+}
+
+
+function testPaymentFlowRejectWithoutProof() {
+  var result={ok:false,bookingId:'',rejectedWithoutProof:false,cleanedUp:false,error:''};
+
+  try {
+    var services=getSheetObjects_('Services');
+    var service=services.find(function(row){
+      var active=row['فعال']===undefined?true:isTruthy_(row['فعال']);
+      var name=String(firstField_(row,['نام خدمت','Service Name','Name','Title','عنوان'])||'').trim();
+      var price=toNumber_(firstField_(row,['قیمت','Price','Base Price','Original Price','مبلغ']));
+      return active&&name&&price>0;
+    });
+    if(!service)throw new Error('هیچ خدمت فعال و دارای قیمت برای تست پیدا نشد.');
+
+    var dateRows=getAvailableDates_({});
+    if(!dateRows.ok||!dateRows.dates||!dateRows.dates.length)throw new Error('هیچ تاریخ قابل رزروی نیست.');
+    var date=normalizeJalaliDate_(dateRows.dates[0].date);
+    var slots=getAvailableSlots_({date:date});
+    var free=slots.slots.find(function(s){return s.available===true&&String(s.status)===CONFIG.SLOT_STATUS.FREE;});
+    if(!free)throw new Error('هیچ Slot آزاد برای تست پیدا نشد.');
+
+    var unique=String(new Date().getTime());
+    var create=createBooking_({
+      requestId:'PAYNO-'+unique,telegramId:'PAYNO-TG-'+unique,customerId:'PAYNO-CUS-'+unique,
+      firstName:'PAYMENT',lastName:'NO-PROOF',mobile:'PAYNO-'+unique,
+      serviceId:String(firstField_(service,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||''),
+      serviceName:String(firstField_(service,['نام خدمت','Service Name','Name','Title','عنوان'])||''),
+      appointmentDate:date,appointmentTime:normalizeTime_(free.time),discountCode:''
+    });
+    if(!create.ok)throw new Error('Create failed: '+JSON.stringify(create));
+    result.bookingId=String(create.booking.bookingId||'').trim();
+
+    var submit=submitPayment_({bookingId:result.bookingId});
+    result.rejectedWithoutProof=!!submit && submit.ok===false && submit.error==='PAYMENT_PROOF_REQUIRED';
+    if(!result.rejectedWithoutProof)throw new Error('سیستم بدون Proof پرداخت را رد نکرد.');
+
+    result.ok=true;
+  } catch(e){ result.error=String(e&&e.message?e.message:e); }
+
+  try{
+    if(result.bookingId){
+      var b=getBookingByIdObject_(result.bookingId);
+      if(b&&String(b['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING){
+        releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']); result.cleanedUp=true;
+      }
+    }
+  }catch(cleanup){result.error+=(result.error?' | ':'')+'Cleanup failed: '+String(cleanup&&cleanup.message?cleanup.message:cleanup);}
+  Logger.log('PAYMENT FLOW - NO PROOF TEST');
+  Logger.log(JSON.stringify(result,null,2));
+  Logger.log('ALL CHECKS PASSED: '+result.ok);
   return result;
 }

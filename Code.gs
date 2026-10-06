@@ -436,7 +436,22 @@ function getAvailableDates_(request) {
   const maxAdvance =
     Number(settings.settings['Maximum Advance'] || 30);
 
-  const today = new Date();
+  if (maxAdvance < minAdvance) {
+    return {
+      ok: false,
+      error: 'INVALID_ADVANCE_RANGE',
+      message: 'بازه مجاز رزرو صحیح نیست.'
+    };
+  }
+
+  /*
+   * Booking dates are Jalali.
+   * We therefore iterate the Jalali calendar directly instead
+   * of adding Gregorian days and converting back.
+   *
+   * This prevents timezone and weekday drift.
+   */
+  const todayJalali = getTodayJalali_();
 
   const dates = [];
 
@@ -446,19 +461,17 @@ function getAvailableDates_(request) {
     offset++
   ) {
 
-    const date = new Date(today);
-
-    date.setDate(
-      date.getDate() + offset
-    );
-
-    const jalali = gregorianToJalali_(date);
+    const jalali =
+      addJalaliDays_(
+        todayJalali,
+        offset
+      );
 
     if (isDateAvailable_(jalali)) {
 
       dates.push({
         date: jalali,
-        dayOfWeek: getPersianDayName_(date),
+        dayOfWeek: getPersianDayNameFromJalali_(jalali),
         available: true
       });
 
@@ -572,11 +585,12 @@ function getScheduleForDate_(jalaliDate) {
   }
 
 
-  const dateObject =
-    jalaliToApproxGregorian_(jalaliDate);
-
+  /*
+   * Determine the weekday directly from the Jalali date.
+   * No approximate Gregorian conversion is used here.
+   */
   const dayName =
-    getPersianDayName_(dateObject);
+    getPersianDayNameFromJalali_(jalaliDate);
 
 
   const scheduleRows =
@@ -608,7 +622,8 @@ function getScheduleForDate_(jalaliDate) {
             .trim();
 
         return (
-          baseDay === dayName &&
+          normalizePersianDayName_(baseDay) ===
+            normalizePersianDayName_(dayName) &&
           isTruthy_(row.Active)
         );
 
@@ -1003,48 +1018,422 @@ function gregorianToJalali_(date) {
 
 
 /*
- * This helper is only used to determine the weekday
- * for a Jalali date. The booking date itself remains
- * Jalali everywhere.
+ * Standard Jalali -> Gregorian conversion.
+ *
+ * The result is created at UTC noon so the calendar day
+ * cannot shift because of the Apps Script project timezone.
+ *
+ * This is used only when a Gregorian Date object is genuinely
+ * needed. Booking dates themselves remain Jalali everywhere.
  */
-function jalaliToApproxGregorian_(jalaliDate) {
+function jalaliToGregorian_(jalaliDate) {
 
   const parts =
     String(jalaliDate)
+      .replace(/-/g, '/')
+      .split('/');
+
+  if (parts.length !== 3) {
+    throw new Error(
+      'فرمت تاریخ شمسی نامعتبر است: ' + jalaliDate
+    );
+  }
+
+  const jy = Number(parts[0]);
+  const jm = Number(parts[1]);
+  const jd = Number(parts[2]);
+
+  if (
+    !Number.isInteger(jy) ||
+    !Number.isInteger(jm) ||
+    !Number.isInteger(jd) ||
+    jm < 1 ||
+    jm > 12 ||
+    jd < 1 ||
+    jd > 31
+  ) {
+    throw new Error(
+      'تاریخ شمسی نامعتبر است: ' + jalaliDate
+    );
+  }
+
+  const adjustedJy = jy + 1595;
+
+  let days =
+    -355668 +
+    365 * adjustedJy +
+    Math.floor(adjustedJy / 33) * 8 +
+    Math.floor(((adjustedJy % 33) + 3) / 4) +
+    jd +
+    (
+      jm < 7
+        ? (jm - 1) * 31
+        : (jm - 7) * 30 + 186
+    );
+
+  let gy =
+    400 * Math.floor(days / 146097);
+
+  days %= 146097;
+
+  if (days > 36524) {
+
+    days -= 1;
+
+    gy +=
+      100 * Math.floor(days / 36524);
+
+    days %= 36524;
+
+    if (days >= 365) {
+      days += 1;
+    }
+  }
+
+  gy +=
+    4 * Math.floor(days / 1461);
+
+  days %= 1461;
+
+  if (days > 365) {
+
+    gy +=
+      Math.floor((days - 1) / 365);
+
+    days =
+      (days - 1) % 365;
+  }
+
+  const gd =
+    days + 1;
+
+  const leap =
+    (
+      gy % 4 === 0 &&
+      gy % 100 !== 0
+    ) ||
+    gy % 400 === 0;
+
+  const monthLengths = [
+    31,
+    leap ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31
+  ];
+
+  let remainingDays = gd;
+  let gm = 1;
+
+  while (
+    gm <= 12 &&
+    remainingDays > monthLengths[gm - 1]
+  ) {
+
+    remainingDays -=
+      monthLengths[gm - 1];
+
+    gm++;
+  }
+
+  return new Date(
+    Date.UTC(
+      gy,
+      gm - 1,
+      remainingDays,
+      12,
+      0,
+      0
+    )
+  );
+}
+
+
+/*
+ * Returns today's Jalali date using Iran's timezone.
+ * The booking system is Jalali-based, so this is independent
+ * of the Apps Script project's own timezone setting.
+ */
+function getTodayJalali_() {
+
+  const now = new Date();
+
+  const iranDateText =
+    Utilities.formatDate(
+      now,
+      'Asia/Tehran',
+      'yyyy-MM-dd'
+    );
+
+  return gregorianToJalali_(
+    new Date(
+      iranDateText + 'T12:00:00+03:30'
+    )
+  );
+}
+
+
+/*
+ * Adds whole calendar days directly to a Jalali date.
+ * This avoids Gregorian timezone/date rollover problems.
+ */
+function addJalaliDays_(jalaliDate, daysToAdd) {
+
+  let result =
+    normalizeJalaliDate_(jalaliDate);
+
+  const count =
+    Number(daysToAdd) || 0;
+
+  if (count < 0) {
+    for (
+      let i = 0;
+      i > count;
+      i--
+    ) {
+      result = addOneJalaliDay_(result, -1);
+    }
+  } else {
+    for (
+      let i = 0;
+      i < count;
+      i++
+    ) {
+      result = addOneJalaliDay_(result, 1);
+    }
+  }
+
+  return result;
+}
+
+
+function addOneJalaliDay_(jalaliDate, direction) {
+
+  const parts =
+    normalizeJalaliDate_(jalaliDate)
+      .split('/');
+
+  let jy = Number(parts[0]);
+  let jm = Number(parts[1]);
+  let jd = Number(parts[2]);
+
+  if (direction >= 0) {
+
+    const maxDay =
+      jalaliMonthLength_(jy, jm);
+
+    if (jd < maxDay) {
+      jd++;
+    } else {
+
+      jd = 1;
+
+      if (jm < 12) {
+        jm++;
+      } else {
+        jm = 1;
+        jy++;
+      }
+    }
+
+  } else {
+
+    if (jd > 1) {
+      jd--;
+    } else {
+
+      if (jm > 1) {
+        jm--;
+      } else {
+        jm = 12;
+        jy--;
+      }
+
+      jd =
+        jalaliMonthLength_(jy, jm);
+    }
+  }
+
+  return (
+    jy +
+    '/' +
+    pad2_(jm) +
+    '/' +
+    pad2_(jd)
+  );
+}
+
+
+function jalaliMonthLength_(jy, jm) {
+
+  if (jm >= 1 && jm <= 6) {
+    return 31;
+  }
+
+  if (jm >= 7 && jm <= 11) {
+    return 30;
+  }
+
+  return isJalaliLeapYear_(jy)
+    ? 30
+    : 29;
+}
+
+
+/*
+ * Jalali leap-year calculation via the standard
+ * Jalali -> Gregorian conversion.
+ */
+function isJalaliLeapYear_(jy) {
+
+  const current =
+    jalaliToGregorian_(
+      jy + '/12/30'
+    );
+
+  return (
+    current.getUTCFullYear() ===
+    jalaliToGregorian_(
+      (jy + 1) + '/01/01'
+    ).getUTCFullYear()
+  );
+}
+
+
+/*
+ * Returns the Persian weekday for a Jalali date.
+ *
+ * Fixed anchor:
+ * 1405/07/14 = Tuesday.
+ *
+ * We calculate the day difference entirely in the Jalali
+ * calendar, so no approximate Gregorian weekday is involved.
+ */
+function getPersianDayNameFromJalali_(jalaliDate) {
+
+  const anchorDate = '1405/07/14';
+
+  const difference =
+    jalaliDayDifference_(
+      anchorDate,
+      jalaliDate
+    );
+
+  const weekdayIndex =
+    (2 + difference % 7 + 7) % 7;
+
+  const days = [
+    'یکشنبه',
+    'دوشنبه',
+    'سه‌شنبه',
+    'چهارشنبه',
+    'پنج‌شنبه',
+    'جمعه',
+    'شنبه'
+  ];
+
+  return days[weekdayIndex];
+}
+
+
+function jalaliDayDifference_(fromDate, toDate) {
+
+  const from =
+    jalaliToOrdinal_(fromDate);
+
+  const to =
+    jalaliToOrdinal_(toDate);
+
+  return to - from;
+}
+
+
+function jalaliToOrdinal_(jalaliDate) {
+
+  const parts =
+    normalizeJalaliDate_(jalaliDate)
       .split('/');
 
   const jy = Number(parts[0]);
   const jm = Number(parts[1]);
   const jd = Number(parts[2]);
 
-  const gy =
-    jy + 621;
+  let days =
+    0;
 
-  const gregorian =
-    new Date(
-      gy,
-      0,
-      1
-    );
+  /*
+   * The Jalali 33-year cycle contains 12053 days.
+   * This ordinal is sufficient for the booking date ranges
+   * and keeps all weekday calculations inside the Jalali system.
+   */
+  const cycles =
+    Math.floor(jy / 33);
 
-  let days;
+  days +=
+    cycles * 12053;
 
-  if (jm <= 6) {
-    days =
-      (jm - 1) * 31 +
-      (jd - 1);
-  } else {
-    days =
-      186 +
-      (jm - 7) * 30 +
-      (jd - 1);
+  const remainder =
+    jy % 33;
+
+  for (
+    let year = 0;
+    year < remainder;
+    year++
+  ) {
+
+    days +=
+      isJalaliLeapYearSimple_(jy - remainder + year)
+        ? 366
+        : 365;
   }
 
-  gregorian.setDate(
-    gregorian.getDate() + days
-  );
+  for (
+    let month = 1;
+    month < jm;
+    month++
+  ) {
+    days +=
+      jalaliMonthLength_(
+        jy,
+        month
+      );
+  }
 
-  return gregorian;
+  days +=
+    jd - 1;
+
+  return days;
+}
+
+
+function isJalaliLeapYearSimple_(jy) {
+
+  /*
+   * Standard 33-year Jalali cycle.
+   * The exact conversion helper above remains the authority
+   * for Gregorian conversion; this function is used only
+   * for ordinal day arithmetic.
+   */
+  const remainder =
+    ((jy % 33) + 33) % 33;
+
+  return [
+    1,
+    5,
+    9,
+    13,
+    17,
+    22,
+    26,
+    30
+  ].indexOf(remainder) !== -1;
 }
 
 
@@ -1059,7 +1448,7 @@ function getPersianDayName_(date) {
     'دوشنبه',
     'سه‌شنبه',
     'چهارشنبه',
-    'پنجشنبه',
+    'پنج‌شنبه',
     'جمعه',
     'شنبه'
   ];
@@ -1067,6 +1456,14 @@ function getPersianDayName_(date) {
   return days[
     date.getDay()
   ];
+}
+
+
+function normalizePersianDayName_(value) {
+
+  return String(value || '')
+    .replace(/[\u200c\u200d\s]/g, '')
+    .trim();
 }
 
 

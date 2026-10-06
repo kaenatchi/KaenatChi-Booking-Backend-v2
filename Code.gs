@@ -2018,6 +2018,9 @@ function submitPayment_(request){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
     if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
     if(String(b['Appointment Status']||'')!==CONFIG.STATUSES.BOOKING_PENDING)return fail_('BOOKING_NOT_PENDING','این نوبت در وضعیت قابل پرداخت نیست.');
+    if(String(b['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED||String(b['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_APPROVED){
+      return fail_('PAYMENT_ALREADY_SUBMITTED','برای این نوبت قبلاً پرداخت ارسال شده است.');
+    }
     var hold=parseDateValue_(b['Hold Until']);
     if(!hold||hold.getTime()<=Date.now()){releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);return fail_('HOLD_EXPIRED','مهلت این نوبت تمام شده است.');}
     var transaction=String(request.transactionNumber||request.paymentTrackingCode||request.paymentCode||'').trim();

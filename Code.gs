@@ -3321,6 +3321,134 @@ function testPaymentApprovalFlow() {
 }
 
 
+function testPaymentFlowDuplicate() {
+  var result={
+    ok:false,
+    serviceFound:false,
+    dateFound:false,
+    slotFound:false,
+    bookingCreated:false,
+    firstPaymentSubmitted:false,
+    secondPaymentRejected:false,
+    paymentRowCountVerified:false,
+    originalPaymentPreserved:false,
+    bookingStatePreserved:false,
+    cleanedUp:false,
+    bookingId:'',
+    error:''
+  };
+
+  try {
+    var services=getSheetObjects_('Services');
+    var service=services.find(function(row){
+      var active=row['فعال']===undefined?true:isTruthy_(row['فعال']);
+      var name=String(firstField_(row,['نام خدمت','Service Name','Name','Title','عنوان'])||'').trim();
+      var price=toNumber_(firstField_(row,['قیمت','Price','Base Price','Original Price','مبلغ']));
+      return active&&name&&price>0;
+    });
+    if(!service)throw new Error('هیچ خدمت فعال و دارای قیمت برای تست پیدا نشد.');
+    result.serviceFound=true;
+
+    var dates=getAvailableDates_({});
+    if(!dates.ok||!dates.dates||!dates.dates.length)throw new Error('هیچ تاریخ قابل رزروی نیست.');
+    var date=normalizeJalaliDate_(dates.dates[0].date);
+    result.dateFound=!!date;
+
+    var slots=getAvailableSlots_({date:date});
+    var free=slots.slots&&slots.slots.find(function(s){
+      return s.available===true&&String(s.status)===CONFIG.SLOT_STATUS.FREE;
+    });
+    if(!free)throw new Error('هیچ Slot آزاد برای تست پیدا نشد.');
+    var time=normalizeTime_(free.time);
+    result.slotFound=true;
+
+    var unique=String(new Date().getTime());
+    var serviceId=String(firstField_(service,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||'');
+    var serviceName=String(firstField_(service,['نام خدمت','Service Name','Name','Title','عنوان'])||'');
+    var create=createBooking_({
+      requestId:'PAYDUP-'+unique,
+      telegramId:'PAYDUP-TG-'+unique,
+      customerId:'PAYDUP-CUS-'+unique,
+      firstName:'PAYMENT',
+      lastName:'DUPLICATE',
+      mobile:'PAYDUP-'+unique,
+      serviceId:serviceId,
+      serviceName:serviceName,
+      appointmentDate:date,
+      appointmentTime:time,
+      discountCode:''
+    });
+    if(!create||!create.ok)throw new Error('Create Booking failed: '+JSON.stringify(create));
+    result.bookingCreated=true;
+    result.bookingId=String(create.booking.bookingId||'').trim();
+    if(!result.bookingId)throw new Error('Booking ID برای تست برگشت داده نشد.');
+
+    var first=submitPayment_({
+      bookingId:result.bookingId,
+      transactionNumber:'MOCK-DUP-1-'+unique,
+      receiptData:'data:text/plain;base64,UEFZTUVOVCBEVVAtMQ==',
+      receiptFileName:'payment-duplicate-test-1-'+unique+'.txt',
+      receiptMimeType:'text/plain'
+    });
+    if(!first||!first.ok)throw new Error('First payment submit failed: '+JSON.stringify(first));
+    result.firstPaymentSubmitted=true;
+
+    var second=submitPayment_({
+      bookingId:result.bookingId,
+      transactionNumber:'MOCK-DUP-2-'+unique,
+      receiptData:'data:text/plain;base64,UEFZTUVOVCBEVVAtMg==',
+      receiptFileName:'payment-duplicate-test-2-'+unique+'.txt',
+      receiptMimeType:'text/plain'
+    });
+    result.secondPaymentRejected=!!second&&second.ok===false;
+
+    var payments=getSheetObjects_(CONFIG.SHEETS.PAYMENTS);
+    var paymentRows=payments.filter(function(p){return String(p['Booking ID']||'')===result.bookingId;});
+    result.paymentRowCountVerified=paymentRows.length===1;
+    if(paymentRows.length===1){
+      result.originalPaymentPreserved=
+        String(paymentRows[0]['Transaction Number']||'')==='MOCK-DUP-1-'+unique &&
+        String(paymentRows[0]['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED;
+    }
+
+    var after=getBookingByIdObject_(result.bookingId);
+    result.bookingStatePreserved=!!after &&
+      String(after['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED &&
+      String(after['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING &&
+      String(after['Transaction Number']||'')==='MOCK-DUP-1-'+unique;
+
+    if(!result.secondPaymentRejected)throw new Error('ارسال Payment دوم مسدود نشد.');
+    if(!result.paymentRowCountVerified)throw new Error('برای یک Booking بیش از یک رکورد Payments ساخته شد.');
+    if(!result.originalPaymentPreserved)throw new Error('اطلاعات Payment اول حفظ نشد یا وضعیت آن تغییر کرد.');
+    if(!result.bookingStatePreserved)throw new Error('وضعیت/اطلاعات Booking بعد از Payment دوم تغییر غیرمجاز کرد.');
+
+    result.ok=true;
+  } catch(e) {
+    result.error=String(e&&e.message?e.message:e);
+  }
+
+  try {
+    if(result.bookingId){
+      var b=getBookingByIdObject_(result.bookingId);
+      if(b&&String(b['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING){
+        releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);
+        result.cleanedUp=true;
+      } else if(b&&String(b['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_CONFIRMED){
+        var cancelled=cancelBooking_({bookingId:result.bookingId,reason:'Duplicate payment flow test cleanup'});
+        result.cleanedUp=!!cancelled&&cancelled.ok===true;
+      }
+    }
+  } catch(cleanup) {
+    result.error+=(result.error?' | ':'')+'Cleanup failed: '+String(cleanup&&cleanup.message?cleanup.message:cleanup);
+  }
+
+  Logger.log('PAYMENT FLOW - DUPLICATE PAYMENT TEST');
+  Logger.log(JSON.stringify(result,null,2));
+  Logger.log('ALL CHECKS PASSED: '+result.ok);
+  return result;
+}
+
+
 function testApprovalBlockedBeforePayment() {
   var result={
     ok:false,

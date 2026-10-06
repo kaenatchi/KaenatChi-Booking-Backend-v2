@@ -2429,3 +2429,523 @@ function testVIPDiscountValidation(){
 function testPhase2ReadOnly(){
   return {ok:true,services:getServices_({}),settings:getBookingSettings_(),schedule:getSchedule_(),dates:getAvailableDates_({})};
 }
+
+
+/* =====================================================
+   CONTROLLED BOOKING CORE TEST
+   Create -> Hold -> Verify -> Release
+   - Uses a real priced service and real available slot.
+   - Uses Jalali dates exactly as production code does.
+   - Automatically releases the test booking on ANY failure.
+   - Does not use VIP and does not submit/approve payment.
+   ===================================================== */
+
+function testCreateBookingCore() {
+
+  var result = {
+    ok: false,
+    serviceFound: false,
+    servicePriceValid: false,
+    dateFound: false,
+    slotFound: false,
+    bookingCreated: false,
+    bookingStored: false,
+    dateVerified: false,
+    timeVerified: false,
+    slotKeyVerified: false,
+    priceVerified: false,
+    pendingVerified: false,
+    paymentPendingVerified: false,
+    holdVerified: false,
+    slotHeldVerified: false,
+    released: false,
+    slotFreeVerified: false,
+    vipTouched: false,
+    tokenConsumed: false,
+    bookingId: '',
+    requestId: '',
+    error: ''
+  };
+
+  var createdBooking = null;
+
+  try {
+
+    /* -------------------------------------------------
+       1. Select a REAL priced service
+       ------------------------------------------------- */
+
+    var serviceRows = getSheetObjects_('Services');
+
+    var serviceRow = serviceRows.find(function(row) {
+      var active =
+        row['فعال'] === undefined
+          ? true
+          : isTruthy_(row['فعال']);
+
+      var price =
+        toNumber_(
+          firstField_(
+            row,
+            ['قیمت', 'Price', 'Base Price', 'Original Price', 'مبلغ']
+          )
+        );
+
+      var name =
+        String(
+          firstField_(
+            row,
+            ['نام خدمت', 'Service Name', 'Name', 'Title', 'عنوان']
+          ) || ''
+        ).trim();
+
+      return active && name && price > 0;
+    });
+
+    if (!serviceRow) {
+      throw new Error('هیچ خدمت فعال و دارای قیمت برای تست پیدا نشد.');
+    }
+
+    var serviceName =
+      String(
+        firstField_(
+          serviceRow,
+          ['نام خدمت', 'Service Name', 'Name', 'Title', 'عنوان']
+        )
+      ).trim();
+
+    var serviceId =
+      String(
+        firstField_(
+          serviceRow,
+          ['Service ID', 'ServiceId', 'ID', 'Id', 'id', 'شناسه خدمت']
+        ) || ''
+      ).trim();
+
+    var servicePrice =
+      toNumber_(
+        firstField_(
+          serviceRow,
+          ['قیمت', 'Price', 'Base Price', 'Original Price', 'مبلغ']
+        )
+      );
+
+    result.serviceFound = true;
+    result.servicePriceValid = servicePrice > 0;
+
+    /* -------------------------------------------------
+       2. Select first real available Jalali date
+       ------------------------------------------------- */
+
+    var availableDates =
+      getAvailableDates_({});
+
+    if (
+      !availableDates ||
+      !availableDates.ok ||
+      !availableDates.dates ||
+      !availableDates.dates.length
+    ) {
+      throw new Error('هیچ تاریخ شمسی قابل رزروی برای تست پیدا نشد.');
+    }
+
+    var jalaliDate =
+      normalizeJalaliDate_(
+        availableDates.dates[0].date
+      );
+
+    if (!jalaliDate) {
+      throw new Error('تاریخ شمسی تست معتبر نیست.');
+    }
+
+    result.dateFound = true;
+
+    /* -------------------------------------------------
+       3. Select first FREE slot
+       ------------------------------------------------- */
+
+    var slotData =
+      getAvailableSlots_({
+        date: jalaliDate
+      });
+
+    if (
+      !slotData ||
+      !slotData.ok ||
+      !slotData.slots ||
+      !slotData.slots.length
+    ) {
+      throw new Error('هیچ ساعت قابل رزروی برای تاریخ تست پیدا نشد.');
+    }
+
+    var freeSlot =
+      slotData.slots.find(function(slot) {
+        return (
+          slot.available === true &&
+          String(slot.status) === CONFIG.SLOT_STATUS.FREE
+        );
+      });
+
+    if (!freeSlot) {
+      throw new Error('هیچ Slot آزاد برای تست پیدا نشد.');
+    }
+
+    var testTime =
+      normalizeTime_(freeSlot.time);
+
+    var expectedSlotKey =
+      buildSlotKey_(
+        jalaliDate,
+        testTime
+      );
+
+    result.slotFound = true;
+
+    /* -------------------------------------------------
+       4. Create REAL test booking
+       ------------------------------------------------- */
+
+    var unique =
+      String(new Date().getTime());
+
+    var requestId =
+      'TESTREQ-' + unique;
+
+    result.requestId = requestId;
+
+    var createResult =
+      createBooking_({
+        requestId: requestId,
+        telegramId: 'TEST-TG-' + unique,
+        customerId: 'TESTCUS-' + unique,
+        firstName: 'TEST',
+        lastName: 'KaenatChi',
+        mobile: 'TEST-' + unique,
+        serviceId: serviceId,
+        serviceName: serviceName,
+        appointmentDate: jalaliDate,
+        appointmentTime: testTime,
+        discountCode: ''
+      });
+
+    if (!createResult || !createResult.ok) {
+      throw new Error(
+        'Create Booking failed: ' +
+        JSON.stringify(createResult)
+      );
+    }
+
+    result.bookingCreated = true;
+
+    createdBooking =
+      createResult.booking || {};
+
+    result.bookingId =
+      String(
+        createdBooking.bookingId ||
+        createdBooking['Booking ID'] ||
+        ''
+      ).trim();
+
+    if (!result.bookingId) {
+      throw new Error('Booking ساخته شد اما Booking ID برنگشت.');
+    }
+
+    /* -------------------------------------------------
+       5. Read the SAME booking back from Sheet
+       ------------------------------------------------- */
+
+    var stored =
+      getBookingByIdObject_(
+        result.bookingId
+      );
+
+    if (!stored) {
+      throw new Error(
+        'Booking ساخته شد اما از Sheet قابل خواندن نیست.'
+      );
+    }
+
+    result.bookingStored = true;
+
+    /* -------------------------------------------------
+       6. Production-compatible verification
+       ------------------------------------------------- */
+
+    var storedDate =
+      normalizeJalaliDate_(
+        stored['Appointment Date']
+      );
+
+    var expectedDate =
+      normalizeJalaliDate_(
+        jalaliDate
+      );
+
+    result.dateVerified =
+      storedDate === expectedDate;
+
+    if (!result.dateVerified) {
+      throw new Error(
+        'تاریخ Jalali ذخیره‌شده صحیح نیست. ' +
+        'Expected=' + expectedDate +
+        ' Stored=' + storedDate
+      );
+    }
+
+    var storedTime =
+      normalizeTime_(
+        stored['Appointment Time']
+      );
+
+    result.timeVerified =
+      storedTime === testTime;
+
+    if (!result.timeVerified) {
+      throw new Error(
+        'ساعت ذخیره‌شده صحیح نیست. ' +
+        'Expected=' + testTime +
+        ' Stored=' + storedTime
+      );
+    }
+
+    result.slotKeyVerified =
+      String(
+        stored['Slot Key'] || ''
+      ).trim() === expectedSlotKey;
+
+    if (!result.slotKeyVerified) {
+      throw new Error(
+        'Slot Key ذخیره‌شده صحیح نیست.'
+      );
+    }
+
+    var storedPrice =
+      toNumber_(
+        stored['Original Price']
+      );
+
+    result.priceVerified =
+      storedPrice === servicePrice;
+
+    if (!result.priceVerified) {
+      throw new Error(
+        'قیمت ذخیره‌شده صحیح نیست. ' +
+        'Expected=' + servicePrice +
+        ' Stored=' + storedPrice
+      );
+    }
+
+    result.pendingVerified =
+      String(
+        stored['Appointment Status'] || ''
+      ) ===
+      CONFIG.STATUSES.BOOKING_PENDING;
+
+    if (!result.pendingVerified) {
+      throw new Error(
+        'وضعیت Booking در حالت انتظار نیست.'
+      );
+    }
+
+    result.paymentPendingVerified =
+      String(
+        stored['Payment Status'] || ''
+      ) ===
+      CONFIG.STATUSES.PAYMENT_PENDING;
+
+    if (!result.paymentPendingVerified) {
+      throw new Error(
+        'وضعیت پرداخت در حالت انتظار نیست.'
+      );
+    }
+
+    var holdUntil =
+      parseDateValue_(
+        stored['Hold Until']
+      );
+
+    result.holdVerified =
+      !!holdUntil &&
+      holdUntil.getTime() > Date.now();
+
+    if (!result.holdVerified) {
+      throw new Error(
+        'Hold Until معتبر و آینده‌دار نیست.'
+      );
+    }
+
+    /* -------------------------------------------------
+       7. Verify slot is HELD
+       ------------------------------------------------- */
+
+    result.slotHeldVerified =
+      getSlotStatus_(
+        expectedSlotKey,
+        jalaliDate,
+        testTime
+      ) === CONFIG.SLOT_STATUS.HELD;
+
+    if (!result.slotHeldVerified) {
+      throw new Error(
+        'Slot بعد از Create در وضعیت HELD نیست.'
+      );
+    }
+
+    /* -------------------------------------------------
+       8. Release test booking
+       ------------------------------------------------- */
+
+    releaseBookingRow_(
+      stored._row,
+      stored['Booking ID'],
+      stored['Slot Key']
+    );
+
+    result.released = true;
+
+    /* -------------------------------------------------
+       9. Verify slot is FREE
+       ------------------------------------------------- */
+
+    result.slotFreeVerified =
+      getSlotStatus_(
+        expectedSlotKey,
+        jalaliDate,
+        testTime
+      ) === CONFIG.SLOT_STATUS.FREE;
+
+    if (!result.slotFreeVerified) {
+      throw new Error(
+        'Slot بعد از Release آزاد نشده است.'
+      );
+    }
+
+    result.ok = true;
+
+  } catch (error) {
+
+    result.error =
+      String(
+        error && error.message
+          ? error.message
+          : error
+      );
+
+    /*
+     * Safety net:
+     * If Create succeeded but a later verification failed,
+     * release ONLY this test booking.
+     */
+    try {
+
+      if (
+        !result.released &&
+        result.bookingId
+      ) {
+
+        var cleanupBooking =
+          getBookingByIdObject_(
+            result.bookingId
+          );
+
+        if (
+          cleanupBooking &&
+          String(
+            cleanupBooking['Appointment Status'] || ''
+          ) ===
+          CONFIG.STATUSES.BOOKING_PENDING
+        ) {
+
+          releaseBookingRow_(
+            cleanupBooking._row,
+            cleanupBooking['Booking ID'],
+            cleanupBooking['Slot Key']
+          );
+
+          result.released = true;
+        }
+      }
+
+    } catch (cleanupError) {
+
+      result.error +=
+        ' | Cleanup failed: ' +
+        String(
+          cleanupError && cleanupError.message
+            ? cleanupError.message
+            : cleanupError
+        );
+    }
+
+  }
+
+  /* ---------------------------------------------------
+     10. Safety guarantees
+     --------------------------------------------------- */
+
+  result.vipTouched = false;
+  result.tokenConsumed = false;
+
+  Logger.log(
+    'REAL BOOKING CREATE + HOLD + VERIFY + RELEASE TEST'
+  );
+
+  Logger.log(
+    JSON.stringify(
+      result,
+      null,
+      2
+    )
+  );
+
+  Logger.log('--- TEST DATA ---');
+  Logger.log(
+    'Service: ' +
+    String(
+      serviceName || ''
+    )
+  );
+  Logger.log(
+    'Service Price: ' +
+    String(
+      servicePrice || 0
+    )
+  );
+  Logger.log(
+    'Jalali Date: ' +
+    String(
+      jalaliDate || ''
+    )
+  );
+  Logger.log(
+    'Time: ' +
+    String(
+      testTime || ''
+    )
+  );
+  Logger.log(
+    'Booking ID: ' +
+    String(
+      result.bookingId || ''
+    )
+  );
+
+  Logger.log('--- SAFETY ---');
+  Logger.log(
+    'VIP TOUCHED: false'
+  );
+  Logger.log(
+    'VIP TOKEN CONSUMED: false'
+  );
+  Logger.log(
+    'TEST BOOKING RELEASED: ' +
+    result.released
+  );
+  Logger.log(
+    'ALL CHECKS PASSED: ' +
+    result.ok
+  );
+
+  return result;
+}

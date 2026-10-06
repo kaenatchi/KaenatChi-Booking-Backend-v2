@@ -76,21 +76,28 @@ function doGet(e) {
   try {
     const request = (e && e.parameter) ? e.parameter : {};
     const action = String(request.action || '').trim();
+    const callback = String(request.callback || '').trim();
+    const respond = function(data) {
+      if (callback && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(callback)) {
+        return jsonpResponse_(callback, data);
+      }
+      return jsonResponse_(data);
+    };
 
     if (action === 'getConfig') {
-      return jsonResponse_(getConfig_());
+      return respond(getConfig_());
     }
 
     if (action === 'getBookedSlots') {
-      return jsonResponse_(getBookedSlots_());
+      return respond(getBookedSlots_());
     }
 
     if (action === 'bookingStatus') {
-      return jsonResponse_(getBookingStatusByRequestId_(request));
+      return respond(getBookingStatusByRequestId_(request));
     }
 
     if (action) {
-      return jsonResponse_(routeRequest_(action, request));
+      return respond(routeRequest_(action, request));
     }
 
     return jsonResponse_({
@@ -121,7 +128,7 @@ function doPost(e) {
       return jsonResponse_(legacyBookingSubmit_(request));
     }
 
-    return jsonResponse_(routeRequest_(action, request));
+    return respond(routeRequest_(action, request));
 
   } catch (error) {
     console.error(error);
@@ -1879,6 +1886,12 @@ function parseRequest_(e) {
 /* =====================================================
    24. JSON RESPONSE
    ===================================================== */
+
+function jsonpResponse_(callback, data) {
+  return ContentService
+    .createTextOutput(callback + '(' + JSON.stringify(data) + ');')
+    .setMimeType(ContentService.MimeType.JAVASCRIPT);
+}
 
 function jsonResponse_(data) {
 

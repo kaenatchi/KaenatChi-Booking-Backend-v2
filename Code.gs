@@ -1986,10 +1986,26 @@ function jsonpResponse_(callback, data) {
 }
 
 function iframeBridgeResponse_(data) {
-  const payload = JSON.stringify(data).replace(/</g, '\\u003c');
-  const html = '<!doctype html><html><head><meta charset="utf-8"></head><body>' +
+  /*
+   * Apps Script HtmlService runs inside Google's own iframe sandbox.
+   * Instead of posting directly from that cross-origin sandbox to the
+   * Telegram Mini App, redirect this tiny iframe to a page served from
+   * the Mini App's own origin. That same-origin bridge page performs
+   * the final postMessage to the parent WebView.
+   */
+  const json = JSON.stringify(data);
+  const base64 = Utilities.base64EncodeWebSafe(
+    Utilities.newBlob(json).getBytes()
+  );
+
+  const bridgeUrl =
+    'https://kaenatchi.github.io/kaenatchi-mini-app/bridge.html?payload=' +
+    encodeURIComponent(base64);
+
+  const html =
+    '<!doctype html><html><head><meta charset="utf-8"></head><body>' +
     '<script>' +
-    'window.top.postMessage({source:"kaenatchi-booking-bridge",data:' + payload + '},"*");' +
+    'window.location.replace(' + JSON.stringify(bridgeUrl) + ');' +
     '</script>' +
     '</body></html>';
 

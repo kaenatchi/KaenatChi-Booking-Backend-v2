@@ -751,14 +751,22 @@ function getAvailableDates_(request) {
   }
 
   /*
-   * Booking dates are Jalali.
-   * We therefore iterate the Jalali calendar directly instead
-   * of adding Gregorian days and converting back.
+   * PERFORMANCE FIX:
+   * Resolve Schedule and BlockedDates once per request.
+   * Do not call isDateAvailable_() inside the date loop because
+   * that function intentionally resolves its own sheet data and
+   * is used elsewhere as a standalone availability check.
    *
-   * This prevents timezone and weekday drift.
+   * This keeps the existing booking rules and Jalali calculation
+   * unchanged while removing repeated Spreadsheet reads.
    */
-  const todayJalali = getTodayJalali_();
+  const scheduleResponse = getSchedule_();
+  const scheduleRows = scheduleResponse.schedule || [];
 
+  const blockedResponse = getBlockedDates_();
+  const blockedDates = blockedResponse.blockedDates || [];
+
+  const todayJalali = getTodayJalali_();
   const dates = [];
 
   for (
@@ -773,14 +781,45 @@ function getAvailableDates_(request) {
         offset
       );
 
-    if (isDateAvailable_(jalali)) {
-
-      dates.push({
-        date: jalali,
-        dayOfWeek: getPersianDayNameFromJalali_(jalali),
-        available: true
+    const blocked =
+      blockedDates.some(function(row) {
+        return (
+          normalizeJalaliDate_(row.date) === jalali &&
+          isTruthy_(row.active)
+        );
       });
 
+    if (blocked) {
+      continue;
+    }
+
+    const dayName =
+      getPersianDayNameFromJalali_(jalali);
+
+    const hasActiveSchedule =
+      scheduleRows.some(function(row) {
+
+        const scheduleDay =
+          String(row.day || '').trim();
+
+        const baseDay =
+          scheduleDay
+            .replace(/\\s+(صبح|عصر)$/u, '')
+            .trim();
+
+        return (
+          normalizePersianDayName_(baseDay) ===
+            normalizePersianDayName_(dayName) &&
+          row.active === true
+        );
+      });
+
+    if (hasActiveSchedule) {
+      dates.push({
+        date: jalali,
+        dayOfWeek: dayName,
+        available: true
+      });
     }
   }
 
@@ -789,6 +828,7 @@ function getAvailableDates_(request) {
     dates: dates
   };
 }
+
 
 
 /* =====================================================

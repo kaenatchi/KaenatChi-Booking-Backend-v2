@@ -2520,17 +2520,42 @@ function releaseExpiredHolds_(request){
 
 function findServiceRecord_(serviceId,serviceName){
   var names=['Services','services'];
+  var requestedId=String(serviceId||'').trim();
+  var requestedName=String(serviceName||'').trim();
+
   for(var i=0;i<names.length;i++){
     if(!getSpreadsheet_().getSheetByName(names[i]))continue;
+
     var rows=getSheetObjects_(names[i]);
-    var found=rows.find(function(r){
-      var id=String(firstField_(r,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||'');
-      var name=String(firstField_(r,['نام خدمت','Service Name','Name','Title','عنوان'])||'');
-      return (serviceId&&id===serviceId)||(!serviceId&&serviceName&&name===serviceName);
-    });
+
+    /*
+     * The Mini App can arrive here with a CMS-side service id while the
+     * Booking Backend owns the canonical Service ID. Prefer the canonical
+     * backend id, but safely reconcile a mismatched id by service name.
+     *
+     * This keeps the backend as the source of truth and prevents a valid
+     * service from failing at final submission only because the two UI/CMS
+     * layers use different identifiers.
+     */
+    var found=null;
+
+    if(requestedId){
+      found=rows.find(function(r){
+        var id=String(firstField_(r,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||'').trim();
+        return id===requestedId;
+      });
+    }
+
+    if(!found && requestedName){
+      found=rows.find(function(r){
+        var name=String(firstField_(r,['نام خدمت','Service Name','Name','Title','عنوان'])||'').trim();
+        return name===requestedName;
+      });
+    }
+
     if(found)return {
-      id:String(firstField_(found,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||serviceId||''),
-      name:String(firstField_(found,['نام خدمت','Service Name','Name','Title','عنوان'])||serviceName||''),
+      id:String(firstField_(found,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||requestedId||''),
+      name:String(firstField_(found,['نام خدمت','Service Name','Name','Title','عنوان'])||requestedName||''),
       price:toNumber_(firstField_(found,['قیمت','Price','Base Price','Original Price','مبلغ']))
     };
   }

@@ -653,6 +653,110 @@ function sendBookingTelegramNotifications_(booking, eventType) {
 }
 
 
+/**
+ * Adds a Telegram notification to a short-lived queue and schedules a
+ * background worker. No Telegram network call happens in the booking
+ * request itself.
+ */
+function queueBookingTelegramNotification_(booking, eventType) {
+  try {
+    var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
+    var lock = LockService.getScriptLock();
+    lock.waitLock(3000);
+
+    try {
+      var props = PropertiesService.getScriptProperties();
+      var raw = String(props.getProperty(queueKey) || '[]');
+      var queue = [];
+
+      try {
+        queue = JSON.parse(raw);
+        if (!Array.isArray(queue)) queue = [];
+      } catch (parseError) {
+        queue = [];
+      }
+
+      queue.push({
+        bookingId: String(booking['Booking ID'] || ''),
+        eventType: String(eventType || ''),
+        queuedAt: new Date().toISOString()
+      });
+
+      // Keep the queue bounded in case Telegram is temporarily unavailable.
+      if (queue.length > 100) {
+        queue = queue.slice(queue.length - 100);
+      }
+
+      props.setProperty(queueKey, JSON.stringify(queue));
+    } finally {
+      lock.releaseLock();
+    }
+
+    // Schedule the worker separately from the HTTP request. The worker
+    // re-reads the Booking row by ID so the queued item stays tiny.
+    ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
+      .timeBased()
+      .after(1000)
+      .create();
+
+    return {ok:true,queued:true};
+  } catch (error) {
+    // Notification failure must never turn a successful booking/payment
+    // into a failed HTTP response.
+    console.warn(
+      'Telegram notification queue failed: ' +
+      String(error && error.message ? error.message : error)
+    );
+    return {ok:false,queued:false};
+  }
+}
+
+function processBookingTelegramNotificationQueue_() {
+  var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
+  var items = [];
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(5000);
+
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var raw = String(props.getProperty(queueKey) || '[]');
+
+    try {
+      items = JSON.parse(raw);
+      if (!Array.isArray(items)) items = [];
+    } catch (parseError) {
+      items = [];
+    }
+
+    props.setProperty(queueKey, '[]');
+  } finally {
+    lock.releaseLock();
+  }
+
+  if (!items.length) return;
+
+  items.forEach(function(item) {
+    try {
+      var booking = getBookingByIdObject_(item.bookingId);
+      if (!booking) return;
+
+      sendBookingTelegramNotifications_(
+        booking,
+        String(item.eventType || '')
+      );
+    } catch (error) {
+      console.warn(
+        'Queued Telegram notification failed for booking ' +
+        String(item.bookingId || '') +
+        ': ' +
+        String(error && error.message ? error.message : error)
+      );
+    }
+  });
+}
+
+
 /* =====================================================
    7. SCHEDULE
    ===================================================== */
@@ -2538,9 +2642,10 @@ function submitPayment_(request){
     });
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.PAYMENT_SUBMITTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Payment proof submitted.'});
 
-    // Telegram notification is intentionally NOT sent in the request path.
-    // External notification must never delay or break payment submission.
-    console.log('Payment notification queued for booking: ' + String(b['Booking ID'] || ''));
+    // Queue Telegram notification outside the booking request path.
+    // The notification worker runs from a time-based Apps Script trigger,
+    // so Telegram latency can never delay or break payment submission.
+    queueBookingTelegramNotification_(b, 'payment_received');
 
     return {ok:true,bookingId:b['Booking ID'],paymentStatus:CONFIG.STATUSES.PAYMENT_RECEIVED,message:'فیش دریافت شد و برای بررسی ارسال شد.'};
   });
@@ -2584,9 +2689,10 @@ function approveBooking_(request){
     );
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_APPROVED,bookingId:b['Booking ID'],slotKey:slotKey,details:'Booking approved.'});
 
-    // Telegram notification is intentionally NOT sent in the request path.
-    // External notification must never delay or break approval.
-    console.log('Approval notification queued for booking: ' + String(b['Booking ID'] || ''));
+    // Queue Telegram notification outside the booking request path.
+    // The notification worker runs from a time-based Apps Script trigger,
+    // so Telegram latency can never delay or break approval.
+    queueBookingTelegramNotification_(b, 'approved');
 
     return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_CONFIRMED,message:'نوبت تأیید شد.'};
   });

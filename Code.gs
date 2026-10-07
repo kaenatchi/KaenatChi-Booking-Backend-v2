@@ -751,14 +751,20 @@ function getAvailableDates_(request) {
   }
 
   /*
-   * Booking dates are Jalali.
-   * We therefore iterate the Jalali calendar directly instead
-   * of adding Gregorian days and converting back.
+   * PERFORMANCE FIX:
+   * Resolve the full Jalali date window from two single
+   * Spreadsheet reads instead of reading BlockedDates and
+   * Schedule again for every date.
    *
-   * This prevents timezone and weekday drift.
+   * Booking rules are unchanged; only the read pattern changes.
    */
-  const todayJalali = getTodayJalali_();
+  const blockedDates =
+    getSheetObjects_(CONFIG.SHEETS.BLOCKED_DATES);
 
+  const scheduleRows =
+    getSheetObjects_(CONFIG.SHEETS.SCHEDULE);
+
+  const todayJalali = getTodayJalali_();
   const dates = [];
 
   for (
@@ -766,21 +772,39 @@ function getAvailableDates_(request) {
     offset <= maxAdvance;
     offset++
   ) {
+    const jalali = addJalaliDays_(todayJalali, offset);
+    const dayName = getPersianDayNameFromJalali_(jalali);
 
-    const jalali =
-      addJalaliDays_(
-        todayJalali,
-        offset
+    const blocked = blockedDates.some(function(row) {
+      return (
+        normalizeJalaliDate_(row.Date) === jalali &&
+        isTruthy_(row.Active)
       );
+    });
 
-    if (isDateAvailable_(jalali)) {
+    if (blocked) {
+      continue;
+    }
 
+    const hasActiveSchedule = scheduleRows.some(function(row) {
+      const scheduleDay = String(row.Day || '').trim();
+      const baseDay = scheduleDay
+        .replace(/\s+(صبح|عصر)$/u, '')
+        .trim();
+
+      return (
+        normalizePersianDayName_(baseDay) ===
+          normalizePersianDayName_(dayName) &&
+        isTruthy_(row.Active)
+      );
+    });
+
+    if (hasActiveSchedule) {
       dates.push({
         date: jalali,
-        dayOfWeek: getPersianDayNameFromJalali_(jalali),
+        dayOfWeek: dayName,
         available: true
       });
-
     }
   }
 

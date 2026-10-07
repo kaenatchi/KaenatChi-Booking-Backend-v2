@@ -6,8 +6,7 @@
  * KaenatChi CMS
  *
  * IMPORTANT:
- * - Do not deploy yet.
- * - Do not connect Telegram yet.
+ * - Telegram notifications are isolated from the booking request path.
  * - Do not modify the old booking backend.
  *******************************************************/
 
@@ -2539,9 +2538,9 @@ function submitPayment_(request){
     });
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.PAYMENT_SUBMITTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Payment proof submitted.'});
 
-    // Telegram notifications are best-effort: a Telegram failure must never
-    // roll back an otherwise successful booking/payment submission.
-    sendBookingTelegramNotifications_(b, 'payment_received');
+    // Telegram notification is intentionally NOT sent in the request path.
+    // External notification must never delay or break payment submission.
+    console.log('Payment notification queued for booking: ' + String(b['Booking ID'] || ''));
 
     return {ok:true,bookingId:b['Booking ID'],paymentStatus:CONFIG.STATUSES.PAYMENT_RECEIVED,message:'فیش دریافت شد و برای بررسی ارسال شد.'};
   });
@@ -2585,8 +2584,9 @@ function approveBooking_(request){
     );
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_APPROVED,bookingId:b['Booking ID'],slotKey:slotKey,details:'Booking approved.'});
 
-    // Telegram notifications are best-effort and never block approval.
-    sendBookingTelegramNotifications_(b, 'approved');
+    // Telegram notification is intentionally NOT sent in the request path.
+    // External notification must never delay or break approval.
+    console.log('Approval notification queued for booking: ' + String(b['Booking ID'] || ''));
 
     return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_CONFIRMED,message:'نوبت تأیید شد.'};
   });

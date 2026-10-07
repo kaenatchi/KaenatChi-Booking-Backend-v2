@@ -284,19 +284,46 @@ function getBookingStatusByRequestId_(request) {
     };
   }
 
-  const rows = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
+  /*
+   * bookingStatus is polled immediately after a mutation. Reading the whole
+   * Booking sheet on every poll becomes increasingly expensive as history
+   * grows. Find the Request ID directly, then read only that one row.
+   */
+  const sheet = getSheet_(CONFIG.SHEETS.BOOKINGS);
+  const headers = getHeaders_(sheet);
+  const requestColumn = headers.indexOf('Request ID');
 
-  const booking = rows.find(function(row) {
-    return String(row['Request ID'] || '').trim() === requestId;
-  });
-
-  if (!booking) {
+  if (requestColumn < 0 || sheet.getLastRow() < 2) {
     return {
       ok: true,
       found: false,
       requestId: requestId
     };
   }
+
+  const match = sheet
+    .getRange(2, requestColumn + 1, sheet.getLastRow() - 1, 1)
+    .createTextFinder(requestId)
+    .matchEntireCell(true)
+    .findNext();
+
+  if (!match) {
+    return {
+      ok: true,
+      found: false,
+      requestId: requestId
+    };
+  }
+
+  const rowNumber = match.getRow();
+  const rowValues = sheet
+    .getRange(rowNumber, 1, 1, headers.length)
+    .getValues()[0];
+
+  const booking = {};
+  headers.forEach(function(header, index) {
+    booking[header] = rowValues[index];
+  });
 
   return {
     ok: true,
@@ -669,19 +696,12 @@ function sendBookingTelegramNotifications_(booking, eventType) {
 function queueBookingTelegramNotification_(booking, eventType) {
   try {
     /*
-     * IMPORTANT:
-     * This function is part of the customer request path, so it must stay
-     * extremely cheap. It ONLY persists a queue item. Telegram is never
-     * contacted here.
-     *
-     * A one-shot trigger is created only when the queue is not already
-     * scheduled. This prevents one trigger per booking/payment while still
-     * keeping delivery near-real-time.
+     * CUSTOMER REQUEST PATH:
+     * Only persist the notification item. No trigger creation, no Telegram
+     * network call, and no extra ScriptApp work is allowed here.
      */
     var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
-    var triggerKey = 'KAENATCHI_TELEGRAM_TRIGGER_SCHEDULED';
     var props = PropertiesService.getScriptProperties();
-
     var raw = String(props.getProperty(queueKey) || '[]');
     var queue = [];
 
@@ -705,36 +725,6 @@ function queueBookingTelegramNotification_(booking, eventType) {
 
     props.setProperty(queueKey, JSON.stringify(queue));
 
-    /*
-     * Do not create another trigger when one is already scheduled.
-     * The processor clears this flag when it starts, and schedules another
-     * one only if failed/requeued items remain.
-     */
-    if (String(props.getProperty(triggerKey) || '') !== '1') {
-      try {
-        ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
-          .timeBased()
-          .after(1000)
-          .create();
-
-        props.setProperty(triggerKey, '1');
-      } catch (triggerError) {
-        /*
-         * The booking/payment itself is already safely stored.
-         * If trigger creation fails, the queue remains persisted and can
-         * be retried by a later notification event or manual processor run.
-         */
-        console.warn(
-          'Telegram queue trigger creation failed: ' +
-          String(
-            triggerError && triggerError.message
-              ? triggerError.message
-              : triggerError
-          )
-        );
-      }
-    }
-
     return {ok:true,queued:true};
 
   } catch (error) {
@@ -744,15 +734,37 @@ function queueBookingTelegramNotification_(booking, eventType) {
      */
     console.warn(
       'Telegram notification queue failed: ' +
-      String(
-        error && error.message
-          ? error.message
-          : error
-      )
+      String(error && error.message ? error.message : error)
     );
 
     return {ok:false,queued:false};
   }
+}
+
+/*
+ * Run this function ONCE from the Apps Script editor.
+ * It creates exactly one recurring worker for Telegram notifications.
+ * The worker is deliberately outside the customer booking/payment request.
+ */
+function setupBookingTelegramQueueTrigger_() {
+  var functionName = 'processBookingTelegramNotificationQueue_';
+  var triggers = ScriptApp.getProjectTriggers();
+  var existing = triggers.filter(function(trigger) {
+    return trigger.getHandlerFunction() === functionName;
+  });
+
+  if (!existing.length) {
+    ScriptApp.newTrigger(functionName)
+      .timeBased()
+      .everyMinutes(1)
+      .create();
+  }
+
+  return {
+    ok: true,
+    triggerCount: existing.length || 1,
+    message: 'Telegram queue worker is configured.'
+  };
 }
 
 
@@ -885,6 +897,15 @@ function processBookingTelegramNotificationQueue_() {
     lock.releaseLock();
   }
 }
+
+function testBookingTelegramQueueNow() {
+  processBookingTelegramNotificationQueue_();
+  return {
+    ok: true,
+    message: 'Telegram queue processor executed.'
+  };
+}
+
 
 /* =====================================================
    7. SCHEDULE
@@ -1214,9 +1235,16 @@ function getAvailableSlots_(request) {
 
   const statuses = {};
   bookingRows.forEach(function(row) {
-    const key = String(row['Slot Key'] || '');
-    if (!key || key.indexOf(String(date) + '|') !== 0) return;
+    const rowDate = normalizeJalaliDate_(row['Appointment Date']);
+    const rowTime = normalizeTime_(row['Appointment Time']);
+    if (!rowDate || !rowTime || rowDate !== date) return;
 
+    /*
+     * Rebuild the key from the authoritative date/time fields. This makes
+     * older bookings visible even if their historical Slot Key was missing
+     * or formatted differently.
+     */
+    const key = buildSlotKey_(rowDate, rowTime);
     const status = String(row['Appointment Status'] || '');
 
     if (status === CONFIG.STATUSES.BOOKING_CONFIRMED) {

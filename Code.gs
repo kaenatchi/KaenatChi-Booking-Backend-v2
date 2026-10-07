@@ -639,17 +639,25 @@ function buildBookingTelegramText_(booking, eventType) {
 function sendBookingTelegramNotifications_(booking, eventType) {
   var config=getTelegramConfig_();
   var text=buildBookingTelegramText_(booking,eventType);
+  var results=[];
 
   // Admin always receives booking/payment status notifications.
   if(config.adminChatId){
-    sendTelegramMessage_(config.adminChatId,text);
+    results.push(sendTelegramMessage_(config.adminChatId,text));
+  } else {
+    results.push({ok:false,skipped:true,reason:'ADMIN_CHAT_ID_NOT_CONFIGURED'});
   }
 
   // If the Mini App supplied the user's Telegram ID, notify the customer too.
   var customerChatId=String(booking['Telegram ID']||'').trim();
   if(customerChatId && customerChatId!==config.adminChatId){
-    sendTelegramMessage_(customerChatId,text);
+    results.push(sendTelegramMessage_(customerChatId,text));
   }
+
+  return {
+    ok: results.some(function(item){ return item && item.ok === true; }),
+    results: results
+  };
 }
 
 

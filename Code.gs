@@ -660,44 +660,49 @@ function sendBookingTelegramNotifications_(booking, eventType) {
  */
 function queueBookingTelegramNotification_(booking, eventType) {
   try {
+    // IMPORTANT:
+    // This function can be called from inside withBookingLock_().
+    // Do NOT acquire ScriptLock here; doing so would create a nested
+    // lock wait inside the booking HTTP request and can cause 502/timeouts.
     var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
-    var lock = LockService.getScriptLock();
-    lock.waitLock(3000);
+    var props = PropertiesService.getScriptProperties();
+    var raw = String(props.getProperty(queueKey) || '[]');
+    var queue = [];
 
     try {
-      var props = PropertiesService.getScriptProperties();
-      var raw = String(props.getProperty(queueKey) || '[]');
-      var queue = [];
-
-      try {
-        queue = JSON.parse(raw);
-        if (!Array.isArray(queue)) queue = [];
-      } catch (parseError) {
-        queue = [];
-      }
-
-      queue.push({
-        bookingId: String(booking['Booking ID'] || ''),
-        eventType: String(eventType || ''),
-        queuedAt: new Date().toISOString()
-      });
-
-      // Keep the queue bounded in case Telegram is temporarily unavailable.
-      if (queue.length > 100) {
-        queue = queue.slice(queue.length - 100);
-      }
-
-      props.setProperty(queueKey, JSON.stringify(queue));
-    } finally {
-      lock.releaseLock();
+      queue = JSON.parse(raw);
+      if (!Array.isArray(queue)) queue = [];
+    } catch (parseError) {
+      queue = [];
     }
 
-    // Schedule the worker separately from the HTTP request. The worker
-    // re-reads the Booking row by ID so the queued item stays tiny.
-    ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
-      .timeBased()
-      .after(1000)
-      .create();
+    queue.push({
+      bookingId: String(booking['Booking ID'] || ''),
+      eventType: String(eventType || ''),
+      queuedAt: new Date().toISOString()
+    });
+
+    // Keep the queue bounded in case Telegram is temporarily unavailable.
+    if (queue.length > 100) {
+      queue = queue.slice(queue.length - 100);
+    }
+
+    props.setProperty(queueKey, JSON.stringify(queue));
+
+    // Schedule the worker after the booking response path has finished.
+    // Any trigger-creation failure is swallowed so notifications can never
+    // turn a successful booking/payment into a failed HTTP response.
+    try {
+      ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
+        .timeBased()
+        .after(1000)
+        .create();
+    } catch (triggerError) {
+      console.warn(
+        'Telegram queue trigger creation failed: ' +
+        String(triggerError && triggerError.message ? triggerError.message : triggerError)
+      );
+    }
 
     return {ok:true,queued:true};
   } catch (error) {

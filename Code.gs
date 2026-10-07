@@ -1253,6 +1253,24 @@ function getAvailableSlots_(request) {
     }
 
     if (status === CONFIG.STATUSES.BOOKING_PENDING) {
+      /*
+       * A booking with submitted payment proof must remain locked until
+       * admin decision. Its Hold Until is extended by submitPayment_(),
+       * but payment proof is the authoritative lock once submitted.
+       *
+       * A booking without submitted payment proof remains a temporary hold
+       * and is released when its Hold Until expires.
+       */
+      const paymentStatus = String(row['Payment Status'] || '');
+      const paymentReceived =
+        paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
+        paymentStatus === CONFIG.STATUSES.PAYMENT_APPROVED;
+
+      if (paymentReceived) {
+        statuses[key] = CONFIG.SLOT_STATUS.HELD;
+        return;
+      }
+
       const holdUntil = parseDateValue_(row['Hold Until']);
       if (holdUntil && holdUntil.getTime() > Date.now()) {
         statuses[key] = CONFIG.SLOT_STATUS.HELD;

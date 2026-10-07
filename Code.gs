@@ -660,12 +660,20 @@ function sendBookingTelegramNotifications_(booking, eventType) {
  */
 function queueBookingTelegramNotification_(booking, eventType) {
   try {
-    // IMPORTANT:
-    // This function can be called from inside withBookingLock_().
-    // Do NOT acquire ScriptLock here; doing so would create a nested
-    // lock wait inside the booking HTTP request and can cause 502/timeouts.
+    /*
+     * IMPORTANT:
+     * This function is part of the customer request path, so it must stay
+     * extremely cheap. It ONLY persists a queue item. Telegram is never
+     * contacted here.
+     *
+     * A one-shot trigger is created only when the queue is not already
+     * scheduled. This prevents one trigger per booking/payment while still
+     * keeping delivery near-real-time.
+     */
     var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
+    var triggerKey = 'KAENATCHI_TELEGRAM_TRIGGER_SCHEDULED';
     var props = PropertiesService.getScriptProperties();
+
     var raw = String(props.getProperty(queueKey) || '[]');
     var queue = [];
 
@@ -679,47 +687,77 @@ function queueBookingTelegramNotification_(booking, eventType) {
     queue.push({
       bookingId: String(booking['Booking ID'] || ''),
       eventType: String(eventType || ''),
-      queuedAt: new Date().toISOString()
+      queuedAt: new Date().toISOString(),
+      attempts: 0
     });
 
-    // Keep the queue bounded in case Telegram is temporarily unavailable.
     if (queue.length > 100) {
       queue = queue.slice(queue.length - 100);
     }
 
     props.setProperty(queueKey, JSON.stringify(queue));
 
-    // Schedule the worker after the booking response path has finished.
-    // Any trigger-creation failure is swallowed so notifications can never
-    // turn a successful booking/payment into a failed HTTP response.
-    try {
-      ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
-        .timeBased()
-        .after(1000)
-        .create();
-    } catch (triggerError) {
-      console.warn(
-        'Telegram queue trigger creation failed: ' +
-        String(triggerError && triggerError.message ? triggerError.message : triggerError)
-      );
+    /*
+     * Do not create another trigger when one is already scheduled.
+     * The processor clears this flag when it starts, and schedules another
+     * one only if failed/requeued items remain.
+     */
+    if (String(props.getProperty(triggerKey) || '') !== '1') {
+      try {
+        ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
+          .timeBased()
+          .after(1000)
+          .create();
+
+        props.setProperty(triggerKey, '1');
+      } catch (triggerError) {
+        /*
+         * The booking/payment itself is already safely stored.
+         * If trigger creation fails, the queue remains persisted and can
+         * be retried by a later notification event or manual processor run.
+         */
+        console.warn(
+          'Telegram queue trigger creation failed: ' +
+          String(
+            triggerError && triggerError.message
+              ? triggerError.message
+              : triggerError
+          )
+        );
+      }
     }
 
     return {ok:true,queued:true};
+
   } catch (error) {
-    // Notification failure must never turn a successful booking/payment
-    // into a failed HTTP response.
+    /*
+     * Notification failure must NEVER turn a successful booking/payment
+     * into a failed customer request.
+     */
     console.warn(
       'Telegram notification queue failed: ' +
-      String(error && error.message ? error.message : error)
+      String(
+        error && error.message
+          ? error.message
+          : error
+      )
     );
+
     return {ok:false,queued:false};
   }
 }
 
+
 function processBookingTelegramNotificationQueue_() {
   var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
+  var triggerKey = 'KAENATCHI_TELEGRAM_TRIGGER_SCHEDULED';
   var items = [];
+  var failed = [];
 
+  /*
+   * Only protect the queue read/write. Never hold the ScriptLock while
+   * calling Telegram or reading the booking Sheet.
+   */
   var lock = LockService.getScriptLock();
   lock.waitLock(5000);
 
@@ -735,32 +773,110 @@ function processBookingTelegramNotificationQueue_() {
     }
 
     props.setProperty(queueKey, '[]');
+    props.deleteProperty(triggerKey);
+
   } finally {
     lock.releaseLock();
   }
 
-  if (!items.length) return;
+  if (!items.length) {
+    return;
+  }
 
   items.forEach(function(item) {
     try {
       var booking = getBookingByIdObject_(item.bookingId);
-      if (!booking) return;
 
-      sendBookingTelegramNotifications_(
+      if (!booking) {
+        return;
+      }
+
+      var result = sendBookingTelegramNotifications_(
         booking,
         String(item.eventType || '')
       );
+
+      /*
+       * sendBookingTelegramNotifications_ historically did not return a
+       * result. Treat an explicit failure as retryable, and keep the item
+       * alive for the next processor run.
+       */
+      if (result && result.ok === false) {
+        throw new Error('Telegram delivery failed.');
+      }
+
     } catch (error) {
+      var attempts = Number(item.attempts || 0) + 1;
+
+      /*
+       * Keep retrying a small number of times so temporary Telegram/Google
+       * failures do not silently lose the admin notification.
+       */
+      if (attempts <= 5) {
+        item.attempts = attempts;
+        item.lastError = String(
+          error && error.message
+            ? error.message
+            : error
+        );
+        item.retryAt = new Date().toISOString();
+        failed.push(item);
+      }
+
       console.warn(
         'Queued Telegram notification failed for booking ' +
         String(item.bookingId || '') +
-        ': ' +
-        String(error && error.message ? error.message : error)
+        ' (attempt ' + attempts + '): ' +
+        String(
+          error && error.message
+            ? error.message
+            : error
+        )
       );
     }
   });
-}
 
+  if (!failed.length) {
+    return;
+  }
+
+  /*
+   * Requeue failures and schedule exactly one follow-up trigger.
+   */
+  lock.waitLock(5000);
+
+  try {
+    var props2 = PropertiesService.getScriptProperties();
+    var raw2 = String(props2.getProperty(queueKey) || '[]');
+    var existing = [];
+
+    try {
+      existing = JSON.parse(raw2);
+      if (!Array.isArray(existing)) existing = [];
+    } catch (parseError2) {
+      existing = [];
+    }
+
+    var combined = existing.concat(failed);
+
+    if (combined.length > 100) {
+      combined = combined.slice(combined.length - 100);
+    }
+
+    props2.setProperty(queueKey, JSON.stringify(combined));
+
+    if (String(props2.getProperty(triggerKey) || '') !== '1') {
+      ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
+        .timeBased()
+        .after(5000)
+        .create();
+      props2.setProperty(triggerKey, '1');
+    }
+
+  } finally {
+    lock.releaseLock();
+  }
+}
 
 /* =====================================================
    7. SCHEDULE

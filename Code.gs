@@ -843,9 +843,7 @@ function getAvailableDates_(request) {
    ===================================================== */
 
 function getAvailableSlots_(request) {
-
-  const date =
-    normalizeJalaliDate_(request.date);
+  const date = normalizeJalaliDate_(request.date);
 
   if (!date) {
     return {
@@ -855,11 +853,9 @@ function getAvailableSlots_(request) {
     };
   }
 
-  const schedule =
-    getScheduleForDate_(date);
+  const schedule = getScheduleForDate_(date);
 
   if (!schedule.active) {
-
     return {
       ok: true,
       date: date,
@@ -867,36 +863,64 @@ function getAvailableSlots_(request) {
     };
   }
 
+  const blockedRows = getSheetObjects_(CONFIG.SHEETS.BLOCKED_SLOTS);
+  const bookingRows = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
+
+  const blocked = {};
+  blockedRows.forEach(function(row) {
+    if (
+      normalizeJalaliDate_(row.Date) === date &&
+      isTruthy_(row.Active)
+    ) {
+      blocked[buildSlotKey_(date, normalizeTime_(row.Time))] = true;
+    }
+  });
+
+  const statuses = {};
+  bookingRows.forEach(function(row) {
+    const key = String(row['Slot Key'] || '');
+    if (!key || key.indexOf(String(date) + '|') !== 0) return;
+
+    const status = String(row['Appointment Status'] || '');
+
+    if (status === CONFIG.STATUSES.BOOKING_CONFIRMED) {
+      statuses[key] = CONFIG.SLOT_STATUS.CONFIRMED;
+      return;
+    }
+
+    if (status === CONFIG.STATUSES.BOOKING_PENDING) {
+      const holdUntil = parseDateValue_(row['Hold Until']);
+      if (holdUntil && holdUntil.getTime() > Date.now()) {
+        statuses[key] = CONFIG.SLOT_STATUS.HELD;
+      }
+    }
+  });
+
   const slots = [];
 
   schedule.ranges.forEach(function(range) {
+    generateSlots_(
+      range.startTime,
+      range.endTime,
+      range.slotDuration
+    ).forEach(function(time) {
+      const slotKey = buildSlotKey_(date, time);
+      let status = CONFIG.SLOT_STATUS.FREE;
 
-    const generatedSlots =
-      generateSlots_(
-        range.startTime,
-        range.endTime,
-        range.slotDuration
-      );
-
-    generatedSlots.forEach(function(time) {
-
-      const slotKey =
-        buildSlotKey_(date, time);
-
-      const status =
-        getSlotStatus_(slotKey, date, time);
+      if (blocked[slotKey]) {
+        status = CONFIG.SLOT_STATUS.BLOCKED;
+      } else if (statuses[slotKey]) {
+        status = statuses[slotKey];
+      }
 
       slots.push({
         date: date,
         time: time,
         slotKey: slotKey,
         status: status,
-        available:
-          status === CONFIG.SLOT_STATUS.FREE
+        available: status === CONFIG.SLOT_STATUS.FREE
       });
-
     });
-
   });
 
   return {

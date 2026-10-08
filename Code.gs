@@ -5616,3 +5616,89 @@ function getBlockedDatesSafe_() {
     blockedDates: []
   };
 }
+
+
+/* =====================================================
+ * SAFE APPOINTMENT REMINDER DIAGNOSTIC TEST
+ * Does not create/update bookings, send Telegram, hold slots,
+ * release slots, or touch payment/VIP state.
+ * ===================================================== */
+function testAppointmentReminderDiagnostic() {
+  var sample = {
+    'Booking ID': 'TEST-REMINDER-DIAGNOSTIC',
+    'First Name': 'مایا',
+    'Last Name': 'نظری',
+    'Service Name': 'انرژی خوانی قهوه',
+    'Appointment Date': '1405/07/16',
+    'Appointment Time': '11:00',
+    'Telegram Username': '@test_user',
+    'Telegram ID': 'TEST_ONLY'
+  };
+
+  var result = {
+    ok: false,
+    test: 'SAFE APPOINTMENT REMINDER DIAGNOSTIC',
+    noTelegramSent: true,
+    noBookingCreated: true,
+    noSheetWrite: true,
+    noPaymentChange: true,
+    noVipChange: true,
+    checks: []
+  };
+
+  try {
+    var normalizedDate = normalizeJalaliDate_(sample['Appointment Date']);
+    var normalizedTime = normalizeTime_(sample['Appointment Time']);
+    var timestampMs = getBookingAppointmentTimestampMs_(sample);
+    var customerText = buildAppointmentReminderText_(sample);
+    var adminText = buildAdminAppointmentReminderText_(sample);
+
+    result.checks.push({
+      name: 'Jalali date normalization',
+      ok: normalizedDate === '1405/07/16',
+      value: normalizedDate
+    });
+
+    result.checks.push({
+      name: 'Time normalization',
+      ok: normalizedTime === '11:00',
+      value: normalizedTime
+    });
+
+    result.checks.push({
+      name: 'Jalali appointment timestamp conversion',
+      ok: typeof timestampMs === 'number' && timestampMs > 0,
+      value: timestampMs
+    });
+
+    result.checks.push({
+      name: 'Customer reminder text',
+      ok: customerText.indexOf('انرژی خوانی قهوه') !== -1 &&
+          customerText.indexOf('1405/07/16') !== -1 &&
+          customerText.indexOf('11:00') !== -1,
+      value: customerText
+    });
+
+    result.checks.push({
+      name: 'Admin reminder text',
+      ok: adminText.indexOf('@test_user') !== -1 &&
+          adminText.indexOf('TEST_ONLY') !== -1,
+      value: adminText
+    });
+
+    result.ok = result.checks.every(function(check) {
+      return check.ok === true;
+    });
+
+    Logger.log('SAFE APPOINTMENT REMINDER DIAGNOSTIC');
+    Logger.log(JSON.stringify(result, null, 2));
+    return result;
+
+  } catch (error) {
+    result.error = String(
+      error && error.message ? error.message : error
+    );
+    Logger.log(JSON.stringify(result, null, 2));
+    return result;
+  }
+}

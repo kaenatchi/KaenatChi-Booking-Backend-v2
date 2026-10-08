@@ -1040,32 +1040,32 @@ function buildBookingTelegramText_(booking, eventType) {
 
   if (eventType === 'approved') {
     return (
-      '✅ <b>نوبت کائنات‌چی تأیید شد</b>\\n\\n' +
-      '👤 ' + customer + '\\n' +
-      '✨ ' + service + '\\n' +
-      '📅 ' + date + ' — ' + time + '\\n' +
-      '💳 مبلغ: ' + price + '\\n' +
+      '✅ <b>نوبت کائنات‌چی تأیید شد</b>\n\n' +
+      '👤 ' + customer + '\n' +
+      '✨ ' + service + '\n' +
+      '📅 ' + date + ' — ' + time + '\n' +
+      '💳 مبلغ: ' + price + '\n' +
       '🎫 کد پیگیری: <code>' + tracking + '</code>'
     );
   }
 
   if (eventType === 'rejected') {
     return (
-      '❌ <b>فیش پرداخت کائنات‌چی رد شد</b>\\n\\n' +
-      '👤 ' + customer + '\\n' +
-      '✨ ' + service + '\\n' +
-      '📅 ' + date + ' — ' + time + '\\n' +
-      '🎫 کد پیگیری: <code>' + tracking + '</code>\\n\\n' +
+      '❌ <b>فیش پرداخت کائنات‌چی رد شد</b>\n\n' +
+      '👤 ' + customer + '\n' +
+      '✨ ' + service + '\n' +
+      '📅 ' + date + ' — ' + time + '\n' +
+      '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' +
       '⛔ وضعیت: فیش پرداخت تأیید نشد'
     );
   }
 
   return (
-    '🧾 <b>فیش پرداخت کائنات‌چی دریافت شد</b>\\n\\n' +
-    '👤 ' + customer + '\\n' +
-    '✨ ' + service + '\\n' +
-    '📅 ' + date + ' — ' + time + '\\n' +
-    '🎫 کد پیگیری: <code>' + tracking + '</code>\\n\\n' +
+    '🧾 <b>فیش پرداخت کائنات‌چی دریافت شد</b>\n\n' +
+    '👤 ' + customer + '\n' +
+    '✨ ' + service + '\n' +
+    '📅 ' + date + ' — ' + time + '\n' +
+    '🎫 کد پیگیری: ' + tracking + '\n\n' +
     '⏳ وضعیت: در انتظار بررسی ادمین'
   );
 }

@@ -163,6 +163,27 @@ function doPost(e) {
           telegramUpdate &&
           telegramUpdate.callback_query
         ) {
+          var telegramWebhookSecret = String(
+            PropertiesService
+              .getScriptProperties()
+              .getProperty('KAENATCHI_TELEGRAM_WEBHOOK_SECRET') || ''
+          ).trim();
+
+          var suppliedWebhookSecret = String(
+            e.parameter &&
+            e.parameter.telegram_webhook || ''
+          ).trim();
+
+          if (
+            !telegramWebhookSecret ||
+            suppliedWebhookSecret !== telegramWebhookSecret
+          ) {
+            return jsonResponse_({
+              ok:false,
+              error:'TELEGRAM_WEBHOOK_UNAUTHORIZED'
+            });
+          }
+
           return jsonResponse_(
             handleTelegramCallbackQuery_(
               telegramUpdate.callback_query
@@ -615,6 +636,62 @@ function getTelegramConfig_() {
   return {
     botToken: String(props.getProperty('KAENATCHI_TELEGRAM_BOT_TOKEN') || '').trim(),
     adminChatId: String(props.getProperty('KAENATCHI_TELEGRAM_ADMIN_CHAT_ID') || '').trim()
+  };
+}
+
+function setupTelegramWebhook() {
+  var props = PropertiesService.getScriptProperties();
+  var config = getTelegramConfig_();
+
+  if (!config.botToken) {
+    throw new Error(
+      'KAENATCHI_TELEGRAM_BOT_TOKEN is not configured.'
+    );
+  }
+
+  var deploymentUrl =
+    'https://script.google.com/macros/s/AKfycbyEh9txZP7nWdLoTtNvbQn_aKxiI0syH3M8Qh0TXR6C6AFC5rEuyidq1tMo5ufpKdXzHg/exec';
+
+  var secret = String(
+    props.getProperty('KAENATCHI_TELEGRAM_WEBHOOK_SECRET') || ''
+  ).trim();
+
+  if (!secret) {
+    secret =
+      Utilities.getUuid().replace(/-/g, '') +
+      Utilities.getUuid().replace(/-/g, '');
+
+    props.setProperty(
+      'KAENATCHI_TELEGRAM_WEBHOOK_SECRET',
+      secret
+    );
+  }
+
+  var webhookUrl =
+    deploymentUrl +
+    '?telegram_webhook=' +
+    encodeURIComponent(secret);
+
+  var result = telegramApiRequest_(
+    'setWebhook',
+    {
+      url:webhookUrl,
+      allowed_updates:['callback_query'],
+      drop_pending_updates:true
+    }
+  );
+
+  if (!result.ok) {
+    throw new Error(
+      'Telegram webhook setup failed: ' +
+      JSON.stringify(result)
+    );
+  }
+
+  return {
+    ok:true,
+    webhookConfigured:true,
+    allowedUpdates:['callback_query']
   };
 }
 

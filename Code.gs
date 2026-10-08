@@ -1426,51 +1426,70 @@ function getBookingAppointmentTimestampMs_(booking) {
     booking['Appointment Time'] || ''
   );
 
-  if (!jalaliDate || /^\d{2}:\d{2}$/.test(time) === false) {
+  if (!jalaliDate || !/^\d{2}:\d{2}$/.test(time)) {
     return 0;
   }
 
-  /*
-   * Iran uses UTC+03:30 year-round for current booking dates.
-   * Convert the Jalali calendar date to its Gregorian calendar date,
-   * then attach the appointment clock time explicitly.
-   */
-  var gregorian = jalaliToGregorian_(jalaliDate);
+  try {
+    /*
+     * Convert the Jalali calendar date to Gregorian first.
+     * jalaliToGregorian_ returns a Date at UTC noon, deliberately
+     * avoiding project-timezone calendar-day shifts.
+     *
+     * IMPORTANT:
+     * Do not pass that Date through Utilities.formatDate() here.
+     * The reminder diagnostic only needs the Gregorian calendar
+     * components, and using UTC components keeps this helper
+     * independent from the Apps Script project timezone.
+     */
+    var gregorian = jalaliToGregorian_(jalaliDate);
 
-  var ymd = Utilities.formatDate(
-    gregorian,
-    'Asia/Tehran',
-    'yyyy/MM/dd'
-  );
+    if (
+      Object.prototype.toString.call(gregorian) !== '[object Date]' ||
+      isNaN(gregorian.getTime())
+    ) {
+      return 0;
+    }
 
-  var parts = ymd.split('/');
-  var year = Number(parts[0]);
-  var month = Number(parts[1]);
-  var day = Number(parts[2]);
-  var timeParts = time.split(':');
-  var hour = Number(timeParts[0]);
-  var minute = Number(timeParts[1]);
+    var year = gregorian.getUTCFullYear();
+    var month = gregorian.getUTCMonth() + 1;
+    var day = gregorian.getUTCDate();
 
-  if (
-    !year || !month || !day ||
-    isNaN(hour) || isNaN(minute)
-  ) {
+    var timeParts = time.split(':');
+    var hour = Number(timeParts[0]);
+    var minute = Number(timeParts[1]);
+
+    if (
+      !year ||
+      !month ||
+      !day ||
+      isNaN(hour) ||
+      isNaN(minute) ||
+      hour < 0 ||
+      hour > 23 ||
+      minute < 0 ||
+      minute > 59
+    ) {
+      return 0;
+    }
+
+    /*
+     * Booking times are Iran local time (UTC+03:30 for this system).
+     * Build UTC explicitly instead of parsing a timezone-dependent
+     * string. This keeps the reminder trigger deterministic.
+     */
+    var timestamp =
+      Date.UTC(year, month - 1, day, hour, minute, 0, 0) -
+      (3 * 60 + 30) * 60 * 1000;
+
+    return isFinite(timestamp) && timestamp > 0
+      ? timestamp
+      : 0;
+
+  } catch (error) {
     return 0;
   }
-
-  /*
-   * Do not parse a timezone-bearing date string here.
-   * Apps Script runtimes can handle Date strings differently.
-   * Build the UTC timestamp explicitly, then subtract Iran's
-   * fixed +03:30 booking offset.
-   */
-  var timestamp =
-    Date.UTC(year, month - 1, day, hour, minute, 0, 0) -
-    (3 * 60 + 30) * 60 * 1000;
-
-  return isNaN(timestamp) ? 0 : timestamp;
 }
-
 
 function isAppointmentReminderSent_(bookingId) {
   var id = String(bookingId || '').trim();

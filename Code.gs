@@ -141,6 +141,37 @@ function doGet(e) {
 
 function doPost(e) {
   try {
+    /*
+     * Telegram callback updates are delivered as raw JSON and must be
+     * handled before the normal booking request parser.
+     */
+    if (
+      e &&
+      e.postData &&
+      e.postData.contents
+    ) {
+      var rawBody = String(e.postData.contents || '').trim();
+
+      if (rawBody) {
+        var telegramUpdate = null;
+
+        try {
+          telegramUpdate = JSON.parse(rawBody);
+        } catch (telegramParseError) {}
+
+        if (
+          telegramUpdate &&
+          telegramUpdate.callback_query
+        ) {
+          return jsonResponse_(
+            handleTelegramCallbackQuery_(
+              telegramUpdate.callback_query
+            )
+          );
+        }
+      }
+    }
+
     const request = parseRequest_(e);
     const action = String(request.action || '').trim();
 
@@ -587,7 +618,7 @@ function getTelegramConfig_() {
   };
 }
 
-function sendTelegramMessage_(chatId, text) {
+function sendTelegramMessage_(chatId, text, replyMarkup) {
   chatId = String(chatId || '').trim();
   if (!chatId || !text) return {ok:false,skipped:true};
 
@@ -598,18 +629,24 @@ function sendTelegramMessage_(chatId, text) {
   }
 
   try {
+    var payload = {
+      chat_id: chatId,
+      text: text,
+      parse_mode: 'HTML',
+      disable_web_page_preview: true
+    };
+
+    if (replyMarkup) {
+      payload.reply_markup = replyMarkup;
+    }
+
     var response = UrlFetchApp.fetch(
       'https://api.telegram.org/bot' + encodeURIComponent(config.botToken) + '/sendMessage',
       {
         method:'post',
         contentType:'application/json',
         muteHttpExceptions:true,
-        payload:JSON.stringify({
-          chat_id:chatId,
-          text:text,
-          parse_mode:'HTML',
-          disable_web_page_preview:true
-        })
+        payload:JSON.stringify(payload)
       }
     );
 
@@ -619,7 +656,7 @@ function sendTelegramMessage_(chatId, text) {
     try { parsed=JSON.parse(body); } catch(e) {}
 
     if(code>=200 && code<300 && parsed.ok!==false){
-      return {ok:true};
+      return {ok:true,result:parsed.result||null};
     }
 
     console.warn('Telegram notification failed: HTTP '+code+' '+body);
@@ -630,6 +667,262 @@ function sendTelegramMessage_(chatId, text) {
   }
 }
 
+function telegramApiRequest_(method, payload) {
+  var config = getTelegramConfig_();
+
+  if (!config.botToken) {
+    return {
+      ok:false,
+      error:'BOT_TOKEN_NOT_CONFIGURED'
+    };
+  }
+
+  try {
+    var response = UrlFetchApp.fetch(
+      'https://api.telegram.org/bot' +
+        encodeURIComponent(config.botToken) +
+        '/' +
+        method,
+      {
+        method:'post',
+        contentType:'application/json',
+        muteHttpExceptions:true,
+        payload:JSON.stringify(payload || {})
+      }
+    );
+
+    var code = response.getResponseCode();
+    var body = response.getContentText();
+    var parsed = {};
+
+    try {
+      parsed = JSON.parse(body);
+    } catch(e) {}
+
+    if (code >= 200 && code < 300 && parsed.ok !== false) {
+      return {
+        ok:true,
+        result:parsed.result || null
+      };
+    }
+
+    console.warn(
+      'Telegram API failed: ' +
+      method +
+      ' HTTP ' +
+      code +
+      ' ' +
+      body
+    );
+
+    return {
+      ok:false,
+      error:'TELEGRAM_API_FAILED',
+      httpCode:code
+    };
+
+  } catch(error) {
+    console.warn(
+      'Telegram API exception: ' +
+      method +
+      ' ' +
+      (error && error.message ? error.message : error)
+    );
+
+    return {
+      ok:false,
+      error:'TELEGRAM_EXCEPTION'
+    };
+  }
+}
+
+function answerTelegramCallbackQuery_(callbackQueryId, text, showAlert) {
+  return telegramApiRequest_(
+    'answerCallbackQuery',
+    {
+      callback_query_id:String(callbackQueryId || ''),
+      text:String(text || ''),
+      show_alert:Boolean(showAlert)
+    }
+  );
+}
+
+function editTelegramMessageReplyMarkup_(chatId, messageId, replyMarkup) {
+  return telegramApiRequest_(
+    'editMessageReplyMarkup',
+    {
+      chat_id:String(chatId || ''),
+      message_id:Number(messageId),
+      reply_markup:replyMarkup || {inline_keyboard:[]}
+    }
+  );
+}
+
+function getBookingTelegramAdminKeyboard_(bookingId) {
+  var id = String(bookingId || '').trim();
+
+  return {
+    inline_keyboard: [
+      [
+        {
+          text:'✅ تأیید نوبت',
+          callback_data:'kaenatchi:approve:' + id
+        },
+        {
+          text:'❌ رد فیش',
+          callback_data:'kaenatchi:reject:' + id
+        }
+      ]
+    ]
+  };
+}
+
+function getBookingTelegramResultKeyboard_(status) {
+  if (status === 'approved') {
+    return {
+      inline_keyboard: [
+        [
+          {
+            text:'✅ نوبت تأیید شد',
+            callback_data:'kaenatchi:noop'
+          }
+        ]
+      ]
+    };
+  }
+
+  if (status === 'rejected') {
+    return {
+      inline_keyboard: [
+        [
+          {
+            text:'❌ فیش رد شد',
+            callback_data:'kaenatchi:noop'
+          }
+        ]
+      ]
+    };
+  }
+
+  return {inline_keyboard:[]};
+}
+
+function handleTelegramCallbackQuery_(callbackQuery) {
+  var config = getTelegramConfig_();
+  var queryId = String(callbackQuery && callbackQuery.id || '').trim();
+  var data = String(callbackQuery && callbackQuery.data || '').trim();
+  var message = callbackQuery && callbackQuery.message;
+
+  if (!queryId || !message) {
+    return {ok:false,error:'TELEGRAM_CALLBACK_INVALID'};
+  }
+
+  var chatId = String(
+    message.chat && message.chat.id || ''
+  ).trim();
+
+  /*
+   * Only the configured admin chat may execute approval/rejection actions.
+   */
+  if (!config.adminChatId || chatId !== config.adminChatId) {
+    answerTelegramCallbackQuery_(
+      queryId,
+      'این عملیات فقط برای ادمین مجاز است.',
+      true
+    );
+
+    return {
+      ok:false,
+      error:'TELEGRAM_ADMIN_ONLY'
+    };
+  }
+
+  if (data === 'kaenatchi:noop') {
+    answerTelegramCallbackQuery_(
+      queryId,
+      'این نوبت قبلاً تعیین تکلیف شده است.',
+      false
+    );
+
+    return {ok:true,noop:true};
+  }
+
+  var match = data.match(
+    /^kaenatchi:(approve|reject):([^:]+)$/
+  );
+
+  if (!match) {
+    answerTelegramCallbackQuery_(
+      queryId,
+      'عملیات نامعتبر است.',
+      true
+    );
+
+    return {
+      ok:false,
+      error:'TELEGRAM_CALLBACK_INVALID_ACTION'
+    };
+  }
+
+  var action = match[1];
+  var bookingId = String(match[2] || '').trim();
+  var result;
+
+  if (action === 'approve') {
+    result = approveBooking_({
+      bookingId:bookingId,
+      adminId:config.adminChatId
+    });
+  } else {
+    result = rejectBooking_({
+      bookingId:bookingId,
+      adminId:config.adminChatId,
+      reason:'رد فیش توسط ادمین از طریق تلگرام'
+    });
+  }
+
+  if (!result || result.ok !== true) {
+    answerTelegramCallbackQuery_(
+      queryId,
+      String(
+        result && result.message ||
+        'عملیات انجام نشد.'
+      ),
+      true
+    );
+
+    return result || {
+      ok:false,
+      error:'TELEGRAM_CALLBACK_ACTION_FAILED'
+    };
+  }
+
+  var finalStatus =
+    action === 'approve'
+      ? 'approved'
+      : 'rejected';
+
+  editTelegramMessageReplyMarkup_(
+    chatId,
+    message.message_id,
+    getBookingTelegramResultKeyboard_(finalStatus)
+  );
+
+  answerTelegramCallbackQuery_(
+    queryId,
+    action === 'approve'
+      ? 'نوبت با موفقیت تأیید شد.'
+      : 'فیش با موفقیت رد شد.',
+    false
+  );
+
+  return {
+    ok:true,
+    action:action,
+    bookingId:bookingId
+  };
+}
+
 function escapeTelegramHtml_(value) {
   return String(value==null?'':value)
     .replace(/&/g,'&amp;')
@@ -638,29 +931,66 @@ function escapeTelegramHtml_(value) {
 }
 
 function buildBookingTelegramText_(booking, eventType) {
-  var name=(String(booking['First Name']||'')+' '+String(booking['Last Name']||'')).trim();
-  var tracking=escapeTelegramHtml_(booking['Tracking Code']||'');
-  var service=escapeTelegramHtml_(booking['Service Name']||'');
-  var date=escapeTelegramHtml_(booking['Appointment Date']||'');
-  var time=escapeTelegramHtml_(booking['Appointment Time']||'');
-  var customer=escapeTelegramHtml_(name||'مشتری');
-  var price=escapeTelegramHtml_(booking['Final Price']||'');
+  var name = (
+    String(booking['First Name'] || '') +
+    ' ' +
+    String(booking['Last Name'] || '')
+  ).trim();
 
-  if(eventType==='approved'){
-    return '✅ <b>نوبت کائنات‌چی تأیید شد</b>\\n\\n'
-      +'👤 '+escapeTelegramHtml_(customer)+'\\n'
-      +'✨ '+service+'\\n'
-      +'📅 '+date+' — '+time+'\\n'
-      +'💳 مبلغ: '+price+'\\n'
-      +'🎫 کد پیگیری: <code>'+tracking+'</code>';
+  var tracking = escapeTelegramHtml_(
+    booking['Tracking Code'] || ''
+  );
+
+  var service = escapeTelegramHtml_(
+    booking['Service Name'] || ''
+  );
+
+  var date = escapeTelegramHtml_(
+    normalizeJalaliDate_(booking['Appointment Date'] || '')
+  );
+
+  var time = escapeTelegramHtml_(
+    normalizeTime_(booking['Appointment Time'] || '')
+  );
+
+  var customer = escapeTelegramHtml_(
+    name || 'مشتری'
+  );
+
+  var price = escapeTelegramHtml_(
+    booking['Final Price'] || ''
+  );
+
+  if (eventType === 'approved') {
+    return (
+      '✅ <b>نوبت کائنات‌چی تأیید شد</b>\\n\\n' +
+      '👤 ' + customer + '\\n' +
+      '✨ ' + service + '\\n' +
+      '📅 ' + date + ' — ' + time + '\\n' +
+      '💳 مبلغ: ' + price + '\\n' +
+      '🎫 کد پیگیری: <code>' + tracking + '</code>'
+    );
   }
 
-  return '🧾 <b>فیش پرداخت کائنات‌چی دریافت شد</b>\\n\\n'
-    +'👤 '+escapeTelegramHtml_(customer)+'\\n'
-    +'✨ '+service+'\\n'
-    +'📅 '+date+' — '+time+'\\n'
-    +'🎫 کد پیگیری: <code>'+tracking+'</code>\\n\\n'
-    +'⏳ وضعیت: در انتظار بررسی ادمین';
+  if (eventType === 'rejected') {
+    return (
+      '❌ <b>فیش پرداخت کائنات‌چی رد شد</b>\\n\\n' +
+      '👤 ' + customer + '\\n' +
+      '✨ ' + service + '\\n' +
+      '📅 ' + date + ' — ' + time + '\\n' +
+      '🎫 کد پیگیری: <code>' + tracking + '</code>\\n\\n' +
+      '⛔ وضعیت: فیش پرداخت تأیید نشد'
+    );
+  }
+
+  return (
+    '🧾 <b>فیش پرداخت کائنات‌چی دریافت شد</b>\\n\\n' +
+    '👤 ' + customer + '\\n' +
+    '✨ ' + service + '\\n' +
+    '📅 ' + date + ' — ' + time + '\\n' +
+    '🎫 کد پیگیری: <code>' + tracking + '</code>\\n\\n' +
+    '⏳ وضعیت: در انتظار بررسی ادمین'
+  );
 }
 
 function sendBookingTelegramNotifications_(booking, eventType) {
@@ -668,17 +998,41 @@ function sendBookingTelegramNotifications_(booking, eventType) {
   var text=buildBookingTelegramText_(booking,eventType);
   var results=[];
 
-  // Admin always receives booking/payment status notifications.
+  /*
+   * Only payment_received needs admin action buttons.
+   * Approved/rejected messages are terminal and do not expose action buttons.
+   */
+  var replyMarkup =
+    eventType === 'payment_received'
+      ? getBookingTelegramAdminKeyboard_(
+          booking['Booking ID']
+        )
+      : null;
+
   if(config.adminChatId){
-    results.push(sendTelegramMessage_(config.adminChatId,text));
+    results.push(
+      sendTelegramMessage_(
+        config.adminChatId,
+        text,
+        replyMarkup
+      )
+    );
   } else {
-    results.push({ok:false,skipped:true,reason:'ADMIN_CHAT_ID_NOT_CONFIGURED'});
+    results.push({
+      ok:false,
+      skipped:true,
+      reason:'ADMIN_CHAT_ID_NOT_CONFIGURED'
+    });
   }
 
-  // If the Mini App supplied the user's Telegram ID, notify the customer too.
   var customerChatId=String(booking['Telegram ID']||'').trim();
   if(customerChatId && customerChatId!==config.adminChatId){
-    results.push(sendTelegramMessage_(customerChatId,text));
+    results.push(
+      sendTelegramMessage_(
+        customerChatId,
+        text
+      )
+    );
   }
 
   return {
@@ -2883,6 +3237,10 @@ function rejectBooking_(request){
       'Admin Note':String(request.note||request.reason||''),'Hold Until':''
     });
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.note||request.reason||'')});
+
+    // Queue the rejection notification outside the booking request path.
+    queueBookingTelegramNotification_(b, 'rejected');
+
     return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_REJECTED};
   });
 }

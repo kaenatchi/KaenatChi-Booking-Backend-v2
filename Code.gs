@@ -1444,13 +1444,29 @@ function getBookingAppointmentTimestampMs_(booking) {
   );
 
   var parts = ymd.split('/');
-  var iso =
-    parts[0] + '-' +
-    parts[1] + '-' +
-    parts[2] + 'T' +
-    time + ':00+03:30';
+  var year = Number(parts[0]);
+  var month = Number(parts[1]);
+  var day = Number(parts[2]);
+  var timeParts = time.split(':');
+  var hour = Number(timeParts[0]);
+  var minute = Number(timeParts[1]);
 
-  var timestamp = new Date(iso).getTime();
+  if (
+    !year || !month || !day ||
+    isNaN(hour) || isNaN(minute)
+  ) {
+    return 0;
+  }
+
+  /*
+   * Do not parse a timezone-bearing date string here.
+   * Apps Script runtimes can handle Date strings differently.
+   * Build the UTC timestamp explicitly, then subtract Iran's
+   * fixed +03:30 booking offset.
+   */
+  var timestamp =
+    Date.UTC(year, month - 1, day, hour, minute, 0, 0) -
+    (3 * 60 + 30) * 60 * 1000;
 
   return isNaN(timestamp) ? 0 : timestamp;
 }

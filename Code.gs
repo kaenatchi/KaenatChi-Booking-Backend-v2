@@ -3191,7 +3191,11 @@ function createBooking_(request){
 
     var booking={
       bookingId:generateId_('BK'),requestId:String(request.requestId||''),createdAt:new Date(),
-      telegramId:String(request.telegramId||''),customerId:String(request.customerId||''),
+      telegramId:String(request.telegramId||request.telegramChatId||'').trim(),
+      telegramUsername:String(request.telegramUsername||'').trim(),
+      telegramFirstName:String(request.telegramFirstName||'').trim(),
+      telegramLastName:String(request.telegramLastName||'').trim(),
+      customerId:String(request.customerId||''),
       firstName:String(request.firstName||'').trim(),lastName:String(request.lastName||'').trim(),
       mobile:String(request.mobile||request.phone||'').trim(),serviceId:String(service.id||request.serviceId||''),
       serviceName:String(service.name),appointmentDate:date,appointmentTime:time,slotKey:slotKey,
@@ -3399,7 +3403,17 @@ function upsertCustomer_(booking){
   if(booking.customerId&&idHeader)row=rows.find(function(r){return String(r[idHeader]||'')===booking.customerId;});
   if(!row&&booking.mobile&&mobileHeader)row=rows.find(function(r){return String(r[mobileHeader]||'')===booking.mobile;});
   var id=booking.customerId||(row&&idHeader?String(row[idHeader]):'')||generateId_('CUS');
-  var v={'Customer ID':id,'Telegram ID':booking.telegramId,'Telegram Username':booking.telegramUsername||'','Telegram First Name':booking.firstName,'Telegram Last Name':booking.lastName,'Booking First Name':booking.firstName,'Booking Last Name':booking.lastName,'Mobile':booking.mobile,'Last Booking At':new Date()};
+  var v={
+    'Customer ID':id,
+    'Telegram ID':booking.telegramId||'',
+    'Telegram Username':booking.telegramUsername||'',
+    'Telegram First Name':booking.telegramFirstName||'',
+    'Telegram Last Name':booking.telegramLastName||'',
+    'Booking First Name':booking.firstName||'',
+    'Booking Last Name':booking.lastName||'',
+    'Mobile':booking.mobile||'',
+    'Last Booking At':new Date()
+  };
   if(row)updateRowFields_(CONFIG.SHEETS.CUSTOMERS,row._row,v);else appendObjectRow_(CONFIG.SHEETS.CUSTOMERS,{},v);
   return id;
 }

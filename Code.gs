@@ -1230,6 +1230,12 @@ function processBookingTelegramNotificationQueue_() {
     lock.releaseLock();
   }
 
+  /*
+   * Appointment reminders share the existing one-minute Telegram worker.
+   * This runs even when the notification queue is empty.
+   */
+  processAppointmentReminders_();
+
   if (!items.length) {
     return;
   }
@@ -1328,6 +1334,278 @@ function processBookingTelegramNotificationQueue_() {
     lock.releaseLock();
   }
 }
+
+
+/* =====================================================
+ * APPOINTMENT REMINDERS
+ * ===================================================== */
+
+/*
+ * Runs from the existing one-minute Telegram worker.
+ * Booking Core, payment, VIP and slot locking are untouched.
+ *
+ * A reminder is eligible when:
+ * - appointment is confirmed
+ * - appointment is about 4–6 minutes away
+ * - no REMINDER_SENT log exists for this booking
+ */
+function processAppointmentReminders_() {
+  var rows = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
+  var nowMs = Date.now();
+  var sent = 0;
+  var skipped = 0;
+
+  rows.forEach(function(booking) {
+    try {
+      if (
+        String(booking['Appointment Status'] || '') !==
+        CONFIG.STATUSES.BOOKING_CONFIRMED
+      ) {
+        return;
+      }
+
+      if (isAppointmentReminderSent_(booking['Booking ID'])) {
+        skipped++;
+        return;
+      }
+
+      var appointmentMs = getBookingAppointmentTimestampMs_(booking);
+      if (!appointmentMs) return;
+
+      var minutesUntil = (appointmentMs - nowMs) / 60000;
+
+      /*
+       * The worker runs every minute, but Apps Script triggers can drift.
+       * A 4–6 minute window keeps the intended reminder close to T-5
+       * without requiring a new trigger for every booking.
+       */
+      if (minutesUntil < 4 || minutesUntil > 6) {
+        return;
+      }
+
+      var result = sendAppointmentReminderTelegram_(booking);
+
+      if (result.ok) {
+        appendBookingLog_({
+          action: 'REMINDER_SENT',
+          bookingId: String(booking['Booking ID'] || ''),
+          slotKey: String(booking['Slot Key'] || ''),
+          details: 'Appointment reminder sent at T-5 minutes.'
+        });
+        sent++;
+      } else {
+        console.warn(
+          'Appointment reminder delivery failed for booking ' +
+          String(booking['Booking ID'] || '') + ': ' +
+          JSON.stringify(result)
+        );
+      }
+
+    } catch (error) {
+      console.warn(
+        'Appointment reminder processing failed for booking ' +
+        String(booking['Booking ID'] || '') + ': ' +
+        String(error && error.message ? error.message : error)
+      );
+    }
+  });
+
+  return {
+    ok: true,
+    sent: sent,
+    skipped: skipped
+  };
+}
+
+
+function getBookingAppointmentTimestampMs_(booking) {
+  var jalaliDate = normalizeJalaliDate_(
+    booking['Appointment Date'] || ''
+  );
+  var time = normalizeTime_(
+    booking['Appointment Time'] || ''
+  );
+
+  if (!jalaliDate || !/^\\d{2}:\\d{2}$/.test(time)) {
+    return 0;
+  }
+
+  /*
+   * Iran uses UTC+03:30 year-round for current booking dates.
+   * Convert the Jalali calendar date to its Gregorian calendar date,
+   * then attach the appointment clock time explicitly.
+   */
+  var gregorian = jalaliToGregorian_(jalaliDate);
+
+  var ymd = Utilities.formatDate(
+    gregorian,
+    'Asia/Tehran',
+    'yyyy/MM/dd'
+  );
+
+  var parts = ymd.split('/');
+  var iso =
+    parts[0] + '-' +
+    parts[1] + '-' +
+    parts[2] + 'T' +
+    time + ':00+03:30';
+
+  var timestamp = new Date(iso).getTime();
+
+  return isNaN(timestamp) ? 0 : timestamp;
+}
+
+
+function isAppointmentReminderSent_(bookingId) {
+  var id = String(bookingId || '').trim();
+  if (!id) return false;
+
+  var logs = getSheetObjects_(CONFIG.SHEETS.BOOKING_LOGS);
+
+  return logs.some(function(log) {
+    return (
+      String(log['Booking ID'] || '').trim() === id &&
+      String(log['Action'] || '').trim() === 'REMINDER_SENT'
+    );
+  });
+}
+
+
+function buildAppointmentReminderText_(booking) {
+  var name = (
+    String(booking['First Name'] || '') +
+    ' ' +
+    String(booking['Last Name'] || '')
+  ).trim();
+
+  var service = escapeTelegramHtml_(
+    booking['Service Name'] || ''
+  );
+
+  var date = escapeTelegramHtml_(
+    normalizeJalaliDate_(booking['Appointment Date'] || '')
+  );
+
+  var time = escapeTelegramHtml_(
+    normalizeTime_(booking['Appointment Time'] || '')
+  );
+
+  var customer = escapeTelegramHtml_(
+    name || 'مشتری'
+  );
+
+  return (
+    '🔔 <b>یادآوری نوبت کائنات‌چی</b>\\n\\n' +
+    '👤 ' + customer + ' عزیز\\n' +
+    '✨ نوبت شما: <b>' + service + '</b>\\n' +
+    '📅 تاریخ: <b>' + date + '</b>\\n' +
+    '🕚 ساعت: <b>' + time + '</b>\\n\\n' +
+    '🌿 این پیام ۵ دقیقه قبل از زمان نوبت شما ارسال شده است.'
+  );
+}
+
+
+function buildAdminAppointmentReminderText_(booking) {
+  var name = (
+    String(booking['First Name'] || '') +
+    ' ' +
+    String(booking['Last Name'] || '')
+  ).trim();
+
+  var username = String(
+    booking['Telegram Username'] || ''
+  ).trim();
+
+  var telegramId = String(
+    booking['Telegram ID'] || ''
+  ).trim();
+
+  var service = escapeTelegramHtml_(
+    booking['Service Name'] || ''
+  );
+
+  var date = escapeTelegramHtml_(
+    normalizeJalaliDate_(booking['Appointment Date'] || '')
+  );
+
+  var time = escapeTelegramHtml_(
+    normalizeTime_(booking['Appointment Time'] || '')
+  );
+
+  return (
+    '🔔 <b>یادآوری نوبت</b>\\n\\n' +
+    '👤 ' + escapeTelegramHtml_(name || 'مشتری') + '\\n' +
+    '✨ ' + service + '\\n' +
+    '📅 ' + date + '\\n' +
+    '🕚 ' + time + '\\n' +
+    '📱 Telegram: ' +
+      escapeTelegramHtml_(username || 'بدون Username') + '\\n' +
+    '🆔 Telegram ID: <code>' +
+      escapeTelegramHtml_(telegramId || 'ثبت نشده') + '</code>'
+  );
+}
+
+
+function sendAppointmentReminderTelegram_(booking) {
+  var config = getTelegramConfig_();
+  var customerChatId = String(
+    booking['Telegram ID'] || ''
+  ).trim();
+
+  var results = [];
+
+  /*
+   * Admin receives a separate operational reminder.
+   * This does not depend on the customer's Telegram username.
+   */
+  if (config.adminChatId) {
+    results.push({
+      target: 'admin',
+      result: sendTelegramMessage_(
+        config.adminChatId,
+        buildAdminAppointmentReminderText_(booking)
+      )
+    });
+  }
+
+  /*
+   * Customer reminder uses Telegram ID, not username.
+   * This works even when the customer has no Telegram username,
+   * provided the user has an existing chat with the bot.
+   */
+  if (customerChatId && customerChatId !== config.adminChatId) {
+    results.push({
+      target: 'customer',
+      result: sendTelegramMessage_(
+        customerChatId,
+        buildAppointmentReminderText_(booking)
+      )
+    });
+  } else {
+    results.push({
+      target: 'customer',
+      result: {
+        ok: false,
+        skipped: true,
+        reason: 'CUSTOMER_TELEGRAM_ID_NOT_AVAILABLE'
+      }
+    });
+  }
+
+  var customerResult = results.find(function(item) {
+    return item.target === 'customer';
+  });
+
+  return {
+    ok: !!(
+      customerResult &&
+      customerResult.result &&
+      customerResult.result.ok === true
+    ),
+    results: results
+  };
+}
+
 
 function testBookingTelegramQueueNow() {
   processBookingTelegramNotificationQueue_();

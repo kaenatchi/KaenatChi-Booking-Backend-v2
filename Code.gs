@@ -1375,11 +1375,12 @@ function processAppointmentReminders_() {
       var minutesUntil = (appointmentMs - nowMs) / 60000;
 
       /*
-       * The worker runs every minute, but Apps Script triggers can drift.
-       * A 4–6 minute window keeps the intended reminder close to T-5
-       * without requiring a new trigger for every booking.
+       * The worker normally runs every minute, but Apps Script triggers can
+       * drift or be delayed. Send once at any point in the final six minutes
+       * before the appointment, rather than losing the reminder if a narrow
+       * 4–6 minute window is missed. Never send after the appointment starts.
        */
-      if (minutesUntil < 4 || minutesUntil > 6) {
+      if (minutesUntil <= 0 || minutesUntil > 6) {
         return;
       }
 

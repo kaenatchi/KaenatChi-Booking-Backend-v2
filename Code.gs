@@ -1346,7 +1346,7 @@ function processBookingTelegramNotificationQueue_() {
  *
  * A reminder is eligible when:
  * - appointment is confirmed
- * - appointment is about 4–6 minutes away
+ * - appointment is within the final six minutes before start
  * - no REMINDER_SENT log exists for this booking
  */
 function processAppointmentReminders_() {
@@ -1547,7 +1547,7 @@ function buildAppointmentReminderText_(booking) {
     '✨ نوبت شما: <b>' + service + '</b>\n' +
     '📅 تاریخ: <b>' + date + '</b>\n' +
     '🕚 ساعت: <b>' + time + '</b>\n\n' +
-    '🌿 این پیام ۵ دقیقه قبل از زمان نوبت شما ارسال شده است.'
+    '🌿 این پیام در دقایق پایانی پیش از زمان نوبت شما ارسال شده است.'
   );
 }
 

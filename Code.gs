@@ -1621,28 +1621,35 @@ function sendAppointmentReminderTelegram_(booking) {
    * Keep recipient-level delivery records. If one recipient succeeds and
    * the other fails, the next worker run retries only the failed recipient.
    */
-  if (config.adminChatId) {
-    if (isAppointmentReminderRecipientSent_(bookingId, 'ADMIN')) {
-      results.push({
-        target: 'admin',
-        result: {ok: true, alreadySent: true}
-      });
-    } else {
-      var adminResult = sendTelegramMessage_(
-        config.adminChatId,
-        buildAdminAppointmentReminderText_(booking)
-      );
-
-      results.push({target: 'admin', result: adminResult});
-
-      if (adminResult && adminResult.ok === true) {
-        appendBookingLog_({
-          action: 'REMINDER_SENT_ADMIN',
-          bookingId: bookingId,
-          slotKey: slotKey,
-          details: 'Admin appointment reminder delivered.'
-        });
+  if (!config.adminChatId) {
+    results.push({
+      target: 'admin',
+      result: {
+        ok: false,
+        skipped: true,
+        reason: 'ADMIN_TELEGRAM_ID_NOT_CONFIGURED'
       }
+    });
+  } else if (isAppointmentReminderRecipientSent_(bookingId, 'ADMIN')) {
+    results.push({
+      target: 'admin',
+      result: {ok: true, alreadySent: true}
+    });
+  } else {
+    var adminResult = sendTelegramMessage_(
+      config.adminChatId,
+      buildAdminAppointmentReminderText_(booking)
+    );
+
+    results.push({target: 'admin', result: adminResult});
+
+    if (adminResult && adminResult.ok === true) {
+      appendBookingLog_({
+        action: 'REMINDER_SENT_ADMIN',
+        bookingId: bookingId,
+        slotKey: slotKey,
+        details: 'Admin appointment reminder delivered.'
+      });
     }
   }
 

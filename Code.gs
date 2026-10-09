@@ -1391,7 +1391,15 @@ function processAppointmentReminders_() {
           action: 'REMINDER_SENT',
           bookingId: String(booking['Booking ID'] || ''),
           slotKey: String(booking['Slot Key'] || ''),
-          details: 'Appointment reminder sent at T-5 minutes.'
+          details: 'Appointment reminder delivered to all available recipients.'
+        });
+        sent++;
+      } else if (result.finalizedWithoutCustomer) {
+        appendBookingLog_({
+          action: 'REMINDER_FINALIZED_NO_CUSTOMER_ID',
+          bookingId: String(booking['Booking ID'] || ''),
+          slotKey: String(booking['Slot Key'] || ''),
+          details: 'Admin reminder delivered; customer Telegram ID is unavailable, so customer delivery was skipped.'
         });
         sent++;
       } else {
@@ -1501,7 +1509,10 @@ function isAppointmentReminderSent_(bookingId) {
   return logs.some(function(log) {
     return (
       String(log['Booking ID'] || '').trim() === id &&
-      String(log['Action'] || '').trim() === 'REMINDER_SENT'
+      (
+        String(log['Action'] || '').trim() === 'REMINDER_SENT' ||
+        String(log['Action'] || '').trim() === 'REMINDER_FINALIZED_NO_CUSTOMER_ID'
+      )
     );
   });
 }
@@ -1692,12 +1703,33 @@ function sendAppointmentReminderTelegram_(booking) {
     });
   }
 
+  var adminResultEntry = results.filter(function(item) {
+    return item.target === 'admin';
+  })[0];
+  var customerResultEntry = results.filter(function(item) {
+    return item.target === 'customer';
+  })[0];
+
+  var adminOk = !!(
+    adminResultEntry &&
+    adminResultEntry.result &&
+    adminResultEntry.result.ok === true
+  );
+  var customerUnavailable = !!(
+    customerResultEntry &&
+    customerResultEntry.result &&
+    customerResultEntry.result.skipped === true &&
+    (
+      customerResultEntry.result.reason === 'CUSTOMER_TELEGRAM_ID_NOT_AVAILABLE_OR_MATCHES_ADMIN'
+    )
+  );
   var ok = results.length > 0 && results.every(function(item) {
     return !!(item.result && item.result.ok === true);
   });
 
   return {
     ok: ok,
+    finalizedWithoutCustomer: adminOk && customerUnavailable,
     results: results,
     requiredRecipientCount: results.length,
     pendingRecipientCount: results.filter(function(item) {

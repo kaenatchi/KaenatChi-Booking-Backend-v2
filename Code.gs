@@ -1530,11 +1530,11 @@ function buildAppointmentReminderText_(booking) {
   );
 
   return (
-    '🔔 <b>یادآوری نوبت کائنات‌چی</b>\\n\\n' +
-    '👤 ' + customer + ' عزیز\\n' +
-    '✨ نوبت شما: <b>' + service + '</b>\\n' +
-    '📅 تاریخ: <b>' + date + '</b>\\n' +
-    '🕚 ساعت: <b>' + time + '</b>\\n\\n' +
+    '🔔 <b>یادآوری نوبت کائنات‌چی</b>\n\n' +
+    '👤 ' + customer + ' عزیز\n' +
+    '✨ نوبت شما: <b>' + service + '</b>\n' +
+    '📅 تاریخ: <b>' + date + '</b>\n' +
+    '🕚 ساعت: <b>' + time + '</b>\n\n' +
     '🌿 این پیام ۵ دقیقه قبل از زمان نوبت شما ارسال شده است.'
   );
 }
@@ -1568,76 +1568,133 @@ function buildAdminAppointmentReminderText_(booking) {
   );
 
   return (
-    '🔔 <b>یادآوری نوبت</b>\\n\\n' +
-    '👤 ' + escapeTelegramHtml_(name || 'مشتری') + '\\n' +
-    '✨ ' + service + '\\n' +
-    '📅 ' + date + '\\n' +
-    '🕚 ' + time + '\\n' +
+    '🔔 <b>یادآوری نوبت</b>\n\n' +
+    '👤 ' + escapeTelegramHtml_(name || 'مشتری') + '\n' +
+    '✨ ' + service + '\n' +
+    '📅 ' + date + '\n' +
+    '🕚 ' + time + '\n' +
     '📱 Telegram: ' +
-      escapeTelegramHtml_(username || 'بدون Username') + '\\n' +
+      escapeTelegramHtml_(username || 'بدون Username') + '\n' +
     '🆔 Telegram ID: <code>' +
       escapeTelegramHtml_(telegramId || 'ثبت نشده') + '</code>'
   );
 }
 
 
+function isAppointmentReminderRecipientSent_(bookingId, recipient) {
+  var id = String(bookingId || '').trim();
+  var target = String(recipient || '').trim().toUpperCase();
+
+  if (!id || (target !== 'ADMIN' && target !== 'CUSTOMER')) {
+    return false;
+  }
+
+  var logs = getSheetObjects_(CONFIG.SHEETS.BOOKING_LOGS);
+
+  return logs.some(function(log) {
+    if (String(log['Booking ID'] || '').trim() !== id) {
+      return false;
+    }
+
+    var action = String(log['Action'] || '').trim();
+
+    /*
+     * Older records used one REMINDER_SENT entry only after delivery
+     * completed. Preserve those records as already delivered.
+     */
+    return action === 'REMINDER_SENT' ||
+      action === 'REMINDER_SENT_' + target;
+  });
+}
+
+
 function sendAppointmentReminderTelegram_(booking) {
   var config = getTelegramConfig_();
+  var bookingId = String(booking['Booking ID'] || '').trim();
+  var slotKey = String(booking['Slot Key'] || '').trim();
   var customerChatId = String(
     booking['Telegram ID'] || ''
   ).trim();
-
   var results = [];
 
   /*
-   * Admin receives a separate operational reminder.
-   * This does not depend on the customer's Telegram username.
+   * Keep recipient-level delivery records. If one recipient succeeds and
+   * the other fails, the next worker run retries only the failed recipient.
    */
   if (config.adminChatId) {
-    results.push({
-      target: 'admin',
-      result: sendTelegramMessage_(
+    if (isAppointmentReminderRecipientSent_(bookingId, 'ADMIN')) {
+      results.push({
+        target: 'admin',
+        result: {ok: true, alreadySent: true}
+      });
+    } else {
+      var adminResult = sendTelegramMessage_(
         config.adminChatId,
         buildAdminAppointmentReminderText_(booking)
-      )
-    });
+      );
+
+      results.push({target: 'admin', result: adminResult});
+
+      if (adminResult && adminResult.ok === true) {
+        appendBookingLog_({
+          action: 'REMINDER_SENT_ADMIN',
+          bookingId: bookingId,
+          slotKey: slotKey,
+          details: 'Admin appointment reminder delivered.'
+        });
+      }
+    }
   }
 
   /*
-   * Customer reminder uses Telegram ID, not username.
-   * This works even when the customer has no Telegram username,
-   * provided the user has an existing chat with the bot.
+   * Customer reminder uses Telegram ID, not username. Do not send a
+   * second copy to the admin chat if the IDs happen to be identical.
    */
   if (customerChatId && customerChatId !== config.adminChatId) {
-    results.push({
-      target: 'customer',
-      result: sendTelegramMessage_(
+    if (isAppointmentReminderRecipientSent_(bookingId, 'CUSTOMER')) {
+      results.push({
+        target: 'customer',
+        result: {ok: true, alreadySent: true}
+      });
+    } else {
+      var customerResult = sendTelegramMessage_(
         customerChatId,
         buildAppointmentReminderText_(booking)
-      )
-    });
+      );
+
+      results.push({target: 'customer', result: customerResult});
+
+      if (customerResult && customerResult.ok === true) {
+        appendBookingLog_({
+          action: 'REMINDER_SENT_CUSTOMER',
+          bookingId: bookingId,
+          slotKey: slotKey,
+          details: 'Customer appointment reminder delivered.'
+        });
+      }
+    }
   } else {
     results.push({
       target: 'customer',
       result: {
         ok: false,
         skipped: true,
-        reason: 'CUSTOMER_TELEGRAM_ID_NOT_AVAILABLE'
+        reason: 'CUSTOMER_TELEGRAM_ID_NOT_AVAILABLE_OR_MATCHES_ADMIN'
       }
     });
   }
 
-  var customerResult = results.find(function(item) {
-    return item.target === 'customer';
+  var ok = results.length > 0 && results.every(function(item) {
+    return !!(item.result && item.result.ok === true);
   });
 
   return {
-    ok: !!(
-      customerResult &&
-      customerResult.result &&
-      customerResult.result.ok === true
-    ),
-    results: results
+    ok: ok,
+    results: results,
+    requiredRecipientCount: results.length,
+    pendingRecipientCount: results.filter(function(item) {
+      return !(item.result && item.result.ok === true);
+    }).length
   };
 }
 
@@ -5707,17 +5764,21 @@ function testAppointmentReminderDiagnostic() {
     });
 
     result.checks.push({
-      name: 'Customer reminder text',
+      name: 'Customer reminder text and line breaks',
       ok: customerText.indexOf('انرژی خوانی قهوه') !== -1 &&
           customerText.indexOf('1405/07/16') !== -1 &&
-          customerText.indexOf('11:00') !== -1,
+          customerText.indexOf('11:00') !== -1 &&
+          customerText.indexOf('\n') !== -1 &&
+          customerText.indexOf('\\n') === -1,
       value: customerText
     });
 
     result.checks.push({
-      name: 'Admin reminder text',
+      name: 'Admin reminder text and line breaks',
       ok: adminText.indexOf('@test_user') !== -1 &&
-          adminText.indexOf('TEST_ONLY') !== -1,
+          adminText.indexOf('TEST_ONLY') !== -1 &&
+          adminText.indexOf('\n') !== -1 &&
+          adminText.indexOf('\\n') === -1,
       value: adminText
     });
 

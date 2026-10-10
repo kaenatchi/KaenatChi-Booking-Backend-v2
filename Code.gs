@@ -378,19 +378,13 @@ function createTherapyRequest_(request) {
     var config = getTelegramConfig_();
     if (config.adminChatId && config.botToken) {
       var safeService = serviceType === 'candle' ? 'شمع‌تراپی' : 'سایکوتراپی';
-      var message = '🌿 <b>درخواست جدید تراپی کائنات‌چی</b>\n' +
-        '<b>کد درخواست:</b> ' + escapeTelegramHtml_(requestId) + '\n' +
-        '<b>خدمت:</b> ' + safeService + '\n' +
-        '<b>نام:</b> ' + escapeTelegramHtml_(firstName + ' ' + lastName) + '\n' +
-        '<b>موبایل:</b> ' + escapeTelegramHtml_(mobile) + '\n' +
-        '<b>تلگرام:</b> ' + escapeTelegramHtml_(telegramUsername ? '@' + telegramUsername : 'ثبت نشده') + '\n' +
-        '<b>دلیل مراجعه:</b> ' + escapeTelegramHtml_(reason || 'ثبت نشده') + '\n' +
-        '<b>اثر بر زندگی روزمره:</b> ' + escapeTelegramHtml_(impact || 'ثبت نشده') + '\n' +
-        '<b>مدت درگیری:</b> ' + escapeTelegramHtml_(duration || 'ثبت نشده') + '\n' +
-        '<b>هدف:</b> ' + escapeTelegramHtml_(goal || 'ثبت نشده') + '\n' +
-        '<b>سابقه مشاوره:</b> ' + escapeTelegramHtml_(previousSupport || 'ثبت نشده') + '\n' +
-        '<b>ترجیح تماس:</b> ' + escapeTelegramHtml_(contactPreference || 'ثبت نشده') + '\n' +
-        '<i>متن آزاد و توضیحات حساس برای حفظ حریم خصوصی در اعلان تلگرام ارسال نشده‌اند.</i>';
+      // Privacy by default: Telegram is only a notification channel.
+      // Never include names, contact details, intake answers, or free text here.
+      var message = '🌿 <b>درخواست جدید تراپی کائنات‌چی</b>\\n' +
+        '<b>کد درخواست:</b> ' + escapeTelegramHtml_(requestId) + '\\n' +
+        '<b>خدمت:</b> ' + safeService + '\\n\\n' +
+        'برای حفظ حریم خصوصی، هیچ اطلاعات هویتی یا پاسخ فرم در این اعلان ارسال نشده است.\\n' +
+        'جزئیات درخواست را فقط از مسیر مدیریتی مجاز و امن بررسی کنید.\\n';
       notification = sendTelegramMessage_(config.adminChatId, message);
     }
   } catch (notifyError) {

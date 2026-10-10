@@ -378,7 +378,7 @@ function createTherapyRequest_(request) {
     var config = getTelegramConfig_();
     if (config.adminChatId && config.botToken) {
       var safeService = serviceType === 'candle' ? 'شمع‌تراپی' : 'سایکوتراپی';
-      var message = '🌿 <b>درخواست جدید تراپی کائنات‌چی</b>\\n' +
+      var message = '🌿 <b>درخواست جدید تراپی کائنات‌چی</b>\n' +
         '<b>کد درخواست:</b> ' + escapeTelegramHtml_(requestId) + '\n' +
         '<b>خدمت:</b> ' + safeService + '\n' +
         '<b>نام:</b> ' + escapeTelegramHtml_(firstName + ' ' + lastName) + '\n' +

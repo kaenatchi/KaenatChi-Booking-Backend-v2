@@ -325,7 +325,7 @@ function createTherapyRequest_(request) {
   var serviceType = String(request.serviceType || '').trim();
   var firstName = String(request.firstName || '').trim();
   var lastName = String(request.lastName || '').trim();
-  var mobile = String(request.mobile || '').replace(/[\\s()\\-]/g, '');
+  var mobile = String(request.mobile || '').replace(/[\s()-]/g, '');
   var telegramUsername = String(request.telegramUsername || '').trim().replace(/^@/, '');
   var reason = String(request.reason || '').trim();
   var impact = String(request.impact || '').trim();
@@ -340,7 +340,7 @@ function createTherapyRequest_(request) {
   if (!requestId || requestId.length > 100) return {ok:false,error:'INVALID_REQUEST_ID',message:'شناسه درخواست معتبر نیست.'};
   if (['candle','psychotherapy'].indexOf(serviceType) < 0) return {ok:false,error:'INVALID_SERVICE',message:'نوع خدمت معتبر نیست.'};
   if (!firstName || !lastName || firstName.length > 80 || lastName.length > 80) return {ok:false,error:'INVALID_NAME',message:'نام و نام خانوادگی الزامی است.'};
-  if (!/^\\+?[0-9]{10,15}$/.test(mobile)) return {ok:false,error:'INVALID_MOBILE',message:'شماره موبایل را بررسی کن.'};
+  if (!/^\+?[0-9]{10,15}$/.test(mobile)) return {ok:false,error:'INVALID_MOBILE',message:'شماره موبایل را بررسی کن.'};
   if (!privacyConsent || !accuracyConfirmed) return {ok:false,error:'CONSENT_REQUIRED',message:'تأیید حریم خصوصی و صحت اطلاعات الزامی است.'};
   if (freeText.length > 1500) return {ok:false,error:'TEXT_TOO_LONG',message:'متن توضیح طولانی است.'};
 
@@ -379,17 +379,17 @@ function createTherapyRequest_(request) {
     if (config.adminChatId && config.botToken) {
       var safeService = serviceType === 'candle' ? 'شمع‌تراپی' : 'سایکوتراپی';
       var message = '🌿 <b>درخواست جدید تراپی کائنات‌چی</b>\\n' +
-        '<b>کد درخواست:</b> ' + escapeTelegramHtml_(requestId) + '\\n' +
-        '<b>خدمت:</b> ' + safeService + '\\n' +
-        '<b>نام:</b> ' + escapeTelegramHtml_(firstName + ' ' + lastName) + '\\n' +
-        '<b>موبایل:</b> ' + escapeTelegramHtml_(mobile) + '\\n' +
-        '<b>تلگرام:</b> ' + escapeTelegramHtml_(telegramUsername ? '@' + telegramUsername : 'ثبت نشده') + '\\n' +
-        '<b>دلیل مراجعه:</b> ' + escapeTelegramHtml_(reason || 'ثبت نشده') + '\\n' +
-        '<b>اثر بر زندگی روزمره:</b> ' + escapeTelegramHtml_(impact || 'ثبت نشده') + '\\n' +
-        '<b>مدت درگیری:</b> ' + escapeTelegramHtml_(duration || 'ثبت نشده') + '\\n' +
-        '<b>هدف:</b> ' + escapeTelegramHtml_(goal || 'ثبت نشده') + '\\n' +
-        '<b>سابقه مشاوره:</b> ' + escapeTelegramHtml_(previousSupport || 'ثبت نشده') + '\\n' +
-        '<b>ترجیح تماس:</b> ' + escapeTelegramHtml_(contactPreference || 'ثبت نشده') + '\\n' +
+        '<b>کد درخواست:</b> ' + escapeTelegramHtml_(requestId) + '\n' +
+        '<b>خدمت:</b> ' + safeService + '\n' +
+        '<b>نام:</b> ' + escapeTelegramHtml_(firstName + ' ' + lastName) + '\n' +
+        '<b>موبایل:</b> ' + escapeTelegramHtml_(mobile) + '\n' +
+        '<b>تلگرام:</b> ' + escapeTelegramHtml_(telegramUsername ? '@' + telegramUsername : 'ثبت نشده') + '\n' +
+        '<b>دلیل مراجعه:</b> ' + escapeTelegramHtml_(reason || 'ثبت نشده') + '\n' +
+        '<b>اثر بر زندگی روزمره:</b> ' + escapeTelegramHtml_(impact || 'ثبت نشده') + '\n' +
+        '<b>مدت درگیری:</b> ' + escapeTelegramHtml_(duration || 'ثبت نشده') + '\n' +
+        '<b>هدف:</b> ' + escapeTelegramHtml_(goal || 'ثبت نشده') + '\n' +
+        '<b>سابقه مشاوره:</b> ' + escapeTelegramHtml_(previousSupport || 'ثبت نشده') + '\n' +
+        '<b>ترجیح تماس:</b> ' + escapeTelegramHtml_(contactPreference || 'ثبت نشده') + '\n' +
         '<i>متن آزاد و توضیحات حساس برای حفظ حریم خصوصی در اعلان تلگرام ارسال نشده‌اند.</i>';
       notification = sendTelegramMessage_(config.adminChatId, message);
     }
@@ -401,8 +401,15 @@ function createTherapyRequest_(request) {
     var sheetAfter = therapyRequestsSheet_();
     var headersAfter = getHeaders_(sheetAfter);
     var notifyCol = headersAfter.indexOf('AdminNotified');
-    if (rowNumber && notifyCol >= 0) {
-      sheetAfter.getRange(rowNumber, notifyCol + 1).setValue(notification && notification.ok ? 'ارسال شد' : 'ارسال نشد');
+    if (notifyCol >= 0) {
+      var afterValues = sheetAfter.getDataRange().getDisplayValues();
+      var idColAfter = headersAfter.indexOf('RequestID');
+      for (var notifyRow = 1; notifyRow < afterValues.length; notifyRow++) {
+        if (String(afterValues[notifyRow][idColAfter] || '') === requestId) {
+          sheetAfter.getRange(notifyRow + 1, notifyCol + 1).setValue(notification && notification.ok ? 'ارسال شد' : 'ارسال نشد');
+          break;
+        }
+      }
     }
   } catch (statusWriteError) {
     console.warn('Could not record therapy notification status: ' + String(statusWriteError));
@@ -411,12 +418,6 @@ function createTherapyRequest_(request) {
   return {ok:true,found:true,requestId:requestId,status:'در انتظار بررسی'};
 }
 
-function escapeTelegramHtml_(value) {
-  return String(value == null ? '' : value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
 
 
 /* =====================================================

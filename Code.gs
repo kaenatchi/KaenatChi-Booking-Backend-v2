@@ -251,6 +251,8 @@ function routeRequest_(action, request) {
     case 'getServices': return getServices_(request);
     case 'validateDiscount': return validateDiscount_(request);
     case 'createBooking': return createBooking_(request);
+    case 'createTherapyRequest': return createTherapyRequest_(request);
+    case 'therapyRequestStatus': return getTherapyRequestStatus_(request);
     case 'submitPayment': return submitPayment_(request);
     case 'approveBooking': return approveBooking_(request);
     case 'rejectBooking': return rejectBooking_(request);
@@ -265,6 +267,157 @@ function routeRequest_(action, request) {
       };
   }
 }
+
+
+/* =====================================================
+   2B. THERAPY INTAKE REQUESTS
+   Kept separate from appointment/payment booking records.
+   ===================================================== */
+
+function therapyRequestsSheet_() {
+  var ss = getSpreadsheet_();
+  var sheet = ss.getSheetByName('TherapyRequests');
+  var headers = [
+    'RequestID','CreatedAt','ServiceType','FirstName','LastName','Mobile',
+    'TelegramUsername','Reason','Impact','Duration','Goal','PreviousSupport',
+    'ContactPreference','FreeText','PrivacyConsent','AccuracyConfirmed','Status',
+    'AdminNotified'
+  ];
+  if (!sheet) {
+    sheet = ss.insertSheet('TherapyRequests');
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.setFrozenRows(1);
+  } else if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.setFrozenRows(1);
+  } else {
+    var existing = getHeaders_(sheet);
+    var missing = headers.filter(function(h) { return existing.indexOf(h) < 0; });
+    if (missing.length) sheet.getRange(1, existing.length + 1, 1, missing.length).setValues([missing]);
+  }
+  return sheet;
+}
+
+function getTherapyRequestStatus_(request) {
+  var requestId = String(request.requestId || '').trim();
+  if (!requestId) return { ok:false, error:'REQUEST_ID_REQUIRED' };
+  var sheet = therapyRequestsSheet_();
+  var values = sheet.getDataRange().getDisplayValues();
+  if (values.length < 2) return { ok:true, found:false };
+  var headers = values[0].map(function(h) { return String(h).trim(); });
+  var idIndex = headers.indexOf('RequestID');
+  var statusIndex = headers.indexOf('Status');
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][idIndex] || '') === requestId) {
+      return {
+        ok:true,
+        found:true,
+        requestId:requestId,
+        status:statusIndex >= 0 ? values[i][statusIndex] : 'ثبت شد'
+      };
+    }
+  }
+  return { ok:true, found:false };
+}
+
+function createTherapyRequest_(request) {
+  var requestId = String(request.requestId || request.clientRequestId || '').trim();
+  var serviceType = String(request.serviceType || '').trim();
+  var firstName = String(request.firstName || '').trim();
+  var lastName = String(request.lastName || '').trim();
+  var mobile = String(request.mobile || '').replace(/[\s()-]/g, '');
+  var telegramUsername = String(request.telegramUsername || '').trim().replace(/^@/, '');
+  var reason = String(request.reason || '').trim();
+  var impact = String(request.impact || '').trim();
+  var duration = String(request.duration || '').trim();
+  var goal = String(request.goal || '').trim();
+  var previousSupport = String(request.previousSupport || '').trim();
+  var contactPreference = String(request.contactPreference || '').trim();
+  var freeText = String(request.freeText || '').trim().slice(0, 1500);
+  var privacyConsent = request.privacyConsent === true || String(request.privacyConsent).toLowerCase() === 'true';
+  var accuracyConfirmed = request.accuracyConfirmed === true || String(request.accuracyConfirmed).toLowerCase() === 'true';
+
+  if (!requestId || requestId.length > 100) return {ok:false,error:'INVALID_REQUEST_ID',message:'شناسه درخواست معتبر نیست.'};
+  if (['candle','psychotherapy'].indexOf(serviceType) < 0) return {ok:false,error:'INVALID_SERVICE',message:'نوع خدمت معتبر نیست.'};
+  if (!firstName || !lastName || firstName.length > 80 || lastName.length > 80) return {ok:false,error:'INVALID_NAME',message:'نام و نام خانوادگی الزامی است.'};
+  if (!/^\+?[0-9]{10,15}$/.test(mobile)) return {ok:false,error:'INVALID_MOBILE',message:'شماره موبایل را بررسی کن.'};
+  if (!privacyConsent || !accuracyConfirmed) return {ok:false,error:'CONSENT_REQUIRED',message:'تأیید حریم خصوصی و صحت اطلاعات الزامی است.'};
+  if (freeText.length > 1500) return {ok:false,error:'TEXT_TOO_LONG',message:'متن توضیح طولانی است.'};
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  var rowNumber;
+  try {
+    var sheet = therapyRequestsSheet_();
+    var data = sheet.getDataRange().getValues();
+    var headers = data.length ? data[0].map(function(h) { return String(h).trim(); }) : [];
+    var idCol = headers.indexOf('RequestID');
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][idCol] || '') === requestId) {
+        return {ok:true,found:true,requestId:requestId,status:String(data[i][headers.indexOf('Status')] || 'در انتظار بررسی'),duplicate:true};
+      }
+    }
+    var now = new Date();
+    var record = {
+      RequestID:requestId, CreatedAt:now, ServiceType:serviceType, FirstName:firstName,
+      LastName:lastName, Mobile:mobile, TelegramUsername:telegramUsername,
+      Reason:reason, Impact:impact, Duration:duration, Goal:goal,
+      PreviousSupport:previousSupport, ContactPreference:contactPreference,
+      FreeText:freeText, PrivacyConsent:'بله', AccuracyConfirmed:'بله',
+      Status:'در انتظار بررسی', AdminNotified:'در انتظار ارسال'
+    };
+    var row = headers.map(function(h) { return Object.prototype.hasOwnProperty.call(record,h) ? record[h] : ''; });
+    sheet.appendRow(row);
+    rowNumber = sheet.getLastRow();
+  } finally {
+    lock.releaseLock();
+  }
+
+  var notification = {ok:false,skipped:true};
+  try {
+    var config = getTelegramConfig_();
+    if (config.adminChatId && config.botToken) {
+      var safeService = serviceType === 'candle' ? 'شمع‌تراپی' : 'سایکوتراپی';
+      var message = '🌿 <b>درخواست جدید تراپی کائنات‌چی</b>\n' +
+        '<b>کد درخواست:</b> ' + escapeTelegramHtml_(requestId) + '\n' +
+        '<b>خدمت:</b> ' + safeService + '\n' +
+        '<b>نام:</b> ' + escapeTelegramHtml_(firstName + ' ' + lastName) + '\n' +
+        '<b>موبایل:</b> ' + escapeTelegramHtml_(mobile) + '\n' +
+        '<b>تلگرام:</b> ' + escapeTelegramHtml_(telegramUsername ? '@' + telegramUsername : 'ثبت نشده') + '\n' +
+        '<b>دلیل مراجعه:</b> ' + escapeTelegramHtml_(reason || 'ثبت نشده') + '\n' +
+        '<b>اثر بر زندگی روزمره:</b> ' + escapeTelegramHtml_(impact || 'ثبت نشده') + '\n' +
+        '<b>مدت درگیری:</b> ' + escapeTelegramHtml_(duration || 'ثبت نشده') + '\n' +
+        '<b>هدف:</b> ' + escapeTelegramHtml_(goal || 'ثبت نشده') + '\n' +
+        '<b>سابقه مشاوره:</b> ' + escapeTelegramHtml_(previousSupport || 'ثبت نشده') + '\n' +
+        '<b>ترجیح تماس:</b> ' + escapeTelegramHtml_(contactPreference || 'ثبت نشده') + '\n' +
+        '<i>متن آزاد و توضیحات حساس برای حفظ حریم خصوصی در اعلان تلگرام ارسال نشده‌اند.</i>';
+      notification = sendTelegramMessage_(config.adminChatId, message);
+    }
+  } catch (notifyError) {
+    console.warn('Therapy request notification failed: ' + String(notifyError));
+  }
+
+  try {
+    var sheetAfter = therapyRequestsSheet_();
+    var headersAfter = getHeaders_(sheetAfter);
+    var notifyCol = headersAfter.indexOf('AdminNotified');
+    if (notifyCol >= 0) {
+      var afterValues = sheetAfter.getDataRange().getDisplayValues();
+      var idColAfter = headersAfter.indexOf('RequestID');
+      for (var notifyRow = 1; notifyRow < afterValues.length; notifyRow++) {
+        if (String(afterValues[notifyRow][idColAfter] || '') === requestId) {
+          sheetAfter.getRange(notifyRow + 1, notifyCol + 1).setValue(notification && notification.ok ? 'ارسال شد' : 'ارسال نشد');
+          break;
+        }
+      }
+    }
+  } catch (statusWriteError) {
+    console.warn('Could not record therapy notification status: ' + String(statusWriteError));
+  }
+
+  return {ok:true,found:true,requestId:requestId,status:'در انتظار بررسی'};
+}
+
 
 
 /* =====================================================

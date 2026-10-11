@@ -11,7 +11,9 @@
  *******************************************************/
 
 const CONFIG = {
-  SPREADSHEET_ID: '1cf6SFL80xJ8YrBPlr_Fp9TYhkKGkhu2U45D2WTSyNz0',
+  // Isolated staging branch: never connect to production CMS, VIP, or Telegram.
+  STAGING_MODE: true,
+  SPREADSHEET_ID: '1xGgeqdsUGFzHhD00NIVVD8QqwnutnDfKwsmssHzaklw',
 
   SHEETS: {
     BOOKINGS: 'Bookings',
@@ -25,7 +27,7 @@ const CONFIG = {
   },
 
   VIP: {
-    SPREADSHEET_ID: '1TpljGwyRpHcxyyR6Zm1mbT2CPJBvFeHCvD3QH34BuGs',
+    SPREADSHEET_ID: '1xGgeqdsUGFzHhD00NIVVD8QqwnutnDfKwsmssHzaklw',
     CUSTOMERS_SHEET: 'مشتریان',
     TOKENS_SHEET: 'توکن ها',
     ACTIVE_STATUS: 'فعال',
@@ -621,6 +623,7 @@ function getTelegramConfig_() {
 }
 
 function setupTelegramWebhook() {
+  if (CONFIG.STAGING_MODE) throw new Error('STAGING_MODE: Telegram webhook setup is disabled.');
   var props = PropertiesService.getScriptProperties();
   var config = getTelegramConfig_();
 
@@ -677,6 +680,7 @@ function setupTelegramWebhook() {
 }
 
 function sendTelegramMessage_(chatId, text, replyMarkup) {
+  if (CONFIG.STAGING_MODE) return {ok:false,skipped:true,reason:'STAGING_MODE'};
   chatId = String(chatId || '').trim();
   if (!chatId || !text) return {ok:false,skipped:true};
 
@@ -726,6 +730,7 @@ function sendTelegramMessage_(chatId, text, replyMarkup) {
 }
 
 function telegramApiRequest_(method, payload) {
+  if (CONFIG.STAGING_MODE) return {ok:false,skipped:true,error:'STAGING_MODE'};
   var config = getTelegramConfig_();
 
   if (!config.botToken) {
@@ -1106,6 +1111,7 @@ function sendBookingTelegramNotifications_(booking, eventType) {
  * request itself.
  */
 function queueBookingTelegramNotification_(booking, eventType) {
+  if (CONFIG.STAGING_MODE) return {ok:true,skipped:true,reason:'STAGING_MODE'};
   try {
     /*
      * CUSTOMER REQUEST PATH:
@@ -4039,6 +4045,7 @@ function publicBooking_(b){
 }
 
 function saveReceiptToDrive_(data,fileName,mimeType,booking){
+  if (CONFIG.STAGING_MODE) return {id:'STAGING-RECEIPT-'+String(booking['Booking ID']||'TEST'),url:'',name:String(fileName||'staging-receipt')};
   var raw=String(data||''),mime=String(mimeType||'image/jpeg');
   if(raw.indexOf('data:')===0){var comma=raw.indexOf(',');if(comma<0)throw new Error('تصویر فیش نامعتبر است.');var meta=raw.substring(5,comma);raw=raw.substring(comma+1);var m=meta.match(/^([^;]+)/);if(m)mime=m[1];}
   var bytes=Utilities.base64Decode(raw);
@@ -4050,6 +4057,7 @@ function saveReceiptToDrive_(data,fileName,mimeType,booking){
 }
 
 function getVIPSpreadsheet_(){
+  if (CONFIG.STAGING_MODE) throw new Error('STAGING_MODE: VIP access is disabled.');
   return SpreadsheetApp.openById(
     CONFIG.VIP.SPREADSHEET_ID
   );

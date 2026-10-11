@@ -2112,6 +2112,8 @@ function getAvailableSlots_(request) {
   });
 
   const statuses = resolveBookingStatuses_(bookingRows, date);
+  var selectedService=findServiceRecord_(String(request.serviceId||''),String(request.serviceName||request.service||''));
+  var candidateDuration=selectedService&&selectedService.duration?selectedService.duration:(toNumber_(getSetting_('Default Slot Duration',30))||30);
   const slots = [];
   schedule.ranges.forEach(function(range) {
     generateSlots_(range.startTime, range.endTime, range.slotDuration).forEach(function(time) {
@@ -2119,7 +2121,7 @@ function getAvailableSlots_(request) {
       let status = CONFIG.SLOT_STATUS.FREE;
       if (blocked[slotKey]) status = CONFIG.SLOT_STATUS.BLOCKED;
       else if (statuses[slotKey]) status = statuses[slotKey];
-      else if (isAppointmentTimeConflicting_(date,time,range.slotDuration,bookingRows,'')) status = CONFIG.SLOT_STATUS.HELD;
+      else if (isAppointmentTimeConflicting_(date,time,candidateDuration,bookingRows,'')) status = CONFIG.SLOT_STATUS.HELD;
 
       slots.push({
         date: date,

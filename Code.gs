@@ -2052,89 +2052,66 @@ function getAvailableSlots_(request) {
   }
 
   const schedule = getScheduleForDate_(date);
-
-  if (!schedule.active) {
-    return {
-      ok: true,
-      date: date,
-      slots: []
-    };
-  }
+  if (!schedule.active) return { ok: true, date: date, slots: [] };
 
   const blockedRows = getSheetObjects_(CONFIG.SHEETS.BLOCKED_SLOTS);
   const bookingRows = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
-
   const blocked = {};
+
   blockedRows.forEach(function(row) {
-    if (
-      normalizeJalaliDate_(row.Date) === date &&
-      isTruthy_(row.Active)
-    ) {
-      blocked[buildSlotKey_(date, normalizeTime_(row.Time))] = true;
+    const rowTime = normalizeTime_(row.Time);
+    if (normalizeJalaliDate_(row.Date) === date && rowTime && isTruthy_(row.Active)) {
+      blocked[buildSlotKey_(date, rowTime)] = true;
     }
   });
 
+  /*
+   * Resolve each slot by priority, not sheet row order:
+   * confirmed > payment proof awaiting review (held) > unexpired hold > free.
+   * Date/time are authoritative; historical Slot Key formatting may differ.
+   */
   const statuses = {};
   bookingRows.forEach(function(row) {
     const rowDate = normalizeJalaliDate_(row['Appointment Date']);
     const rowTime = normalizeTime_(row['Appointment Time']);
     if (!rowDate || !rowTime || rowDate !== date) return;
 
-    /*
-     * Rebuild the key from the authoritative date/time fields. This makes
-     * older bookings visible even if their historical Slot Key was missing
-     * or formatted differently.
-     */
     const key = buildSlotKey_(rowDate, rowTime);
-    const status = String(row['Appointment Status'] || '');
+    const appointmentStatus = String(row['Appointment Status'] || '');
+    const paymentStatus = String(row['Payment Status'] || '');
+    const paymentReceived =
+      paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
+      paymentStatus === CONFIG.STATUSES.PAYMENT_APPROVED;
 
-    if (status === CONFIG.STATUSES.BOOKING_CONFIRMED) {
+    if (appointmentStatus === CONFIG.STATUSES.BOOKING_CONFIRMED) {
       statuses[key] = CONFIG.SLOT_STATUS.CONFIRMED;
       return;
     }
 
-    if (status === CONFIG.STATUSES.BOOKING_PENDING) {
-      /*
-       * A booking with submitted payment proof must remain locked until
-       * admin decision. Its Hold Until is extended by submitPayment_(),
-       * but payment proof is the authoritative lock once submitted.
-       *
-       * A booking without submitted payment proof remains a temporary hold
-       * and is released when its Hold Until expires.
-       */
-      const paymentStatus = String(row['Payment Status'] || '');
-      const paymentReceived =
-        paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
-        paymentStatus === CONFIG.STATUSES.PAYMENT_APPROVED;
+    if (appointmentStatus !== CONFIG.STATUSES.BOOKING_PENDING) return;
 
-      if (paymentReceived) {
-        statuses[key] = CONFIG.SLOT_STATUS.HELD;
-        return;
-      }
-
-      const holdUntil = parseDateValue_(row['Hold Until']);
-      if (holdUntil && holdUntil.getTime() > Date.now()) {
+    if (paymentReceived) {
+      if (statuses[key] !== CONFIG.SLOT_STATUS.CONFIRMED) {
         statuses[key] = CONFIG.SLOT_STATUS.HELD;
       }
+      return;
+    }
+
+    const holdUntil = parseDateValue_(row['Hold Until']);
+    if (holdUntil && holdUntil.getTime() > Date.now() &&
+        statuses[key] !== CONFIG.SLOT_STATUS.CONFIRMED &&
+        statuses[key] !== CONFIG.SLOT_STATUS.HELD) {
+      statuses[key] = CONFIG.SLOT_STATUS.HELD;
     }
   });
 
   const slots = [];
-
   schedule.ranges.forEach(function(range) {
-    generateSlots_(
-      range.startTime,
-      range.endTime,
-      range.slotDuration
-    ).forEach(function(time) {
+    generateSlots_(range.startTime, range.endTime, range.slotDuration).forEach(function(time) {
       const slotKey = buildSlotKey_(date, time);
       let status = CONFIG.SLOT_STATUS.FREE;
-
-      if (blocked[slotKey]) {
-        status = CONFIG.SLOT_STATUS.BLOCKED;
-      } else if (statuses[slotKey]) {
-        status = statuses[slotKey];
-      }
+      if (blocked[slotKey]) status = CONFIG.SLOT_STATUS.BLOCKED;
+      else if (statuses[slotKey]) status = statuses[slotKey];
 
       slots.push({
         date: date,
@@ -2146,11 +2123,7 @@ function getAvailableSlots_(request) {
     });
   });
 
-  return {
-    ok: true,
-    date: date,
-    slots: slots
-  };
+  return { ok: true, date: date, slots: slots };
 }
 
 
@@ -2273,62 +2246,53 @@ function getSlotStatus_(
   jalaliDate,
   time
 ) {
-
-  if (
-    isBlockedSlot_(
-      jalaliDate,
-      time
-    )
-  ) {
+  if (isBlockedSlot_(jalaliDate, time)) {
     return CONFIG.SLOT_STATUS.BLOCKED;
   }
 
+  const targetDate = normalizeJalaliDate_(jalaliDate);
+  const targetTime = normalizeTime_(time);
+  if (!targetDate || !targetTime) return CONFIG.SLOT_STATUS.FREE;
 
-  const bookings =
-    getSheetObjects_(
-      CONFIG.SHEETS.BOOKINGS
-    );
-
+  const bookings = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
+  let held = false;
 
   for (let i = 0; i < bookings.length; i++) {
-
     const booking = bookings[i];
+    const rowDate = normalizeJalaliDate_(booking['Appointment Date']);
+    const rowTime = normalizeTime_(booking['Appointment Time']);
 
-    if (
-      String(booking['Slot Key']) !== slotKey
-    ) {
-      continue;
-    }
+    /*
+     * Date/time are canonical. Do not rely solely on the stored Slot Key,
+     * because older records may have an empty or differently formatted key.
+     */
+    if (rowDate !== targetDate || rowTime !== targetTime) continue;
 
-    const status =
-      String(booking['Appointment Status'] || '');
-
-    const holdUntil =
-      parseDateValue_(booking['Hold Until']);
-
-
-    if (
-      status === CONFIG.STATUSES.BOOKING_CONFIRMED
-    ) {
+    const status = String(booking['Appointment Status'] || '');
+    const paymentStatus = String(booking['Payment Status'] || '');
+    if (status === CONFIG.STATUSES.BOOKING_CONFIRMED) {
       return CONFIG.SLOT_STATUS.CONFIRMED;
     }
 
+    if (status !== CONFIG.STATUSES.BOOKING_PENDING) continue;
 
+    /*
+     * Once payment proof is received, the slot remains held until an admin
+     * decision, even if the temporary hold timestamp has elapsed.
+     */
     if (
-      status === CONFIG.STATUSES.BOOKING_PENDING
+      paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
+      paymentStatus === CONFIG.STATUSES.PAYMENT_APPROVED
     ) {
-
-      if (
-        holdUntil &&
-        holdUntil.getTime() > Date.now()
-      ) {
-        return CONFIG.SLOT_STATUS.HELD;
-      }
+      held = true;
+      continue;
     }
+
+    const holdUntil = parseDateValue_(booking['Hold Until']);
+    if (holdUntil && holdUntil.getTime() > Date.now()) held = true;
   }
 
-
-  return CONFIG.SLOT_STATUS.FREE;
+  return held ? CONFIG.SLOT_STATUS.HELD : CONFIG.SLOT_STATUS.FREE;
 }
 
 

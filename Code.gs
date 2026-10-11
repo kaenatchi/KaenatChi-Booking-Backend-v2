@@ -2040,12 +2040,8 @@ function getAvailableSlots_(request) {
   const schedule = getScheduleForDate_(date);
   if (!schedule.active) return { ok: true, date: date, slots: [] };
 
-  const requestedIds = Array.isArray(request.serviceIds)
-    ? request.serviceIds.map(function(id) { return String(id || '').trim(); }).filter(Boolean)
-    : [];
-  const requestedNames = Array.isArray(request.serviceNames)
-    ? request.serviceNames.map(function(name) { return String(name || '').trim(); })
-    : [];
+  const requestedIds = parseRequestStringArray_(request.serviceIds);
+  const requestedNames = parseRequestStringArray_(request.serviceNames);
   const requestedServices = requestedIds.map(function(id, index) {
     return findServiceRecord_(id, requestedNames[index] || '');
   });
@@ -2112,6 +2108,24 @@ function getAvailableSlots_(request) {
  * of whether one or several energy-reading services were selected. The CMS
  * still controls whether each weekday/shift is active and all closure data.
  */
+function parseRequestStringArray_(value) {
+  if (Array.isArray(value)) {
+    return value.map(function(item) { return String(item || '').trim(); }).filter(Boolean);
+  }
+  if (typeof value === 'string') {
+    var raw = value.trim();
+    if (!raw) return [];
+    try {
+      var parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map(function(item) { return String(item || '').trim(); }).filter(Boolean);
+      }
+    } catch (ignored) {}
+    return [raw];
+  }
+  return [];
+}
+
 function isEnergyServiceRecord_(service) {
   if (!service) return false;
   var category = String(service.category || '').toLowerCase()
@@ -3963,12 +3977,8 @@ function createBooking_(request){
     if(!isTomorrowBookingDate_(date))return fail_('ONLY_TOMORROW_ALLOWED','فقط امکان ثبت درخواست نوبت برای فردا وجود دارد.');
     if(!isDateAvailable_(date))return fail_('DATE_NOT_AVAILABLE','این تاریخ قابل رزرو نیست.');
 
-    var requestedIds=Array.isArray(request.serviceIds)
-      ? request.serviceIds.map(function(id){return String(id||'').trim();}).filter(Boolean)
-      : [];
-    var requestedNames=Array.isArray(request.serviceNames)
-      ? request.serviceNames.map(function(name){return String(name||'').trim();})
-      : [];
+    var requestedIds=parseRequestStringArray_(request.serviceIds);
+    var requestedNames=parseRequestStringArray_(request.serviceNames);
     var services=requestedIds.length
       ? requestedIds.map(function(id,index){return findServiceRecord_(id,requestedNames[index]||'');})
       : [findServiceRecord_(String(request.serviceId||''),String(request.serviceName||request.service||''))];

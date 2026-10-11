@@ -2117,6 +2117,8 @@ function getAvailableSlots_(request) {
   const slots = [];
   schedule.ranges.forEach(function(range) {
     generateSlots_(range.startTime, range.endTime, range.slotDuration).forEach(function(time) {
+      // A service may start only when its full duration fits inside this work range.
+      if (timeToMinutes_(time) + Math.max(1, Number(candidateDuration) || 30) > timeToMinutes_(range.endTime)) return;
       const slotKey = buildSlotKey_(date, time);
       let status = CONFIG.SLOT_STATUS.FREE;
       if (blocked[slotKey]) status = CONFIG.SLOT_STATUS.BLOCKED;
@@ -3802,6 +3804,12 @@ function createBooking_(request){
 
     var service=findServiceRecord_(String(request.serviceId||''),String(request.serviceName||request.service||''));
     if(!service)return fail_('SERVICE_NOT_FOUND','خدمت انتخاب‌شده پیدا نشد.');
+    var serviceDuration=Math.max(1,Number(service.duration)||30);
+    var fitsFullDuration=schedule.ranges.some(function(r){
+      return generateSlots_(r.startTime,r.endTime,r.slotDuration).indexOf(time)!==-1 &&
+        timeToMinutes_(time)+serviceDuration<=timeToMinutes_(r.endTime);
+    });
+    if(!fitsFullDuration)return fail_('SERVICE_DURATION_EXCEEDS_WORKING_HOURS','مدت این خدمت از پایان ساعت کاری عبور می‌کند. لطفاً ساعت زودتری انتخاب کنید.');
     if(isBlockedSlot_(date,time))return fail_('SLOT_UNAVAILABLE','این زمان مسدود است.');
     var currentBookings=getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
     var exactStatus=resolveBookingStatuses_(currentBookings,date)[slotKey]||CONFIG.SLOT_STATUS.FREE;
@@ -6119,6 +6127,15 @@ function testAppointmentReminderDiagnostic() {
  * Read-only CMS contract/services/settings checks plus pure in-memory logic tests.
  * Does NOT create bookings, change payments, write to Sheets/Drive, or send Telegram.
  */
+function appointmentFitsWithinRange_(startTime, duration, endTime) {
+  var start=normalizeTime_(startTime), end=normalizeTime_(endTime);
+  if(!start||!end) return false;
+  var startMinutes=timeToMinutes_(start), endMinutes=timeToMinutes_(end);
+  var minutes=Math.max(1,Number(duration)||30);
+  if(!isFinite(startMinutes)||!isFinite(endMinutes)) return false;
+  return startMinutes>=0 && endMinutes>startMinutes && startMinutes+minutes<=endMinutes;
+}
+
 function testAppointmentDurationOverlapPure_() {
   function assert(name,actual,expected){if(actual!==expected)throw new Error(name+': expected '+expected+', got '+actual);}
   assert('20 minute session then 30 min start at +30',appointmentIntervalsOverlap_('11:00',20,'11:30',30),false);
@@ -6126,7 +6143,11 @@ function testAppointmentDurationOverlapPure_() {
   assert('45 minute session allows +60 start',appointmentIntervalsOverlap_('11:00',45,'12:00',30),false);
   assert('back-to-back 20 minute sessions do not overlap',appointmentIntervalsOverlap_('11:00',20,'11:20',20),false);
   assert('same start always overlaps',appointmentIntervalsOverlap_('11:00',20,'11:00',45),true);
-  return {ok:true,test:'APPOINTMENT DURATION OVERLAP PURE TEST',passed:5,noSheetRead:true,noSheetWrite:true,noBookingCreated:true,noPaymentChange:true,noTelegramSent:true};
+  assert('20 minute service fits before 14:00',appointmentFitsWithinRange_('13:30',20,'14:00'),true);
+  assert('45 minute service does not fit at 13:30 before 14:00',appointmentFitsWithinRange_('13:30',45,'14:00'),false);
+  assert('45 minute service fits at 18:00 before 19:00',appointmentFitsWithinRange_('18:00',45,'19:00'),true);
+  assert('45 minute service does not fit at 18:30 before 19:00',appointmentFitsWithinRange_('18:30',45,'19:00'),false);
+  return {ok:true,test:'APPOINTMENT DURATION OVERLAP AND WORK-RANGE PURE TEST',passed:9,noSheetRead:true,noSheetWrite:true,noBookingCreated:true,noPaymentChange:true,noTelegramSent:true};
 }
 
 function runStagingSafeSuite() {

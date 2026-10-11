@@ -2035,6 +2035,12 @@ function getAvailableSlots_(request) {
   const schedule = getScheduleForDate_(date);
   if (!schedule.active) return { ok: true, date: date, slots: [] };
 
+  const service = findServiceRecord_(
+    String(request.serviceId || ''),
+    String(request.serviceName || request.service || '')
+  );
+  const serviceDuration = service ? getServiceDurationMinutes_(service.id, service.name) : 30;
+  const serviceDurationMap = buildServiceDurationMap_();
   const blockedRows = getSheetObjects_(CONFIG.SHEETS.BLOCKED_SLOTS);
   const bookingRows = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
   const blocked = {};
@@ -2054,6 +2060,13 @@ function getAvailableSlots_(request) {
       let status = CONFIG.SLOT_STATUS.FREE;
       if (blocked[slotKey]) status = CONFIG.SLOT_STATUS.BLOCKED;
       else if (statuses[slotKey]) status = statuses[slotKey];
+      else if (
+        service &&
+        (
+          !isWithinScheduleRange_(time, serviceDuration, schedule.ranges) ||
+          hasBookingOverlap_(bookingRows, date, time, serviceDuration, '', serviceDurationMap)
+        )
+      ) status = CONFIG.SLOT_STATUS.BLOCKED;
 
       slots.push({
         date: date,
@@ -2073,6 +2086,164 @@ function getAvailableSlots_(request) {
  * Pure slot-status resolver. It only reads the supplied rows and never touches
  * Sheets, Drive, Telegram, payments, or booking records.
  */
+function buildServiceDurationMap_() {
+  var result = getServices_({}).services || [];
+  var map = {};
+  result.forEach(function(service) {
+    var duration = Number(service.duration) || 30;
+    var id = String(service.id || '').trim();
+    var name = normalizeServiceNameForOverlap_(service.name);
+    if (id) map['id:' + id] = duration;
+    if (name) map['name:' + name] = duration;
+  });
+  return map;
+}
+
+function normalizeServiceNameForOverlap_(value) {
+  var name = String(value || '');
+  if (name.normalize) name = name.normalize('NFKC');
+  return name.replace(/[\\s\\u200c\\u200d\\u200f\\u200e_-]+/g, '').toLocaleLowerCase('fa');
+}
+
+function getServiceDurationMinutes_(serviceId, serviceName, durationMap) {
+  var id = String(serviceId || '').trim();
+  var name = normalizeServiceNameForOverlap_(serviceName);
+  var duration = durationMap && id ? Number(durationMap['id:' + id]) : 0;
+  if (!(duration > 0) && durationMap && name) duration = Number(durationMap['name:' + name]);
+
+  if (!(duration > 0) && !(durationMap && (id || name))) {
+    var service = findServiceRecord_(id, String(serviceName || ''));
+    duration = service ? toNumber_(service.duration) : 0;
+  }
+  if (!(duration > 0) && serviceName) {
+    var defaults = getBuiltInServiceDefaults_(serviceName);
+    if (defaults) duration = defaults.duration;
+  }
+  return duration > 0 ? duration : 30;
+}
+
+function isWithinScheduleRange_(startTime, durationMinutes, ranges) {
+  var start = timeToMinutes_(startTime);
+  var duration = Number(durationMinutes) || 30;
+  return (ranges || []).some(function(range) {
+    var rangeStart = timeToMinutes_(range.startTime);
+    var rangeEnd = timeToMinutes_(range.endTime);
+    return start >= rangeStart && start + duration <= rangeEnd;
+  });
+}
+
+function isBlockingBookingRow_(row) {
+  var status = String(row['Appointment Status'] || '');
+  if (status === CONFIG.STATUSES.BOOKING_CONFIRMED) return true;
+  if (status !== CONFIG.STATUSES.BOOKING_PENDING) return false;
+
+  var paymentStatus = String(row['Payment Status'] || '');
+  if (
+    paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
+    paymentStatus === CONFIG.STATUSES.PAYMENT_APPROVED
+  ) return true;
+
+  var holdUntil = parseDateValue_(row['Hold Until']);
+  return !!holdUntil && holdUntil.getTime() > Date.now();
+}
+
+function intervalsOverlap_(startA, endA, startB, endB) {
+  return Number(startA) < Number(endB) && Number(startB) < Number(endA);
+}
+
+/*
+ * Shared-capacity overlap guard. Intervals are half-open [start, end), so one
+ * appointment may begin exactly when another ends. It compares all services,
+ * not just the selected category. Pure helper: no external reads or writes.
+ */
+function hasBookingOverlap_(bookingRows, targetDate, startTime, durationMinutes, excludeBookingId, durationMap) {
+  var candidateStart = timeToMinutes_(startTime);
+  var candidateEnd = candidateStart + (Number(durationMinutes) || 30);
+
+  return (bookingRows || []).some(function(row) {
+    if (excludeBookingId && String(row['Booking ID'] || '') === String(excludeBookingId)) return false;
+    if (normalizeJalaliDate_(row['Appointment Date']) !== normalizeJalaliDate_(targetDate)) return false;
+    if (!isBlockingBookingRow_(row)) return false;
+
+    var existingStartText = normalizeTime_(row['Appointment Time']);
+    if (!existingStartText) return false;
+    var existingStart = timeToMinutes_(existingStartText);
+    var existingDuration = getServiceDurationMinutes_(
+      row['Service ID'],
+      row['Service Name'],
+      durationMap
+    );
+    var existingEnd = existingStart + existingDuration;
+
+    return intervalsOverlap_(candidateStart, candidateEnd, existingStart, existingEnd);
+  });
+}
+
+/*
+ * Pure regression checks for cross-service overlap. These tests use in-memory
+ * fixtures only and do not access Sheets, payments, Drive, Telegram, or VIP.
+ */
+function testCrossServiceOverlapPure_() {
+  var date = '1405/07/19';
+  var future = new Date(Date.now() + 10 * 60 * 1000);
+  var past = new Date(Date.now() - 10 * 60 * 1000);
+  var pending = CONFIG.STATUSES.BOOKING_PENDING;
+  var confirmed = CONFIG.STATUSES.BOOKING_CONFIRMED;
+  var received = CONFIG.STATUSES.PAYMENT_RECEIVED;
+
+  function row(id, time, serviceId, serviceName, status, payment, hold) {
+    return {
+      'Booking ID': id,
+      'Appointment Date': date,
+      'Appointment Time': time,
+      'Service ID': serviceId,
+      'Service Name': serviceName,
+      'Appointment Status': status,
+      'Payment Status': payment || '',
+      'Hold Until': hold || ''
+    };
+  }
+  function assertTrue(name, value) {
+    if (!value) throw new Error(name + ': assertion failed');
+  }
+
+  var bookings = [
+    row('energy-30', '11:00', 'energy-test', 'انرژی‌خوانی تست', confirmed, '', past),
+    row('candle-20', '12:00', 'candle-test', 'شمع‌تراپی', pending, '', future),
+    row('psych-45-paid', '13:00', 'psych-test', 'سایکو‌تراپی', pending, received, past),
+    row('expired', '14:00', 'energy-test', 'انرژی‌خوانی تست', pending, '', past),
+    row('rejected', '15:00', 'energy-test', 'انرژی‌خوانی تست', CONFIG.STATUSES.BOOKING_REJECTED, received, future)
+  ];
+
+  var durationMap = {
+    'id:energy-test': 30,
+    'id:candle-test': 20,
+    'id:psych-test': 45
+  };
+  function overlap(start, duration, excludeId) {
+    return hasBookingOverlap_(bookings, date, start, duration, excludeId || '', durationMap);
+  }
+
+  assertTrue('energy booking blocks overlapping candle therapy', overlap('11:15', 20));
+  assertTrue('candle therapy blocks overlapping energy reading', overlap('12:15', 30));
+  assertTrue('psychotherapy payment proof holds its interval', overlap('13:30', 20));
+  assertTrue('back-to-back appointment is allowed', !overlap('11:30', 30));
+  assertTrue('expired unpaid hold does not block', !overlap('14:00', 20));
+  assertTrue('rejected booking does not block', !overlap('15:00', 20));
+  assertTrue('excluded booking does not block itself', !overlap('11:00', 30, 'energy-30'));
+
+  return {
+    ok: true,
+    test: 'CROSS-SERVICE OVERLAP PURE TEST',
+    passed: 7,
+    noSheetRead: true,
+    noSheetWrite: true,
+    noBookingCreated: true,
+    noPaymentChange: true,
+    noTelegramSent: true
+  };
+}
+
 function resolveBookingStatuses_(bookingRows, targetDate, excludeBookingId) {
   const statuses = {};
   (bookingRows || []).forEach(function(row) {
@@ -3705,14 +3876,24 @@ function createBooking_(request){
     var time=normalizeTime_(request.time||request.appointmentTime);
     if(!date||!time)return fail_('DATE_TIME_REQUIRED','تاریخ و ساعت الزامی است.');
     if(!isDateAvailable_(date))return fail_('DATE_NOT_AVAILABLE','این تاریخ قابل رزرو نیست.');
-    var schedule=getScheduleForDate_(date);
-    var allowed=schedule.ranges.some(function(r){return generateSlots_(r.startTime,r.endTime,r.slotDuration).indexOf(time)!==-1;});
-    if(!allowed)return fail_('SLOT_NOT_AVAILABLE','این ساعت در برنامه کاری قرار ندارد.');
-    var slotKey=buildSlotKey_(date,time);
-    if(getSlotStatus_(slotKey,date,time)!==CONFIG.SLOT_STATUS.FREE)return fail_('SLOT_UNAVAILABLE','این زمان قبلاً رزرو یا موقتاً نگه داشته شده است.');
 
     var service=findServiceRecord_(String(request.serviceId||''),String(request.serviceName||request.service||''));
     if(!service)return fail_('SERVICE_NOT_FOUND','خدمت انتخاب‌شده پیدا نشد.');
+    var serviceDuration=Number(service.duration)||30;
+    var schedule=getScheduleForDate_(date);
+    var allowed=schedule.ranges.some(function(r){
+      return generateSlots_(r.startTime,r.endTime,r.slotDuration).indexOf(time)!==-1 &&
+        isWithinScheduleRange_(time,serviceDuration,[r]);
+    });
+    if(!allowed)return fail_('SLOT_NOT_AVAILABLE','این ساعت در برنامه کاری این خدمت قرار ندارد.');
+    var slotKey=buildSlotKey_(date,time);
+    if(getSlotStatus_(slotKey,date,time)!==CONFIG.SLOT_STATUS.FREE)return fail_('SLOT_UNAVAILABLE','این زمان قبلاً رزرو یا موقتاً نگه داشته شده است.');
+    var activeBookings=getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
+    var serviceDurationMap=buildServiceDurationMap_();
+    if(hasBookingOverlap_(activeBookings,date,time,serviceDuration,'',serviceDurationMap)) {
+      return fail_('SLOT_OVERLAP','این ساعت با نوبت دیگری تداخل دارد. لطفاً ساعت دیگری انتخاب کن.');
+    }
+
     var basePrice=toNumber_(service.price);
     var discountCode=String(request.discountCode||request.vipCode||'').trim();
     var discount=validateDiscount_({
@@ -3962,7 +4143,15 @@ function findServiceRecord_(serviceId,serviceName){
     if(found)return {
       id:String(firstField_(found,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||requestedId||''),
       name:String(firstField_(found,['نام خدمت','Service Name','Name','Title','عنوان'])||requestedName||''),
-      price:toNumber_(firstField_(found,['قیمت','Price','Base Price','Original Price','مبلغ']))
+      price:toNumber_(firstField_(found,['قیمت','Price','Base Price','Original Price','مبلغ'])),
+      duration:(function(){
+        var duration=toNumber_(firstField_(found,['مدت','Duration','مدت زمان']));
+        if(!(duration>0)){
+          var defaults=getBuiltInServiceDefaults_(firstField_(found,['نام خدمت','Service Name','Name','Title','عنوان'])||requestedName);
+          if(defaults) duration=defaults.duration;
+        }
+        return duration>0?duration:(toNumber_(getSetting_('Default Slot Duration',30))||30);
+      })()
     };
   }
   return null;

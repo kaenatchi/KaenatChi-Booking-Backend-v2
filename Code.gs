@@ -2102,7 +2102,7 @@ function buildServiceDurationMap_() {
 function normalizeServiceNameForOverlap_(value) {
   var name = String(value || '');
   if (name.normalize) name = name.normalize('NFKC');
-  return name.replace(/[\\s\\u200c\\u200d\\u200f\\u200e_-]+/g, '').toLocaleLowerCase('fa');
+  return name.replace(/[\s\u200c\u200d\u200f\u200e_-]+/g, '').toLocaleLowerCase('fa');
 }
 
 function getServiceDurationMinutes_(serviceId, serviceName, durationMap) {

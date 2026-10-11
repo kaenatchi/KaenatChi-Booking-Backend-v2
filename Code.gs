@@ -610,6 +610,35 @@ function getSetting_(settingName, defaultValue) {
   return defaultValue;
 }
 
+
+/*
+ * Initial booking hold duration:
+ * - Prefer an explicit Hold Minutes value when configured.
+ * - Otherwise honor the CMS's Hold Duration Hours setting.
+ * - Fall back to 15 minutes only when neither setting exists.
+ */
+function resolveHoldDurationMinutes_(holdMinutesValue, holdHoursValue) {
+  if (holdMinutesValue !== null &&
+      holdMinutesValue !== undefined &&
+      String(holdMinutesValue).trim() !== '') {
+    return Math.max(5, toNumber_(holdMinutesValue));
+  }
+
+  if (holdHoursValue !== null &&
+      holdHoursValue !== undefined &&
+      String(holdHoursValue).trim() !== '') {
+    return Math.max(5, toNumber_(holdHoursValue) * 60);
+  }
+
+  return 15;
+}
+
+function getInitialHoldDurationMinutes_() {
+  var minutes = getSetting_('Hold Minutes', '');
+  var hours = getSetting_('Hold Duration Hours', '');
+  return resolveHoldDurationMinutes_(minutes, hours);
+}
+
 /* =====================================================
    6A. TELEGRAM NOTIFICATIONS
    ===================================================== */
@@ -3556,6 +3585,7 @@ function testBookingBackendContract() {
 
 function getServices_(request) {
   var names=['Services','services'];
+  var defaultSlotDuration=toNumber_(getSetting_('Default Slot Duration',30))||30;
   for(var i=0;i<names.length;i++){
     if(!getSpreadsheet_().getSheetByName(names[i])) continue;
     var rows=getSheetObjects_(names[i]);
@@ -3563,13 +3593,14 @@ function getServices_(request) {
       var a=firstField_(r,['Active','Is Active','فعال','وضعیت','Status']);
       return a===''||isTruthy_(a);
     }).map(function(r){
+      var duration=toNumber_(firstField_(r,['مدت','Duration','مدت زمان']));
       return {
         id:String(firstField_(r,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||''),
         name:String(firstField_(r,['نام خدمت','Service Name','Name','Title','عنوان'])||''),
         category:String(firstField_(r,['دسته','Category','Service Category'])||''),
         description:String(firstField_(r,['توضیح کوتاه','Description','Short Description','توضیحات'])||''),
         price:toNumber_(firstField_(r,['قیمت','Price','Base Price','Original Price','مبلغ'])),
-        duration:toNumber_(firstField_(r,['مدت','Duration','مدت زمان']))
+        duration:duration>0?duration:defaultSlotDuration
       };
     }).filter(function(s){return s.name;});
     return {ok:true,services:services};
@@ -3702,6 +3733,9 @@ function createBooking_(request){
     var service=findServiceRecord_(String(request.serviceId||''),String(request.serviceName||request.service||''));
     if(!service)return fail_('SERVICE_NOT_FOUND','خدمت انتخاب‌شده پیدا نشد.');
     var basePrice=toNumber_(service.price);
+    if(basePrice<=0){
+      return fail_('SERVICE_PRICE_NOT_CONFIGURED','قیمت این خدمت هنوز در سامانه تنظیم نشده است. لطفاً خدمت دیگری انتخاب کنید یا با پشتیبانی تماس بگیرید.');
+    }
     var discountCode=String(request.discountCode||request.vipCode||'').trim();
     var discount=validateDiscount_({
       price:basePrice,
@@ -3724,7 +3758,7 @@ function createBooking_(request){
       originalPrice:basePrice,discountCode:discountCode,discountType:discountCode?'VIP':'',
       discountPercent:discount.discountPercent,discountAmount:discount.discountAmount,finalPrice:discount.finalPrice,
       paymentStatus:CONFIG.STATUSES.PAYMENT_PENDING,appointmentStatus:CONFIG.STATUSES.BOOKING_PENDING,
-      trackingCode:generateTrackingCode_(),holdUntil:new Date(Date.now()+Math.max(5,toNumber_(getSetting_('Hold Minutes',15)))*60000)
+      trackingCode:generateTrackingCode_(),holdUntil:new Date(Date.now()+getInitialHoldDurationMinutes_()*60000)
     };
     if(discountCode&&discount.valid&&discount.vipCustomerId&&!booking.customerId){
       booking.customerId=discount.vipCustomerId;

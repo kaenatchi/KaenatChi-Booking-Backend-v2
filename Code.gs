@@ -2032,6 +2032,9 @@ function getAvailableSlots_(request) {
     };
   }
 
+  if (!isTomorrowBookingDate_(date)) {
+    return { ok: true, date: date, slots: [], error: 'ONLY_TOMORROW_ALLOWED' };
+  }
   if (!isDateAvailable_(date)) return { ok: true, date: date, slots: [] };
 
   const schedule = getScheduleForDate_(date);
@@ -2040,8 +2043,11 @@ function getAvailableSlots_(request) {
   const requestedIds = Array.isArray(request.serviceIds)
     ? request.serviceIds.map(function(id) { return String(id || '').trim(); }).filter(Boolean)
     : [];
-  const requestedServices = requestedIds.map(function(id) {
-    return findServiceRecord_(id, '');
+  const requestedNames = Array.isArray(request.serviceNames)
+    ? request.serviceNames.map(function(name) { return String(name || '').trim(); })
+    : [];
+  const requestedServices = requestedIds.map(function(id, index) {
+    return findServiceRecord_(id, requestedNames[index] || '');
   });
   const isMultiEnergy = requestedIds.length > 0 &&
     requestedServices.length === requestedIds.length &&
@@ -2657,6 +2663,12 @@ function isDateAvailable_(jalaliDate) {
     getScheduleForDate_(jalaliDate);
 
   return schedule.active;
+}
+
+function isTomorrowBookingDate_(jalaliDate) {
+  const today = getTodayJalali_();
+  if (!today) return false;
+  return normalizeJalaliDate_(jalaliDate) === normalizeJalaliDate_(addJalaliDays_(today, 1));
 }
 
 
@@ -3948,13 +3960,17 @@ function createBooking_(request){
     var date=normalizeJalaliDate_(request.date||request.appointmentDate);
     var time=normalizeTime_(request.time||request.appointmentTime);
     if(!date||!time)return fail_('DATE_TIME_REQUIRED','تاریخ و ساعت الزامی است.');
+    if(!isTomorrowBookingDate_(date))return fail_('ONLY_TOMORROW_ALLOWED','فقط امکان ثبت درخواست نوبت برای فردا وجود دارد.');
     if(!isDateAvailable_(date))return fail_('DATE_NOT_AVAILABLE','این تاریخ قابل رزرو نیست.');
 
     var requestedIds=Array.isArray(request.serviceIds)
       ? request.serviceIds.map(function(id){return String(id||'').trim();}).filter(Boolean)
       : [];
+    var requestedNames=Array.isArray(request.serviceNames)
+      ? request.serviceNames.map(function(name){return String(name||'').trim();})
+      : [];
     var services=requestedIds.length
-      ? requestedIds.map(function(id){return findServiceRecord_(id,'');})
+      ? requestedIds.map(function(id,index){return findServiceRecord_(id,requestedNames[index]||'');})
       : [findServiceRecord_(String(request.serviceId||''),String(request.serviceName||request.service||''))];
     if(!services.length||services.some(function(item){return !item;}))return fail_('SERVICE_NOT_FOUND','یکی از خدمات انتخاب‌شده پیدا نشد.');
     var isEnergyBooking=services.every(isEnergyServiceRecord_);
@@ -4230,6 +4246,7 @@ function findServiceRecord_(serviceId,serviceName){
     if(found)return {
       id:String(firstField_(found,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||requestedId||''),
       name:String(firstField_(found,['نام خدمت','Service Name','Name','Title','عنوان'])||requestedName||''),
+      category:String(firstField_(found,['دسته','Category','Service Category'])||''),
       price:toNumber_(firstField_(found,['قیمت','Price','Base Price','Original Price','مبلغ'])),
       duration:(function(){
         var duration=toNumber_(firstField_(found,['مدت','Duration','مدت زمان']));

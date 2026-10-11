@@ -6095,10 +6095,8 @@ function getBlockedDatesDiagnostic_() {
 
 
 function getBlockedDatesSafe_() {
-  return {
-    ok: true,
-    blockedDates: []
-  };
+  // Reuse the existing BlockedDates reader; do not change closure rules.
+  return getBlockedDates_();
 }
 
 

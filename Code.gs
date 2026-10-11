@@ -2244,7 +2244,8 @@ function isDateAvailable_(jalaliDate) {
 function getSlotStatus_(
   slotKey,
   jalaliDate,
-  time
+  time,
+  excludeBookingId
 ) {
   if (isBlockedSlot_(jalaliDate, time)) {
     return CONFIG.SLOT_STATUS.BLOCKED;
@@ -2259,6 +2260,7 @@ function getSlotStatus_(
 
   for (let i = 0; i < bookings.length; i++) {
     const booking = bookings[i];
+    if (excludeBookingId && String(booking['Booking ID'] || '') === String(excludeBookingId)) continue;
     const rowDate = normalizeJalaliDate_(booking['Appointment Date']);
     const rowTime = normalizeTime_(booking['Appointment Time']);
 
@@ -3643,9 +3645,10 @@ function approveBooking_(request){
     if(ps!==CONFIG.STATUSES.PAYMENT_RECEIVED&&ps!==CONFIG.STATUSES.PAYMENT_APPROVED)return fail_('PAYMENT_NOT_READY','ابتدا باید فیش پرداخت دریافت شود.');
     var date=normalizeJalaliDate_(b['Appointment Date']),time=normalizeTime_(b['Appointment Time']);
     var slotKey=String(b['Slot Key']||buildSlotKey_(date,time));
-    var status=getSlotStatus_(slotKey,date,time);
+    var status=getSlotStatus_(slotKey,date,time,b['Booking ID']);
     if(status===CONFIG.SLOT_STATUS.CONFIRMED)return fail_('SLOT_ALREADY_CONFIRMED','این زمان قبلاً تأیید شده است.');
     if(status===CONFIG.SLOT_STATUS.BLOCKED)return fail_('SLOT_BLOCKED','این زمان مسدود شده است.');
+    if(status!==CONFIG.SLOT_STATUS.FREE)return fail_('SLOT_UNAVAILABLE','این زمان توسط نوبت دیگری نگه داشته شده است.');
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,'Appointment Status':CONFIG.STATUSES.BOOKING_CONFIRMED,
       'Approved At':new Date(),'Approved By':String(request.adminId||request.admin||'admin'),'Hold Until':''

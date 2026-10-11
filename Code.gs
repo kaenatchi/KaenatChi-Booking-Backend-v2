@@ -2120,18 +2120,21 @@ function resolveBookingStatuses_(bookingRows, targetDate, excludeBookingId) {
  * Pure helper: no Sheets, Drive, Telegram, payment, or booking writes.
  */
 function buildBookedSlotsFromRows_(bookingRows) {
-  const rows = bookingRows || [];
-  const dateSet = {};
+  const rowsByDate = {};
 
-  rows.forEach(function(row) {
+  (bookingRows || []).forEach(function(row) {
     const date = normalizeJalaliDate_(row['Appointment Date']);
     const time = normalizeTime_(row['Appointment Time']);
-    if (date && time) dateSet[date] = true;
+    if (!date || !time) return;
+    if (!rowsByDate[date]) rowsByDate[date] = [];
+    rowsByDate[date].push(row);
   });
 
   const bookedSlots = [];
-  Object.keys(dateSet).sort().forEach(function(date) {
-    const statuses = resolveBookingStatuses_(rows, date);
+  Object.keys(rowsByDate).sort().forEach(function(date) {
+    // Resolve only rows for this date so processing scales with the booking
+    // history instead of rescanning every row once per distinct date.
+    const statuses = resolveBookingStatuses_(rowsByDate[date], date);
     Object.keys(statuses).sort().forEach(function(slotKey) {
       const slotStatus = statuses[slotKey];
       if (

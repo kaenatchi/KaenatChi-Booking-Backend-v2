@@ -2032,14 +2032,27 @@ function getAvailableSlots_(request) {
     };
   }
 
+  if (!isDateAvailable_(date)) return { ok: true, date: date, slots: [] };
+
   const schedule = getScheduleForDate_(date);
   if (!schedule.active) return { ok: true, date: date, slots: [] };
 
-  const service = findServiceRecord_(
-    String(request.serviceId || ''),
-    String(request.serviceName || request.service || '')
-  );
-  const serviceDuration = service ? getServiceDurationMinutes_(service.id, service.name) : 30;
+  const requestedIds = Array.isArray(request.serviceIds)
+    ? request.serviceIds.map(function(id) { return String(id || '').trim(); }).filter(Boolean)
+    : [];
+  const requestedServices = requestedIds.map(function(id) {
+    return findServiceRecord_(id, '');
+  });
+  const isMultiEnergy = requestedIds.length > 0 &&
+    requestedServices.length === requestedIds.length &&
+    requestedServices.every(isEnergyServiceRecord_);
+  const service = isMultiEnergy
+    ? requestedServices[0]
+    : findServiceRecord_(String(request.serviceId || ''), String(request.serviceName || request.service || ''));
+  const isEnergyBooking = isMultiEnergy || isEnergyServiceRecord_(service);
+  const serviceDuration = isEnergyBooking
+    ? 60
+    : (service ? getServiceDurationMinutes_(service.id, service.name) : 30);
   const serviceDurationMap = buildServiceDurationMap_();
   const blockedRows = getSheetObjects_(CONFIG.SHEETS.BLOCKED_SLOTS);
   const bookingRows = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
@@ -2054,31 +2067,84 @@ function getAvailableSlots_(request) {
 
   const statuses = resolveBookingStatuses_(bookingRows, date);
   const slots = [];
-  schedule.ranges.forEach(function(range) {
-    generateSlots_(range.startTime, range.endTime, range.slotDuration).forEach(function(time) {
-      const slotKey = buildSlotKey_(date, time);
-      let status = CONFIG.SLOT_STATUS.FREE;
-      if (blocked[slotKey]) status = CONFIG.SLOT_STATUS.BLOCKED;
-      else if (statuses[slotKey]) status = statuses[slotKey];
-      else if (
-        service &&
-        (
-          !isWithinScheduleRange_(time, serviceDuration, schedule.ranges) ||
-          hasBookingOverlap_(bookingRows, date, time, serviceDuration, '', serviceDurationMap)
-        )
-      ) status = CONFIG.SLOT_STATUS.BLOCKED;
+  let times = [];
 
-      slots.push({
-        date: date,
-        time: time,
-        slotKey: slotKey,
-        status: status,
-        available: status === CONFIG.SLOT_STATUS.FREE
-      });
+  if (isEnergyBooking) {
+    times = getEnergyReadingStartTimes_(date, schedule);
+  } else {
+    schedule.ranges.forEach(function(range) {
+      times = times.concat(generateSlots_(range.startTime, range.endTime, range.slotDuration));
+    });
+  }
+
+  Array.from(new Set(times)).sort().forEach(function(time) {
+    const slotKey = buildSlotKey_(date, time);
+    let status = CONFIG.SLOT_STATUS.FREE;
+    if (blocked[slotKey]) status = CONFIG.SLOT_STATUS.BLOCKED;
+    else if (statuses[slotKey]) status = statuses[slotKey];
+    else if (
+      service &&
+      (
+        (!isEnergyBooking && !isWithinScheduleRange_(time, serviceDuration, schedule.ranges)) ||
+        hasBookingOverlap_(bookingRows, date, time, serviceDuration, '', serviceDurationMap)
+      )
+    ) status = CONFIG.SLOT_STATUS.BLOCKED;
+
+    slots.push({
+      date: date,
+      time: time,
+      slotKey: slotKey,
+      status: status,
+      available: status === CONFIG.SLOT_STATUS.FREE
     });
   });
 
   return { ok: true, date: date, slots: slots };
+}
+
+/* Energy-reading appointments use one shared 60-minute booking, regardless
+ * of whether one or several energy-reading services were selected. The CMS
+ * still controls whether each weekday/shift is active and all closure data.
+ */
+function isEnergyServiceRecord_(service) {
+  if (!service) return false;
+  var category = String(service.category || '').toLowerCase()
+    .replace(/[\s\u200c\u200d_-]+/g, '');
+  return category.indexOf('energy') !== -1 || category.indexOf('انرژی') !== -1;
+}
+
+function getEnergyReadingStartTimes_(date, schedule) {
+  var day = normalizePersianDayName_(getPersianDayNameFromJalali_(date));
+  var morning = [];
+  var evening = [];
+
+  if (day === normalizePersianDayName_('شنبه') ||
+      day === normalizePersianDayName_('دوشنبه') ||
+      day === normalizePersianDayName_('چهارشنبه') ||
+      day === normalizePersianDayName_('پنجشنبه')) {
+    morning = ['11:00', '12:00', '13:00', '14:00'];
+  } else if (day === normalizePersianDayName_('یکشنبه') ||
+             day === normalizePersianDayName_('سه‌شنبه')) {
+    morning = ['11:30', '12:30', '13:30'];
+  }
+
+  if (day === normalizePersianDayName_('شنبه') ||
+      day === normalizePersianDayName_('دوشنبه') ||
+      day === normalizePersianDayName_('چهارشنبه')) {
+    evening = ['16:00', '17:00', '18:00'];
+  } else if (day === normalizePersianDayName_('یکشنبه') ||
+             day === normalizePersianDayName_('سه‌شنبه')) {
+    evening = ['16:30', '17:30', '18:30'];
+  }
+
+  var hasMorning = (schedule.ranges || []).some(function(range) {
+    return timeToMinutes_(range.startTime) < 15 * 60;
+  });
+  var hasEvening = (schedule.ranges || []).some(function(range) {
+    return timeToMinutes_(range.startTime) >= 15 * 60;
+  });
+
+  return (hasMorning ? morning : []).concat(hasEvening ? evening : []);
 }
 
 
@@ -2108,11 +2174,18 @@ function normalizeServiceNameForOverlap_(value) {
 function getServiceDurationMinutes_(serviceId, serviceName, durationMap) {
   var id = String(serviceId || '').trim();
   var name = normalizeServiceNameForOverlap_(serviceName);
+
+  if (id.indexOf(',') !== -1 || String(serviceName || '').indexOf('،') !== -1) {
+    return 60;
+  }
+
+  var service = findServiceRecord_(id, String(serviceName || ''));
+  if (isEnergyServiceRecord_(service)) return 60;
+
   var duration = durationMap && id ? Number(durationMap['id:' + id]) : 0;
   if (!(duration > 0) && durationMap && name) duration = Number(durationMap['name:' + name]);
 
   if (!(duration > 0) && !(durationMap && (id || name))) {
-    var service = findServiceRecord_(id, String(serviceName || ''));
     duration = service ? toNumber_(service.duration) : 0;
   }
   if (!(duration > 0) && serviceName) {
@@ -3877,14 +3950,28 @@ function createBooking_(request){
     if(!date||!time)return fail_('DATE_TIME_REQUIRED','تاریخ و ساعت الزامی است.');
     if(!isDateAvailable_(date))return fail_('DATE_NOT_AVAILABLE','این تاریخ قابل رزرو نیست.');
 
-    var service=findServiceRecord_(String(request.serviceId||''),String(request.serviceName||request.service||''));
-    if(!service)return fail_('SERVICE_NOT_FOUND','خدمت انتخاب‌شده پیدا نشد.');
-    var serviceDuration=Number(service.duration)||30;
+    var requestedIds=Array.isArray(request.serviceIds)
+      ? request.serviceIds.map(function(id){return String(id||'').trim();}).filter(Boolean)
+      : [];
+    var services=requestedIds.length
+      ? requestedIds.map(function(id){return findServiceRecord_(id,'');})
+      : [findServiceRecord_(String(request.serviceId||''),String(request.serviceName||request.service||''))];
+    if(!services.length||services.some(function(item){return !item;}))return fail_('SERVICE_NOT_FOUND','یکی از خدمات انتخاب‌شده پیدا نشد.');
+    var isEnergyBooking=services.every(isEnergyServiceRecord_);
+    if(services.length>1&&!isEnergyBooking)return fail_('MULTI_SERVICE_NOT_ALLOWED','انتخاب چند خدمت فقط برای انرژی‌خوانی مجاز است.');
+    var service=services[0];
+    var serviceDuration=isEnergyBooking?60:(Number(service.duration)||30);
+    var serviceIds=services.map(function(item){return String(item.id||'');});
+    var serviceNames=services.map(function(item){return String(item.name||'');});
+    var storedServiceId=serviceIds.join(',');
+    var storedServiceName=serviceNames.join('، ');
     var schedule=getScheduleForDate_(date);
-    var allowed=schedule.ranges.some(function(r){
-      return generateSlots_(r.startTime,r.endTime,r.slotDuration).indexOf(time)!==-1 &&
-        isWithinScheduleRange_(time,serviceDuration,[r]);
-    });
+    var allowed=isEnergyBooking
+      ? getEnergyReadingStartTimes_(date,schedule).indexOf(time)!==-1
+      : schedule.ranges.some(function(r){
+          return generateSlots_(r.startTime,r.endTime,r.slotDuration).indexOf(time)!==-1 &&
+            isWithinScheduleRange_(time,serviceDuration,[r]);
+        });
     if(!allowed)return fail_('SLOT_NOT_AVAILABLE','این ساعت در برنامه کاری این خدمت قرار ندارد.');
     var slotKey=buildSlotKey_(date,time);
     if(getSlotStatus_(slotKey,date,time)!==CONFIG.SLOT_STATUS.FREE)return fail_('SLOT_UNAVAILABLE','این زمان قبلاً رزرو یا موقتاً نگه داشته شده است.');
@@ -3894,7 +3981,7 @@ function createBooking_(request){
       return fail_('SLOT_OVERLAP','این ساعت با نوبت دیگری تداخل دارد. لطفاً ساعت دیگری انتخاب کن.');
     }
 
-    var basePrice=toNumber_(service.price);
+    var basePrice=services.reduce(function(total,item){return total+toNumber_(item.price);},0);
     var discountCode=String(request.discountCode||request.vipCode||'').trim();
     var discount=validateDiscount_({
       price:basePrice,
@@ -3912,8 +3999,8 @@ function createBooking_(request){
       telegramLastName:String(request.telegramLastName||'').trim(),
       customerId:String(request.customerId||''),
       firstName:String(request.firstName||'').trim(),lastName:String(request.lastName||'').trim(),
-      mobile:String(request.mobile||request.phone||'').trim(),serviceId:String(service.id||request.serviceId||''),
-      serviceName:String(service.name),appointmentDate:date,appointmentTime:time,slotKey:slotKey,
+      mobile:String(request.mobile||request.phone||'').trim(),serviceId:storedServiceId,
+      serviceName:storedServiceName,appointmentDate:date,appointmentTime:time,slotKey:slotKey,
       originalPrice:basePrice,discountCode:discountCode,discountType:discountCode?'VIP':'',
       discountPercent:discount.discountPercent,discountAmount:discount.discountAmount,finalPrice:discount.finalPrice,
       paymentStatus:CONFIG.STATUSES.PAYMENT_PENDING,appointmentStatus:CONFIG.STATUSES.BOOKING_PENDING,

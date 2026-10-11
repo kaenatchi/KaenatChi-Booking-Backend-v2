@@ -639,6 +639,36 @@ function getInitialHoldDurationMinutes_() {
   return resolveHoldDurationMinutes_(minutes, hours);
 }
 
+/* Pure configuration test: no spreadsheet, booking, payment, Drive or Telegram access. */
+function testHoldDurationResolverPure_() {
+  var checks = [
+    {name:'explicit minutes take priority',actual:resolveHoldDurationMinutes_(20,2),expected:20},
+    {name:'hours convert to minutes',actual:resolveHoldDurationMinutes_('',2),expected:120},
+    {name:'missing values use 15-minute fallback',actual:resolveHoldDurationMinutes_('',''),expected:15},
+    {name:'minimum duration is enforced',actual:resolveHoldDurationMinutes_(1,''),expected:5}
+  ];
+  var failed=checks.filter(function(c){return c.actual!==c.expected;});
+  return {
+    ok:failed.length===0,
+    test:'HOLD DURATION RESOLVER PURE TEST',
+    passed:checks.length-failed.length,
+    total:checks.length,
+    failed:failed,
+    noSheetRead:true,
+    noSheetWrite:true,
+    noBookingCreated:true,
+    noPaymentChange:true,
+    noTelegramSent:true
+  };
+}
+
+function runHoldDurationResolverTest() {
+  var result=testHoldDurationResolverPure_();
+  Logger.log(JSON.stringify(result,null,2));
+  if(!result||result.ok!==true) throw new Error('Hold duration resolver test failed');
+  return result;
+}
+
 /* =====================================================
    6A. TELEGRAM NOTIFICATIONS
    ===================================================== */

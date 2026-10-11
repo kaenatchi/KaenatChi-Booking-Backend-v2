@@ -3551,7 +3551,7 @@ function testBookingBackendContract() {
 function getBuiltInServiceDefaults_(serviceName) {
   var name=String(serviceName||'');
   if(name.normalize) name=name.normalize('NFKC');
-  name=name.replace(/[\\s\\u200c\\u200f\\u200e_-]+/g,'');
+  name=name.replace(/[\s\u200c\u200f\u200e_-]+/g,'');
   if(name.indexOf('شمع')===0 && name.indexOf('تراپی')!==-1) return {price:500000,duration:20};
   if(name.indexOf('سایکو')===0 && name.indexOf('تراپی')!==-1) return {price:700000,duration:45};
   return null;

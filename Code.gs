@@ -3641,9 +3641,11 @@ function approveBooking_(request){
   return withBookingLock_(function(){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
     if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+    if(String(b['Appointment Status']||'')!==CONFIG.STATUSES.BOOKING_PENDING)return fail_('BOOKING_NOT_PENDING','این نوبت در وضعیت قابل تأیید نیست.');
     var ps=String(b['Payment Status']||'');
     if(ps!==CONFIG.STATUSES.PAYMENT_RECEIVED&&ps!==CONFIG.STATUSES.PAYMENT_APPROVED)return fail_('PAYMENT_NOT_READY','ابتدا باید فیش پرداخت دریافت شود.');
     var date=normalizeJalaliDate_(b['Appointment Date']),time=normalizeTime_(b['Appointment Time']);
+    if(!date||!time)return fail_('INVALID_BOOKING_SLOT','تاریخ یا ساعت این نوبت معتبر نیست.');
     var slotKey=String(b['Slot Key']||buildSlotKey_(date,time));
     var status=getSlotStatus_(slotKey,date,time,b['Booking ID']);
     if(status===CONFIG.SLOT_STATUS.CONFIRMED)return fail_('SLOT_ALREADY_CONFIRMED','این زمان قبلاً تأیید شده است.');

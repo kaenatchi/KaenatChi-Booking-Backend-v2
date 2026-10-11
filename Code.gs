@@ -3641,12 +3641,11 @@ function testBookingBackendContract() {
    ===================================================== */
 
 function getBuiltInServiceDefaults_(serviceName) {
-  var name=String(serviceName||'').replace(/\\s+/g,'').replace(/[‌]/g,'');
-  if(name==='شمع‌تراپی'||name==='شمع تراپی') return {price:500000,duration:20};
-  if(name==='سایکو‌تراپی'||name==='سایکوتراپی') return {price:700000,duration:45};
+  var name=String(serviceName||'').replace(/\s+/g,'').replace(/[‌]/g,'');
+  if(name==='شماتراپی') return {price:500000,duration:20};
+  if(name==='سایکوتراپی') return {price:700000,duration:45};
   return null;
 }
-
 function getServices_(request) {
   var names=['Services','services'];
   var defaultSlotDuration=toNumber_(getSetting_('Default Slot Duration',30))||30;

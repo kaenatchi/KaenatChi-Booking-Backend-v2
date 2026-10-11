@@ -3827,10 +3827,46 @@ function approveBooking_(request){
   });
 }
 
+function isRejectableBookingStatus_(status) {
+  return String(status || '') === CONFIG.STATUSES.BOOKING_PENDING;
+}
+
+/*
+ * Pure guard regression test. This helper never reads or writes external data.
+ */
+function testRejectBookingGuardPure_() {
+  function assertTrue(name, condition) {
+    if (!condition) throw new Error(name + ': assertion failed');
+  }
+
+  assertTrue('pending booking may be rejected',
+    isRejectableBookingStatus_(CONFIG.STATUSES.BOOKING_PENDING));
+  assertTrue('confirmed booking cannot be rejected',
+    !isRejectableBookingStatus_(CONFIG.STATUSES.BOOKING_CONFIRMED));
+  assertTrue('already rejected booking cannot be rejected again',
+    !isRejectableBookingStatus_(CONFIG.STATUSES.BOOKING_REJECTED));
+  assertTrue('missing status cannot be rejected',
+    !isRejectableBookingStatus_(''));
+
+  return {
+    ok: true,
+    test: 'REJECT BOOKING STATUS GUARD PURE TEST',
+    passed: 4,
+    noSheetRead: true,
+    noSheetWrite: true,
+    noBookingCreated: true,
+    noPaymentChange: true,
+    noTelegramSent: true
+  };
+}
+
 function rejectBooking_(request){
   return withBookingLock_(function(){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
     if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+    if(!isRejectableBookingStatus_(b['Appointment Status'])) {
+      return fail_('BOOKING_NOT_PENDING','فقط نوبت‌های در انتظار بررسی قابل رد هستند.');
+    }
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
       'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),

@@ -2119,6 +2119,7 @@ function getAvailableSlots_(request) {
       let status = CONFIG.SLOT_STATUS.FREE;
       if (blocked[slotKey]) status = CONFIG.SLOT_STATUS.BLOCKED;
       else if (statuses[slotKey]) status = statuses[slotKey];
+      else if (isAppointmentTimeConflicting_(date,time,range.slotDuration,bookingRows,'')) status = CONFIG.SLOT_STATUS.HELD;
 
       slots.push({
         date: date,
@@ -2484,6 +2485,30 @@ function isDateAvailable_(jalaliDate) {
 /* =====================================================
    14. SLOT STATUS
    ===================================================== */
+
+function appointmentIntervalsOverlap_(startA, durationA, startB, durationB) {
+  var a=timeToMinutes_(normalizeTime_(startA));
+  var b=timeToMinutes_(normalizeTime_(startB));
+  if(!isFinite(a)||!isFinite(b)) return false;
+  return a < b + Math.max(1,Number(durationB)||30) &&
+         b < a + Math.max(1,Number(durationA)||30);
+}
+
+function isAppointmentTimeConflicting_(date, time, duration, bookingRows, excludeBookingId) {
+  var statuses=resolveBookingStatuses_(bookingRows,date,excludeBookingId);
+  var candidateDuration=Math.max(1,Number(duration)||30);
+  return (bookingRows||[]).some(function(row){
+    var rowDate=normalizeJalaliDate_(row['Appointment Date']);
+    var rowTime=normalizeTime_(row['Appointment Time']);
+    if(rowDate!==date||!rowTime) return false;
+    if(excludeBookingId&&String(row['Booking ID']||'')===String(excludeBookingId)) return false;
+    var key=buildSlotKey_(date,rowTime);
+    if(!statuses[key]) return false;
+    var existingService=findServiceRecord_(String(row['Service ID']||''),String(row['Service Name']||''));
+    var existingDuration=existingService&&existingService.duration?existingService.duration:(toNumber_(getSetting_('Default Slot Duration',30))||30);
+    return appointmentIntervalsOverlap_(time,candidateDuration,rowTime,existingDuration);
+  });
+}
 
 function getSlotStatus_(
   slotKey,
@@ -3613,6 +3638,13 @@ function testBookingBackendContract() {
    PHASE 2 - BOOKING CORE
    ===================================================== */
 
+function getBuiltInServiceDefaults_(serviceName) {
+  var name=String(serviceName||'').replace(/\\s+/g,'').replace(/[‌]/g,'');
+  if(name==='شمع‌تراپی'||name==='شمع تراپی') return {price:500000,duration:20};
+  if(name==='سایکو‌تراپی'||name==='سایکوتراپی') return {price:700000,duration:45};
+  return null;
+}
+
 function getServices_(request) {
   var names=['Services','services'];
   var defaultSlotDuration=toNumber_(getSetting_('Default Slot Duration',30))||30;
@@ -3623,13 +3655,20 @@ function getServices_(request) {
       var a=firstField_(r,['Active','Is Active','فعال','وضعیت','Status']);
       return a===''||isTruthy_(a);
     }).map(function(r){
+      var name=String(firstField_(r,['نام خدمت','Service Name','Name','Title','عنوان'])||'');
       var duration=toNumber_(firstField_(r,['مدت','Duration','مدت زمان']));
+      var price=toNumber_(firstField_(r,['قیمت','Price','Base Price','Original Price','مبلغ']));
+      var defaults=getBuiltInServiceDefaults_(name);
+      if(defaults){
+        if(!(price>0)) price=defaults.price;
+        if(!(duration>0)) duration=defaults.duration;
+      }
       return {
         id:String(firstField_(r,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||''),
-        name:String(firstField_(r,['نام خدمت','Service Name','Name','Title','عنوان'])||''),
+        name:name,
         category:String(firstField_(r,['دسته','Category','Service Category'])||''),
         description:String(firstField_(r,['توضیح کوتاه','Description','Short Description','توضیحات'])||''),
-        price:toNumber_(firstField_(r,['قیمت','Price','Base Price','Original Price','مبلغ'])),
+        price:price,
         duration:duration>0?duration:defaultSlotDuration
       };
     }).filter(function(s){return s.name;});
@@ -3758,10 +3797,15 @@ function createBooking_(request){
     var allowed=schedule.ranges.some(function(r){return generateSlots_(r.startTime,r.endTime,r.slotDuration).indexOf(time)!==-1;});
     if(!allowed)return fail_('SLOT_NOT_AVAILABLE','این ساعت در برنامه کاری قرار ندارد.');
     var slotKey=buildSlotKey_(date,time);
-    if(getSlotStatus_(slotKey,date,time)!==CONFIG.SLOT_STATUS.FREE)return fail_('SLOT_UNAVAILABLE','این زمان قبلاً رزرو یا موقتاً نگه داشته شده است.');
 
     var service=findServiceRecord_(String(request.serviceId||''),String(request.serviceName||request.service||''));
     if(!service)return fail_('SERVICE_NOT_FOUND','خدمت انتخاب‌شده پیدا نشد.');
+    if(isBlockedSlot_(date,time))return fail_('SLOT_UNAVAILABLE','این زمان مسدود است.');
+    var currentBookings=getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
+    var exactStatus=resolveBookingStatuses_(currentBookings,date)[slotKey]||CONFIG.SLOT_STATUS.FREE;
+    if(exactStatus!==CONFIG.SLOT_STATUS.FREE || isAppointmentTimeConflicting_(date,time,service.duration,currentBookings,'')) {
+      return fail_('SLOT_UNAVAILABLE','این زمان با نوبت دیگری تداخل دارد یا قبلاً رزرو شده است.');
+    }
     var basePrice=toNumber_(service.price);
     if(basePrice<=0){
       return fail_('SERVICE_PRICE_NOT_CONFIGURED','قیمت این خدمت هنوز در سامانه تنظیم نشده است. لطفاً خدمت دیگری انتخاب کنید یا با پشتیبانی تماس بگیرید.');
@@ -4011,11 +4055,22 @@ function findServiceRecord_(serviceId,serviceName){
       });
     }
 
-    if(found)return {
-      id:String(firstField_(found,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||requestedId||''),
-      name:String(firstField_(found,['نام خدمت','Service Name','Name','Title','عنوان'])||requestedName||''),
-      price:toNumber_(firstField_(found,['قیمت','Price','Base Price','Original Price','مبلغ']))
-    };
+    if(found){
+      var foundName=String(firstField_(found,['نام خدمت','Service Name','Name','Title','عنوان'])||requestedName||'');
+      var foundPrice=toNumber_(firstField_(found,['قیمت','Price','Base Price','Original Price','مبلغ']));
+      var foundDuration=toNumber_(firstField_(found,['مدت','Duration','مدت زمان']));
+      var defaults=getBuiltInServiceDefaults_(foundName);
+      if(defaults){
+        if(!(foundPrice>0)) foundPrice=defaults.price;
+        if(!(foundDuration>0)) foundDuration=defaults.duration;
+      }
+      return {
+        id:String(firstField_(found,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||requestedId||''),
+        name:foundName,
+        price:foundPrice,
+        duration:foundDuration>0?foundDuration:(toNumber_(getSetting_('Default Slot Duration',30))||30)
+      };
+    }
   }
   return null;
 }
@@ -6062,6 +6117,16 @@ function testAppointmentReminderDiagnostic() {
  * Read-only CMS contract/services/settings checks plus pure in-memory logic tests.
  * Does NOT create bookings, change payments, write to Sheets/Drive, or send Telegram.
  */
+function testAppointmentDurationOverlapPure_() {
+  function assert(name,actual,expected){if(actual!==expected)throw new Error(name+': expected '+expected+', got '+actual);}
+  assert('20 minute session then 30 min start at +30',appointmentIntervalsOverlap_('11:00',20,'11:30',30),false);
+  assert('45 minute session overlaps +30 start',appointmentIntervalsOverlap_('11:00',45,'11:30',30),true);
+  assert('45 minute session allows +60 start',appointmentIntervalsOverlap_('11:00',45,'12:00',30),false);
+  assert('back-to-back 20 minute sessions do not overlap',appointmentIntervalsOverlap_('11:00',20,'11:20',20),false);
+  assert('same start always overlaps',appointmentIntervalsOverlap_('11:00',20,'11:00',45),true);
+  return {ok:true,test:'APPOINTMENT DURATION OVERLAP PURE TEST',passed:5,noSheetRead:true,noSheetWrite:true,noBookingCreated:true,noPaymentChange:true,noTelegramSent:true};
+}
+
 function runStagingSafeSuite() {
   var report = {
     test: 'KAENATCHI STAGING SAFE SUITE',
@@ -6091,13 +6156,22 @@ function runStagingSafeSuite() {
     report.checks.rejectGuardPure = testRejectBookingGuardPure_();
 
     var servicesResult = getServices_({});
+    var therapyServices=(servicesResult && servicesResult.services ? servicesResult.services : []).filter(function(s){
+      return String(s.name).indexOf('شمع')!==-1 || String(s.name).indexOf('سایکو')!==-1;
+    });
+    var therapyChecks=therapyServices.map(function(s){
+      var expected=String(s.name).indexOf('شمع')!==-1?{price:500000,duration:20}:{price:700000,duration:45};
+      return {name:s.name,price:s.price,duration:s.duration,ok:Number(s.price)===expected.price&&Number(s.duration)===expected.duration};
+    });
     report.checks.servicesRead = {
-      ok: !!(servicesResult && servicesResult.ok),
+      ok: !!(servicesResult && servicesResult.ok) && therapyChecks.length===2 && therapyChecks.every(function(t){return t.ok;}),
       count: servicesResult && servicesResult.services ? servicesResult.services.length : 0,
       zeroPriceServices: servicesResult && servicesResult.services
         ? servicesResult.services.filter(function(s) { return !(Number(s.price) > 0); }).map(function(s) { return s.name; })
-        : []
+        : [],
+      therapyChecks: therapyChecks
     };
+    report.checks.durationOverlapPure = testAppointmentDurationOverlapPure_();
 
     var settingsResult = getBookingSettings_();
     report.checks.bookingSettingsRead = {
@@ -6112,6 +6186,7 @@ function runStagingSafeSuite() {
       report.checks.bookedSlotsFeedPure,
       report.checks.rejectGuardPure,
       report.checks.servicesRead,
+      report.checks.durationOverlapPure,
       report.checks.bookingSettingsRead
     ];
 

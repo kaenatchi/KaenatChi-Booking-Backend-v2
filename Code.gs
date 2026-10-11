@@ -2128,7 +2128,7 @@ function getEnergyReadingStartTimes_(date, schedule) {
       day === normalizePersianDayName_('دوشنبه') ||
       day === normalizePersianDayName_('چهارشنبه') ||
       day === normalizePersianDayName_('پنجشنبه')) {
-    morning = ['11:00', '12:00', '13:00', '14:00'];
+    morning = ['11:00', '12:00', '13:00'];
   } else if (day === normalizePersianDayName_('یکشنبه') ||
              day === normalizePersianDayName_('سه‌شنبه')) {
     morning = ['11:30', '12:30', '13:30'];

@@ -3642,8 +3642,9 @@ function testBookingBackendContract() {
 
 function getBuiltInServiceDefaults_(serviceName) {
   var name=String(serviceName||'').replace(/\s+/g,'').replace(/[‌]/g,'');
-  if(name==='شماتراپی') return {price:500000,duration:20};
-  if(name==='سایکوتراپی') return {price:700000,duration:45};
+  // Match canonical Persian service names robustly, including CMS spacing variants.
+  if(name.indexOf('شمع')===0 && name.indexOf('تراپی')!==-1) return {price:500000,duration:20};
+  if(name.indexOf('سایکو')===0 && name.indexOf('تراپی')!==-1) return {price:700000,duration:45};
   return null;
 }
 function getServices_(request) {

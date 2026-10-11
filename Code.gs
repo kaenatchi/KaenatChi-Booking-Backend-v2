@@ -3548,8 +3548,18 @@ function testBookingBackendContract() {
    PHASE 2 - BOOKING CORE
    ===================================================== */
 
+function getBuiltInServiceDefaults_(serviceName) {
+  var name=String(serviceName||'');
+  if(name.normalize) name=name.normalize('NFKC');
+  name=name.replace(/[\\s\\u200c\\u200f\\u200e_-]+/g,'');
+  if(name.indexOf('شمع')===0 && name.indexOf('تراپی')!==-1) return {price:500000,duration:20};
+  if(name.indexOf('سایکو')===0 && name.indexOf('تراپی')!==-1) return {price:700000,duration:45};
+  return null;
+}
+
 function getServices_(request) {
   var names=['Services','services'];
+  var defaultSlotDuration=toNumber_(getSetting_('Default Slot Duration',30))||30;
   for(var i=0;i<names.length;i++){
     if(!getSpreadsheet_().getSheetByName(names[i])) continue;
     var rows=getSheetObjects_(names[i]);
@@ -3557,13 +3567,21 @@ function getServices_(request) {
       var a=firstField_(r,['Active','Is Active','فعال','وضعیت','Status']);
       return a===''||isTruthy_(a);
     }).map(function(r){
+      var name=String(firstField_(r,['نام خدمت','Service Name','Name','Title','عنوان'])||'');
+      var duration=toNumber_(firstField_(r,['مدت','Duration','مدت زمان']));
+      var price=toNumber_(firstField_(r,['قیمت','Price','Base Price','Original Price','مبلغ']));
+      var defaults=getBuiltInServiceDefaults_(name);
+      if(defaults){
+        if(!(price>0)) price=defaults.price;
+        if(!(duration>0)) duration=defaults.duration;
+      }
       return {
         id:String(firstField_(r,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||''),
-        name:String(firstField_(r,['نام خدمت','Service Name','Name','Title','عنوان'])||''),
+        name:name,
         category:String(firstField_(r,['دسته','Category','Service Category'])||''),
         description:String(firstField_(r,['توضیح کوتاه','Description','Short Description','توضیحات'])||''),
-        price:toNumber_(firstField_(r,['قیمت','Price','Base Price','Original Price','مبلغ'])),
-        duration:toNumber_(firstField_(r,['مدت','Duration','مدت زمان']))
+        price:price,
+        duration:duration>0?duration:defaultSlotDuration
       };
     }).filter(function(s){return s.name;});
     return {ok:true,services:services};

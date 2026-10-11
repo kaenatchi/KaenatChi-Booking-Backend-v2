@@ -2065,46 +2065,7 @@ function getAvailableSlots_(request) {
     }
   });
 
-  /*
-   * Resolve each slot by priority, not sheet row order:
-   * confirmed > payment proof awaiting review (held) > unexpired hold > free.
-   * Date/time are authoritative; historical Slot Key formatting may differ.
-   */
-  const statuses = {};
-  bookingRows.forEach(function(row) {
-    const rowDate = normalizeJalaliDate_(row['Appointment Date']);
-    const rowTime = normalizeTime_(row['Appointment Time']);
-    if (!rowDate || !rowTime || rowDate !== date) return;
-
-    const key = buildSlotKey_(rowDate, rowTime);
-    const appointmentStatus = String(row['Appointment Status'] || '');
-    const paymentStatus = String(row['Payment Status'] || '');
-    const paymentReceived =
-      paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
-      paymentStatus === CONFIG.STATUSES.PAYMENT_APPROVED;
-
-    if (appointmentStatus === CONFIG.STATUSES.BOOKING_CONFIRMED) {
-      statuses[key] = CONFIG.SLOT_STATUS.CONFIRMED;
-      return;
-    }
-
-    if (appointmentStatus !== CONFIG.STATUSES.BOOKING_PENDING) return;
-
-    if (paymentReceived) {
-      if (statuses[key] !== CONFIG.SLOT_STATUS.CONFIRMED) {
-        statuses[key] = CONFIG.SLOT_STATUS.HELD;
-      }
-      return;
-    }
-
-    const holdUntil = parseDateValue_(row['Hold Until']);
-    if (holdUntil && holdUntil.getTime() > Date.now() &&
-        statuses[key] !== CONFIG.SLOT_STATUS.CONFIRMED &&
-        statuses[key] !== CONFIG.SLOT_STATUS.HELD) {
-      statuses[key] = CONFIG.SLOT_STATUS.HELD;
-    }
-  });
-
+  const statuses = resolveBookingStatuses_(bookingRows, date);
   const slots = [];
   schedule.ranges.forEach(function(range) {
     generateSlots_(range.startTime, range.endTime, range.slotDuration).forEach(function(time) {
@@ -2124,6 +2085,129 @@ function getAvailableSlots_(request) {
   });
 
   return { ok: true, date: date, slots: slots };
+}
+
+
+/*
+ * Pure slot-status resolver. It only reads the supplied rows and never touches
+ * Sheets, Drive, Telegram, payments, or booking records.
+ */
+function resolveBookingStatuses_(bookingRows, targetDate, excludeBookingId) {
+  const statuses = {};
+  (bookingRows || []).forEach(function(row) {
+    if (excludeBookingId && String(row['Booking ID'] || '') === String(excludeBookingId)) return;
+
+    const rowDate = normalizeJalaliDate_(row['Appointment Date']);
+    const rowTime = normalizeTime_(row['Appointment Time']);
+    if (!rowDate || !rowTime || rowDate !== targetDate) return;
+
+    const key = buildSlotKey_(rowDate, rowTime);
+    const appointmentStatus = String(row['Appointment Status'] || '');
+    const paymentStatus = String(row['Payment Status'] || '');
+
+    if (appointmentStatus === CONFIG.STATUSES.BOOKING_CONFIRMED) {
+      statuses[key] = CONFIG.SLOT_STATUS.CONFIRMED;
+      return;
+    }
+    if (appointmentStatus !== CONFIG.STATUSES.BOOKING_PENDING) return;
+
+    if (
+      paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
+      paymentStatus === CONFIG.STATUSES.PAYMENT_APPROVED
+    ) {
+      if (statuses[key] !== CONFIG.SLOT_STATUS.CONFIRMED) statuses[key] = CONFIG.SLOT_STATUS.HELD;
+      return;
+    }
+
+    const holdUntil = parseDateValue_(row['Hold Until']);
+    if (
+      holdUntil &&
+      holdUntil.getTime() > Date.now() &&
+      statuses[key] !== CONFIG.SLOT_STATUS.CONFIRMED &&
+      statuses[key] !== CONFIG.SLOT_STATUS.HELD
+    ) {
+      statuses[key] = CONFIG.SLOT_STATUS.HELD;
+    }
+  });
+  return statuses;
+}
+
+/*
+ * Safe, in-memory regression checks only. No sheets or external services are
+ * read or written. Run manually in Apps Script to verify the resolver rules.
+ */
+function testSlotStatusConsistencyPure_() {
+  const date = '1405/07/19';
+  const time = '11:00';
+  const key = buildSlotKey_(date, time);
+  const future = new Date(Date.now() + 10 * 60 * 1000);
+  const past = new Date(Date.now() - 10 * 60 * 1000);
+  const pending = CONFIG.STATUSES.BOOKING_PENDING;
+  const confirmed = CONFIG.STATUSES.BOOKING_CONFIRMED;
+  const received = CONFIG.STATUSES.PAYMENT_RECEIVED;
+
+  function row(id, status, payment, hold, storedKey) {
+    return {
+      'Booking ID': id,
+      'Appointment Date': date,
+      'Appointment Time': time,
+      'Appointment Status': status,
+      'Payment Status': payment || '',
+      'Hold Until': hold || '',
+      'Slot Key': storedKey || ''
+    };
+  }
+  function assertEqual(name, actual, expected) {
+    if (actual !== expected) throw new Error(name + ': expected ' + expected + ', got ' + actual);
+  }
+  function resolve(rows, excludeId) {
+    return resolveBookingStatuses_(rows, date, excludeId)[key] || CONFIG.SLOT_STATUS.FREE;
+  }
+
+  assertEqual('confirmed beats later pending row', resolve([
+    row('confirmed', confirmed, '', past),
+    row('pending', pending, '', future)
+  ]), CONFIG.SLOT_STATUS.CONFIRMED);
+
+  assertEqual('confirmed beats earlier pending row', resolve([
+    row('pending', pending, '', future),
+    row('confirmed', confirmed, '', past)
+  ]), CONFIG.SLOT_STATUS.CONFIRMED);
+
+  assertEqual('payment proof remains held after expiry', resolve([
+    row('paid-pending', pending, received, past)
+  ]), CONFIG.SLOT_STATUS.HELD);
+
+  assertEqual('unexpired hold is held', resolve([
+    row('active-hold', pending, '', future)
+  ]), CONFIG.SLOT_STATUS.HELD);
+
+  assertEqual('expired unpaid hold is free', resolve([
+    row('expired-hold', pending, '', past)
+  ]), CONFIG.SLOT_STATUS.FREE);
+
+  assertEqual('date/time match works with malformed stored key', resolve([
+    row('legacy-key', pending, '', future, 'legacy-format')
+  ]), CONFIG.SLOT_STATUS.HELD);
+
+  assertEqual('rejected booking does not hold slot', resolve([
+    row('rejected', CONFIG.STATUSES.BOOKING_REJECTED, received, future)
+  ]), CONFIG.SLOT_STATUS.FREE);
+
+  assertEqual('approval excludes its own booking row', resolve([
+    row('same-booking', pending, received, past)
+  ], 'same-booking'), CONFIG.SLOT_STATUS.FREE);
+
+  return {
+    ok: true,
+    test: 'SLOT STATUS CONSISTENCY PURE TEST',
+    passed: 8,
+    noSheetRead: true,
+    noSheetWrite: true,
+    noBookingCreated: true,
+    noPaymentChange: true,
+    noTelegramSent: true
+  };
 }
 
 
@@ -2247,54 +2331,15 @@ function getSlotStatus_(
   time,
   excludeBookingId
 ) {
-  if (isBlockedSlot_(jalaliDate, time)) {
-    return CONFIG.SLOT_STATUS.BLOCKED;
-  }
+  if (isBlockedSlot_(jalaliDate, time)) return CONFIG.SLOT_STATUS.BLOCKED;
 
   const targetDate = normalizeJalaliDate_(jalaliDate);
   const targetTime = normalizeTime_(time);
   if (!targetDate || !targetTime) return CONFIG.SLOT_STATUS.FREE;
 
   const bookings = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
-  let held = false;
-
-  for (let i = 0; i < bookings.length; i++) {
-    const booking = bookings[i];
-    if (excludeBookingId && String(booking['Booking ID'] || '') === String(excludeBookingId)) continue;
-    const rowDate = normalizeJalaliDate_(booking['Appointment Date']);
-    const rowTime = normalizeTime_(booking['Appointment Time']);
-
-    /*
-     * Date/time are canonical. Do not rely solely on the stored Slot Key,
-     * because older records may have an empty or differently formatted key.
-     */
-    if (rowDate !== targetDate || rowTime !== targetTime) continue;
-
-    const status = String(booking['Appointment Status'] || '');
-    const paymentStatus = String(booking['Payment Status'] || '');
-    if (status === CONFIG.STATUSES.BOOKING_CONFIRMED) {
-      return CONFIG.SLOT_STATUS.CONFIRMED;
-    }
-
-    if (status !== CONFIG.STATUSES.BOOKING_PENDING) continue;
-
-    /*
-     * Once payment proof is received, the slot remains held until an admin
-     * decision, even if the temporary hold timestamp has elapsed.
-     */
-    if (
-      paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
-      paymentStatus === CONFIG.STATUSES.PAYMENT_APPROVED
-    ) {
-      held = true;
-      continue;
-    }
-
-    const holdUntil = parseDateValue_(booking['Hold Until']);
-    if (holdUntil && holdUntil.getTime() > Date.now()) held = true;
-  }
-
-  return held ? CONFIG.SLOT_STATUS.HELD : CONFIG.SLOT_STATUS.FREE;
+  const statuses = resolveBookingStatuses_(bookings, targetDate, excludeBookingId);
+  return statuses[buildSlotKey_(targetDate, targetTime)] || CONFIG.SLOT_STATUS.FREE;
 }
 
 

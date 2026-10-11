@@ -294,29 +294,10 @@ function getConfig_() {
 
 function getBookedSlots_() {
   const rows = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
-  const bookedSlots = [];
-
-  rows.forEach(function(row) {
-    const status = String(row['Appointment Status'] || '');
-    const date = normalizeJalaliDate_(row['Appointment Date']);
-    const time = normalizeTime_(row['Appointment Time']);
-
-    if (!date || !time) return;
-
-    if (
-      status === CONFIG.STATUSES.BOOKING_PENDING ||
-      status === CONFIG.STATUSES.BOOKING_CONFIRMED
-    ) {
-      bookedSlots.push({
-        date: date,
-        time: time,
-        slotKey: String(row['Slot Key'] || buildSlotKey_(date, time)),
-        status: status
-      });
-    }
-  });
-
-  return { ok: true, bookedSlots: bookedSlots };
+  return {
+    ok: true,
+    bookedSlots: buildBookedSlotsFromRows_(rows)
+  };
 }
 
 function getBookingStatusByRequestId_(request) {
@@ -2052,89 +2033,27 @@ function getAvailableSlots_(request) {
   }
 
   const schedule = getScheduleForDate_(date);
-
-  if (!schedule.active) {
-    return {
-      ok: true,
-      date: date,
-      slots: []
-    };
-  }
+  if (!schedule.active) return { ok: true, date: date, slots: [] };
 
   const blockedRows = getSheetObjects_(CONFIG.SHEETS.BLOCKED_SLOTS);
   const bookingRows = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
-
   const blocked = {};
+
   blockedRows.forEach(function(row) {
-    if (
-      normalizeJalaliDate_(row.Date) === date &&
-      isTruthy_(row.Active)
-    ) {
-      blocked[buildSlotKey_(date, normalizeTime_(row.Time))] = true;
+    const rowTime = normalizeTime_(row.Time);
+    if (normalizeJalaliDate_(row.Date) === date && rowTime && isTruthy_(row.Active)) {
+      blocked[buildSlotKey_(date, rowTime)] = true;
     }
   });
 
-  const statuses = {};
-  bookingRows.forEach(function(row) {
-    const rowDate = normalizeJalaliDate_(row['Appointment Date']);
-    const rowTime = normalizeTime_(row['Appointment Time']);
-    if (!rowDate || !rowTime || rowDate !== date) return;
-
-    /*
-     * Rebuild the key from the authoritative date/time fields. This makes
-     * older bookings visible even if their historical Slot Key was missing
-     * or formatted differently.
-     */
-    const key = buildSlotKey_(rowDate, rowTime);
-    const status = String(row['Appointment Status'] || '');
-
-    if (status === CONFIG.STATUSES.BOOKING_CONFIRMED) {
-      statuses[key] = CONFIG.SLOT_STATUS.CONFIRMED;
-      return;
-    }
-
-    if (status === CONFIG.STATUSES.BOOKING_PENDING) {
-      /*
-       * A booking with submitted payment proof must remain locked until
-       * admin decision. Its Hold Until is extended by submitPayment_(),
-       * but payment proof is the authoritative lock once submitted.
-       *
-       * A booking without submitted payment proof remains a temporary hold
-       * and is released when its Hold Until expires.
-       */
-      const paymentStatus = String(row['Payment Status'] || '');
-      const paymentReceived =
-        paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
-        paymentStatus === CONFIG.STATUSES.PAYMENT_APPROVED;
-
-      if (paymentReceived) {
-        statuses[key] = CONFIG.SLOT_STATUS.HELD;
-        return;
-      }
-
-      const holdUntil = parseDateValue_(row['Hold Until']);
-      if (holdUntil && holdUntil.getTime() > Date.now()) {
-        statuses[key] = CONFIG.SLOT_STATUS.HELD;
-      }
-    }
-  });
-
+  const statuses = resolveBookingStatuses_(bookingRows, date);
   const slots = [];
-
   schedule.ranges.forEach(function(range) {
-    generateSlots_(
-      range.startTime,
-      range.endTime,
-      range.slotDuration
-    ).forEach(function(time) {
+    generateSlots_(range.startTime, range.endTime, range.slotDuration).forEach(function(time) {
       const slotKey = buildSlotKey_(date, time);
       let status = CONFIG.SLOT_STATUS.FREE;
-
-      if (blocked[slotKey]) {
-        status = CONFIG.SLOT_STATUS.BLOCKED;
-      } else if (statuses[slotKey]) {
-        status = statuses[slotKey];
-      }
+      if (blocked[slotKey]) status = CONFIG.SLOT_STATUS.BLOCKED;
+      else if (statuses[slotKey]) status = statuses[slotKey];
 
       slots.push({
         date: date,
@@ -2146,10 +2065,243 @@ function getAvailableSlots_(request) {
     });
   });
 
+  return { ok: true, date: date, slots: slots };
+}
+
+
+/*
+ * Pure slot-status resolver. It only reads the supplied rows and never touches
+ * Sheets, Drive, Telegram, payments, or booking records.
+ */
+function resolveBookingStatuses_(bookingRows, targetDate, excludeBookingId) {
+  const statuses = {};
+  (bookingRows || []).forEach(function(row) {
+    if (excludeBookingId && String(row['Booking ID'] || '') === String(excludeBookingId)) return;
+
+    const rowDate = normalizeJalaliDate_(row['Appointment Date']);
+    const rowTime = normalizeTime_(row['Appointment Time']);
+    if (!rowDate || !rowTime || rowDate !== targetDate) return;
+
+    const key = buildSlotKey_(rowDate, rowTime);
+    const appointmentStatus = String(row['Appointment Status'] || '');
+    const paymentStatus = String(row['Payment Status'] || '');
+
+    if (appointmentStatus === CONFIG.STATUSES.BOOKING_CONFIRMED) {
+      statuses[key] = CONFIG.SLOT_STATUS.CONFIRMED;
+      return;
+    }
+    if (appointmentStatus !== CONFIG.STATUSES.BOOKING_PENDING) return;
+
+    if (
+      paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
+      paymentStatus === CONFIG.STATUSES.PAYMENT_APPROVED
+    ) {
+      if (statuses[key] !== CONFIG.SLOT_STATUS.CONFIRMED) statuses[key] = CONFIG.SLOT_STATUS.HELD;
+      return;
+    }
+
+    const holdUntil = parseDateValue_(row['Hold Until']);
+    if (
+      holdUntil &&
+      holdUntil.getTime() > Date.now() &&
+      statuses[key] !== CONFIG.SLOT_STATUS.CONFIRMED &&
+      statuses[key] !== CONFIG.SLOT_STATUS.HELD
+    ) {
+      statuses[key] = CONFIG.SLOT_STATUS.HELD;
+    }
+  });
+  return statuses;
+}
+
+/*
+ * Build the public booked-slot feed from the same canonical resolver used by
+ * availability checks. This deduplicates each date/time and omits expired,
+ * unpaid holds while preserving the public Persian appointment-status labels.
+ * Pure helper: no Sheets, Drive, Telegram, payment, or booking writes.
+ */
+function buildBookedSlotsFromRows_(bookingRows) {
+  const rowsByDate = {};
+
+  (bookingRows || []).forEach(function(row) {
+    const date = normalizeJalaliDate_(row['Appointment Date']);
+    const time = normalizeTime_(row['Appointment Time']);
+    if (!date || !time) return;
+    if (!rowsByDate[date]) rowsByDate[date] = [];
+    rowsByDate[date].push(row);
+  });
+
+  const bookedSlots = [];
+  Object.keys(rowsByDate).sort().forEach(function(date) {
+    // Resolve only rows for this date so processing scales with the booking
+    // history instead of rescanning every row once per distinct date.
+    const statuses = resolveBookingStatuses_(rowsByDate[date], date);
+    Object.keys(statuses).sort().forEach(function(slotKey) {
+      const slotStatus = statuses[slotKey];
+      if (
+        slotStatus !== CONFIG.SLOT_STATUS.HELD &&
+        slotStatus !== CONFIG.SLOT_STATUS.CONFIRMED
+      ) return;
+
+      const parts = slotKey.split('|');
+      if (parts.length !== 2) return;
+      bookedSlots.push({
+        date: parts[0],
+        time: parts[1],
+        slotKey: slotKey,
+        status: slotStatus === CONFIG.SLOT_STATUS.CONFIRMED
+          ? CONFIG.STATUSES.BOOKING_CONFIRMED
+          : CONFIG.STATUSES.BOOKING_PENDING
+      });
+    });
+  });
+
+  return bookedSlots;
+}
+
+/*
+ * Pure in-memory tests for the public booked-slot feed. No live services,
+ * sheets, bookings, payments, Drive, or Telegram are accessed.
+ */
+function testBookedSlotsFeedPure_() {
+  const date = '1405/07/19';
+  const otherDate = '1405/07/20';
+  const future = new Date(Date.now() + 10 * 60 * 1000);
+  const past = new Date(Date.now() - 10 * 60 * 1000);
+  const pending = CONFIG.STATUSES.BOOKING_PENDING;
+  const confirmed = CONFIG.STATUSES.BOOKING_CONFIRMED;
+  const received = CONFIG.STATUSES.PAYMENT_RECEIVED;
+
+  function row(id, d, t, status, payment, hold, storedKey) {
+    return {
+      'Booking ID': id,
+      'Appointment Date': d,
+      'Appointment Time': t,
+      'Appointment Status': status,
+      'Payment Status': payment || '',
+      'Hold Until': hold || '',
+      'Slot Key': storedKey || ''
+    };
+  }
+  function assertTrue(name, condition) {
+    if (!condition) throw new Error(name + ': assertion failed');
+  }
+
+  const result = buildBookedSlotsFromRows_([
+    row('pending-duplicate', date, '11:00', pending, '', future, 'legacy-a'),
+    row('confirmed', date, '11:00', confirmed, '', past, 'legacy-b'),
+    row('expired-unpaid', date, '11:30', pending, '', past),
+    row('payment-received', date, '12:00', pending, received, past),
+    row('rejected', date, '12:30', CONFIG.STATUSES.BOOKING_REJECTED, received, future),
+    row('other-date', otherDate, '11:00', pending, '', future)
+  ]);
+
+  const keys = result.map(function(slot) { return slot.slotKey; });
+  const confirmedSlot = result.find(function(slot) {
+    return slot.date === date && slot.time === '11:00';
+  });
+  const paidPendingSlot = result.find(function(slot) {
+    return slot.date === date && slot.time === '12:00';
+  });
+
+  assertTrue('one entry per canonical slot', new Set(keys).size === result.length);
+  assertTrue('confirmed takes priority and is deduplicated', result.filter(function(slot) {
+    return slot.date === date && slot.time === '11:00';
+  }).length === 1 && confirmedSlot && confirmedSlot.status === confirmed);
+  assertTrue('expired unpaid hold omitted', !result.some(function(slot) {
+    return slot.date === date && slot.time === '11:30';
+  }));
+  assertTrue('payment received remains listed after expiry', !!paidPendingSlot && paidPendingSlot.status === pending);
+  assertTrue('rejected booking omitted and other date retained', !result.some(function(slot) {
+    return slot.date === date && slot.time === '12:30';
+  }) && result.some(function(slot) { return slot.date === otherDate && slot.time === '11:00'; }));
+
   return {
     ok: true,
-    date: date,
-    slots: slots
+    test: 'BOOKED SLOTS FEED PURE TEST',
+    passed: 5,
+    noSheetRead: true,
+    noSheetWrite: true,
+    noBookingCreated: true,
+    noPaymentChange: true,
+    noTelegramSent: true
+  };
+}
+
+/*
+ * Safe, in-memory regression checks only. No sheets or external services are
+ * read or written. Run manually in Apps Script to verify the resolver rules.
+ */
+function testSlotStatusConsistencyPure_() {
+  const date = '1405/07/19';
+  const time = '11:00';
+  const key = buildSlotKey_(date, time);
+  const future = new Date(Date.now() + 10 * 60 * 1000);
+  const past = new Date(Date.now() - 10 * 60 * 1000);
+  const pending = CONFIG.STATUSES.BOOKING_PENDING;
+  const confirmed = CONFIG.STATUSES.BOOKING_CONFIRMED;
+  const received = CONFIG.STATUSES.PAYMENT_RECEIVED;
+
+  function row(id, status, payment, hold, storedKey) {
+    return {
+      'Booking ID': id,
+      'Appointment Date': date,
+      'Appointment Time': time,
+      'Appointment Status': status,
+      'Payment Status': payment || '',
+      'Hold Until': hold || '',
+      'Slot Key': storedKey || ''
+    };
+  }
+  function assertEqual(name, actual, expected) {
+    if (actual !== expected) throw new Error(name + ': expected ' + expected + ', got ' + actual);
+  }
+  function resolve(rows, excludeId) {
+    return resolveBookingStatuses_(rows, date, excludeId)[key] || CONFIG.SLOT_STATUS.FREE;
+  }
+
+  assertEqual('confirmed beats later pending row', resolve([
+    row('confirmed', confirmed, '', past),
+    row('pending', pending, '', future)
+  ]), CONFIG.SLOT_STATUS.CONFIRMED);
+
+  assertEqual('confirmed beats earlier pending row', resolve([
+    row('pending', pending, '', future),
+    row('confirmed', confirmed, '', past)
+  ]), CONFIG.SLOT_STATUS.CONFIRMED);
+
+  assertEqual('payment proof remains held after expiry', resolve([
+    row('paid-pending', pending, received, past)
+  ]), CONFIG.SLOT_STATUS.HELD);
+
+  assertEqual('unexpired hold is held', resolve([
+    row('active-hold', pending, '', future)
+  ]), CONFIG.SLOT_STATUS.HELD);
+
+  assertEqual('expired unpaid hold is free', resolve([
+    row('expired-hold', pending, '', past)
+  ]), CONFIG.SLOT_STATUS.FREE);
+
+  assertEqual('date/time match works with malformed stored key', resolve([
+    row('legacy-key', pending, '', future, 'legacy-format')
+  ]), CONFIG.SLOT_STATUS.HELD);
+
+  assertEqual('rejected booking does not hold slot', resolve([
+    row('rejected', CONFIG.STATUSES.BOOKING_REJECTED, received, future)
+  ]), CONFIG.SLOT_STATUS.FREE);
+
+  assertEqual('approval excludes its own booking row', resolve([
+    row('same-booking', pending, received, past)
+  ], 'same-booking'), CONFIG.SLOT_STATUS.FREE);
+
+  return {
+    ok: true,
+    test: 'SLOT STATUS CONSISTENCY PURE TEST',
+    passed: 8,
+    noSheetRead: true,
+    noSheetWrite: true,
+    noBookingCreated: true,
+    noPaymentChange: true,
+    noTelegramSent: true
   };
 }
 
@@ -2271,64 +2423,18 @@ function isDateAvailable_(jalaliDate) {
 function getSlotStatus_(
   slotKey,
   jalaliDate,
-  time
+  time,
+  excludeBookingId
 ) {
+  if (isBlockedSlot_(jalaliDate, time)) return CONFIG.SLOT_STATUS.BLOCKED;
 
-  if (
-    isBlockedSlot_(
-      jalaliDate,
-      time
-    )
-  ) {
-    return CONFIG.SLOT_STATUS.BLOCKED;
-  }
+  const targetDate = normalizeJalaliDate_(jalaliDate);
+  const targetTime = normalizeTime_(time);
+  if (!targetDate || !targetTime) return CONFIG.SLOT_STATUS.FREE;
 
-
-  const bookings =
-    getSheetObjects_(
-      CONFIG.SHEETS.BOOKINGS
-    );
-
-
-  for (let i = 0; i < bookings.length; i++) {
-
-    const booking = bookings[i];
-
-    if (
-      String(booking['Slot Key']) !== slotKey
-    ) {
-      continue;
-    }
-
-    const status =
-      String(booking['Appointment Status'] || '');
-
-    const holdUntil =
-      parseDateValue_(booking['Hold Until']);
-
-
-    if (
-      status === CONFIG.STATUSES.BOOKING_CONFIRMED
-    ) {
-      return CONFIG.SLOT_STATUS.CONFIRMED;
-    }
-
-
-    if (
-      status === CONFIG.STATUSES.BOOKING_PENDING
-    ) {
-
-      if (
-        holdUntil &&
-        holdUntil.getTime() > Date.now()
-      ) {
-        return CONFIG.SLOT_STATUS.HELD;
-      }
-    }
-  }
-
-
-  return CONFIG.SLOT_STATUS.FREE;
+  const bookings = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
+  const statuses = resolveBookingStatuses_(bookings, targetDate, excludeBookingId);
+  return statuses[buildSlotKey_(targetDate, targetTime)] || CONFIG.SLOT_STATUS.FREE;
 }
 
 
@@ -3442,8 +3548,18 @@ function testBookingBackendContract() {
    PHASE 2 - BOOKING CORE
    ===================================================== */
 
+function getBuiltInServiceDefaults_(serviceName) {
+  var name=String(serviceName||'');
+  if(name.normalize) name=name.normalize('NFKC');
+  name=name.replace(/[\s\u200c\u200f\u200e_-]+/g,'');
+  if(name.indexOf('شمع')===0 && name.indexOf('تراپی')!==-1) return {price:500000,duration:20};
+  if(name.indexOf('سایکو')===0 && name.indexOf('تراپی')!==-1) return {price:700000,duration:45};
+  return null;
+}
+
 function getServices_(request) {
   var names=['Services','services'];
+  var defaultSlotDuration=toNumber_(getSetting_('Default Slot Duration',30))||30;
   for(var i=0;i<names.length;i++){
     if(!getSpreadsheet_().getSheetByName(names[i])) continue;
     var rows=getSheetObjects_(names[i]);
@@ -3451,13 +3567,21 @@ function getServices_(request) {
       var a=firstField_(r,['Active','Is Active','فعال','وضعیت','Status']);
       return a===''||isTruthy_(a);
     }).map(function(r){
+      var name=String(firstField_(r,['نام خدمت','Service Name','Name','Title','عنوان'])||'');
+      var duration=toNumber_(firstField_(r,['مدت','Duration','مدت زمان']));
+      var price=toNumber_(firstField_(r,['قیمت','Price','Base Price','Original Price','مبلغ']));
+      var defaults=getBuiltInServiceDefaults_(name);
+      if(defaults){
+        if(!(price>0)) price=defaults.price;
+        if(!(duration>0)) duration=defaults.duration;
+      }
       return {
         id:String(firstField_(r,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||''),
-        name:String(firstField_(r,['نام خدمت','Service Name','Name','Title','عنوان'])||''),
+        name:name,
         category:String(firstField_(r,['دسته','Category','Service Category'])||''),
         description:String(firstField_(r,['توضیح کوتاه','Description','Short Description','توضیحات'])||''),
-        price:toNumber_(firstField_(r,['قیمت','Price','Base Price','Original Price','مبلغ'])),
-        duration:toNumber_(firstField_(r,['مدت','Duration','مدت زمان']))
+        price:price,
+        duration:duration>0?duration:defaultSlotDuration
       };
     }).filter(function(s){return s.name;});
     return {ok:true,services:services};
@@ -3675,13 +3799,16 @@ function approveBooking_(request){
   return withBookingLock_(function(){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
     if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+    if(String(b['Appointment Status']||'')!==CONFIG.STATUSES.BOOKING_PENDING)return fail_('BOOKING_NOT_PENDING','این نوبت در وضعیت قابل تأیید نیست.');
     var ps=String(b['Payment Status']||'');
     if(ps!==CONFIG.STATUSES.PAYMENT_RECEIVED&&ps!==CONFIG.STATUSES.PAYMENT_APPROVED)return fail_('PAYMENT_NOT_READY','ابتدا باید فیش پرداخت دریافت شود.');
     var date=normalizeJalaliDate_(b['Appointment Date']),time=normalizeTime_(b['Appointment Time']);
+    if(!date||!time)return fail_('INVALID_BOOKING_SLOT','تاریخ یا ساعت این نوبت معتبر نیست.');
     var slotKey=String(b['Slot Key']||buildSlotKey_(date,time));
-    var status=getSlotStatus_(slotKey,date,time);
+    var status=getSlotStatus_(slotKey,date,time,b['Booking ID']);
     if(status===CONFIG.SLOT_STATUS.CONFIRMED)return fail_('SLOT_ALREADY_CONFIRMED','این زمان قبلاً تأیید شده است.');
     if(status===CONFIG.SLOT_STATUS.BLOCKED)return fail_('SLOT_BLOCKED','این زمان مسدود شده است.');
+    if(status!==CONFIG.SLOT_STATUS.FREE)return fail_('SLOT_UNAVAILABLE','این زمان توسط نوبت دیگری نگه داشته شده است.');
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,'Appointment Status':CONFIG.STATUSES.BOOKING_CONFIRMED,
       'Approved At':new Date(),'Approved By':String(request.adminId||request.admin||'admin'),'Hold Until':''
@@ -3718,10 +3845,46 @@ function approveBooking_(request){
   });
 }
 
+function isRejectableBookingStatus_(status) {
+  return String(status || '') === CONFIG.STATUSES.BOOKING_PENDING;
+}
+
+/*
+ * Pure guard regression test. This helper never reads or writes external data.
+ */
+function testRejectBookingGuardPure_() {
+  function assertTrue(name, condition) {
+    if (!condition) throw new Error(name + ': assertion failed');
+  }
+
+  assertTrue('pending booking may be rejected',
+    isRejectableBookingStatus_(CONFIG.STATUSES.BOOKING_PENDING));
+  assertTrue('confirmed booking cannot be rejected',
+    !isRejectableBookingStatus_(CONFIG.STATUSES.BOOKING_CONFIRMED));
+  assertTrue('already rejected booking cannot be rejected again',
+    !isRejectableBookingStatus_(CONFIG.STATUSES.BOOKING_REJECTED));
+  assertTrue('missing status cannot be rejected',
+    !isRejectableBookingStatus_(''));
+
+  return {
+    ok: true,
+    test: 'REJECT BOOKING STATUS GUARD PURE TEST',
+    passed: 4,
+    noSheetRead: true,
+    noSheetWrite: true,
+    noBookingCreated: true,
+    noPaymentChange: true,
+    noTelegramSent: true
+  };
+}
+
 function rejectBooking_(request){
   return withBookingLock_(function(){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
     if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+    if(!isRejectableBookingStatus_(b['Appointment Status'])) {
+      return fail_('BOOKING_NOT_PENDING','فقط نوبت‌های در انتظار بررسی قابل رد هستند.');
+    }
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
       'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),

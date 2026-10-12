@@ -251,6 +251,9 @@ function routeRequest_(action, request) {
     case 'getBookingPublicStatus':
       return getBookingPublicStatus_(request);
 
+    case 'bookingStatus':
+      return getBookingStatusByRequestId_(request);
+
     case 'getServices': return getServices_(request);
     case 'validateDiscount': return validateDiscount_(request);
     case 'createBooking': return createBooking_(request);

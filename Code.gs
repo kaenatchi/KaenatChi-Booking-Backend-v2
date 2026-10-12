@@ -1124,12 +1124,12 @@ function buildBookingTelegramText_(booking, eventType) {
 
   if (eventType === 'booking_request') {
     return (
-      '🆕 <b>درخواست جدید نوبت — نیازمند تصمیم مدیر</b>\\n\\n' +
-      '👤 ' + customer + '\\n' +
-      '✨ ' + service + '\\n' +
-      '📅 ' + date + ' — ' + time + '\\n' +
-      '💳 مبلغ نهایی پس از تأیید: ' + price + '\\n' +
-      '🎫 کد پیگیری: <code>' + tracking + '</code>\\n\\n' +
+      '🆕 <b>درخواست جدید نوبت — نیازمند تصمیم مدیر</b>\n\n' +
+      '👤 ' + customer + '\n' +
+      '✨ ' + service + '\n' +
+      '📅 ' + date + ' — ' + time + '\n' +
+      '💳 مبلغ نهایی پس از تأیید: ' + price + '\n' +
+      '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' +
       '⏳ هنوز پرداخت درخواست نشده است. لطفاً درخواست را تأیید یا رد کنید.'
     );
   }

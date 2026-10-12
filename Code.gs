@@ -3713,16 +3713,33 @@ function submitPayment_(request){
     if(!receipt)return fail_('PAYMENT_RECEIPT_REQUIRED','ارسال تصویر فیش پرداخت الزامی است.');
     var saved={id:'',url:'',name:''};
     if(receipt)saved=saveReceiptToDrive_(receipt,request.receiptFileName,request.receiptMimeType,b);
-    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
-      'Payment Status':CONFIG.STATUSES.PAYMENT_RECEIVED,'Transaction Number':transaction,'Receipt Link':saved.url,
-      'Receipt URL':saved.url,'Receipt File ID':saved.id,'Payment Submitted At':new Date(),
-      'Hold Until':new Date(Date.now()+Math.max(15,toNumber_(getSetting_('Payment Review Hold Minutes',120)))*60000)
-    });
-    appendObjectRow_(CONFIG.SHEETS.PAYMENTS,{},{
-      'Payment ID':generateId_('PAY'),'Booking ID':b['Booking ID'],'Customer ID':b['Customer ID'],
-      'Amount':toNumber_(b['Final Price']),'Receipt Link':saved.url,'Receipt URL':saved.url,'Receipt File ID':saved.id,
-      'Transaction Number':transaction,'Tracking Code':transaction,'Payment Status':CONFIG.STATUSES.PAYMENT_RECEIVED,'Submitted At':new Date()
-    });
+    var submittedAt=new Date();
+    var reviewHoldUntil=new Date(Date.now()+Math.max(15,toNumber_(getSetting_('Payment Review Hold Minutes',120)))*60000);
+    try {
+      updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+        'Payment Status':CONFIG.STATUSES.PAYMENT_RECEIVED,'Transaction Number':transaction,'Receipt Link':saved.url,
+        'Receipt URL':saved.url,'Receipt File ID':saved.id,'Payment Submitted At':submittedAt,
+        'Hold Until':reviewHoldUntil
+      });
+      appendObjectRow_(CONFIG.SHEETS.PAYMENTS,{},{
+        'Payment ID':generateId_('PAY'),'Booking ID':b['Booking ID'],'Customer ID':b['Customer ID'],
+        'Amount':toNumber_(b['Final Price']),'Receipt Link':saved.url,'Receipt URL':saved.url,'Receipt File ID':saved.id,
+        'Transaction Number':transaction,'Tracking Code':transaction,'Payment Status':CONFIG.STATUSES.PAYMENT_RECEIVED,'Submitted At':submittedAt
+      });
+    } catch(paymentWriteError) {
+      // Keep the booking from appearing paid if the payment ledger write fails.
+      // Restore the prior booking values so the customer can safely retry.
+      updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+        'Payment Status':b['Payment Status']||CONFIG.STATUSES.PAYMENT_PENDING,
+        'Transaction Number':b['Transaction Number']||'',
+        'Receipt Link':b['Receipt Link']||'',
+        'Receipt URL':b['Receipt URL']||'',
+        'Receipt File ID':b['Receipt File ID']||'',
+        'Payment Submitted At':b['Payment Submitted At']||'',
+        'Hold Until':b['Hold Until']||''
+      });
+      return fail_('PAYMENT_SAVE_FAILED','ثبت پرداخت کامل نشد؛ وضعیت نوبت به حالت قبل برگشت. لطفاً دوباره تلاش کنید.');
+    }
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.PAYMENT_SUBMITTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Payment proof submitted.'});
 
     // Queue Telegram notification outside the booking request path.

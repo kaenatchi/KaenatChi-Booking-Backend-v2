@@ -550,7 +550,32 @@ function healthCheck_() {
    4. SPREADSHEET ACCESS
    ===================================================== */
 
+function assertStagingSpreadsheetIsolation_() {
+  const bookingSpreadsheetId = String(CONFIG.SPREADSHEET_ID || '').trim();
+  const vipSpreadsheetId = String(
+    CONFIG.VIP && CONFIG.VIP.SPREADSHEET_ID || ''
+  ).trim();
+
+  if (
+    CONFIG.STAGING_MODE === true &&
+    bookingSpreadsheetId &&
+    vipSpreadsheetId &&
+    bookingSpreadsheetId === vipSpreadsheetId
+  ) {
+    throw new Error(
+      'STAGING SAFETY BLOCK: Booking staging points to the CMS/VIP spreadsheet. ' +
+      'Configure a dedicated staging spreadsheet before any sheet access.'
+    );
+  }
+
+  return true;
+}
+
+
 function getSpreadsheet_() {
+
+  // This must run before openById so a misconfigured staging branch fails closed.
+  assertStagingSpreadsheetIsolation_();
 
   const spreadsheet = SpreadsheetApp.openById(
     CONFIG.SPREADSHEET_ID

@@ -220,7 +220,11 @@ function doPost(e) {
     const action = String(request.action || '').trim();
 
     if (!action) {
-      return jsonResponse_(legacyBookingSubmit_(request));
+      return jsonResponse_({
+        ok:false,
+        error:'LEGACY_BOOKING_FLOW_DISABLED',
+        message:'مسیر قدیمی رزرو غیرفعال است؛ لطفاً از جریان جدید رزرو استفاده کنید.'
+      });
     }
 
     return jsonResponse_(routeRequest_(action, request));

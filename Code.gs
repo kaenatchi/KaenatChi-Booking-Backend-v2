@@ -3635,7 +3635,8 @@ function createBooking_(request){
     var lastName=String(request.lastName||'').trim();
     var mobile=String(request.mobile||request.phone||'').trim();
     if(!firstName||!lastName||!mobile)return fail_('CUSTOMER_DETAILS_REQUIRED','نام، نام خانوادگی و شماره موبایل الزامی است.');
-    if(!normalizeMobileForMatch_(mobile))return fail_('INVALID_MOBILE','شماره موبایل معتبر نیست.');
+    var normalizedMobile=normalizeMobileForMatch_(mobile);
+    if(!/^9\d{9}$/.test(normalizedMobile))return fail_('INVALID_MOBILE','شماره موبایل باید یک شماره موبایل معتبر ایران باشد.');
     if(!isDateAvailable_(date))return fail_('DATE_NOT_AVAILABLE','این تاریخ قابل رزرو نیست.');
     var schedule=getScheduleForDate_(date);
     var allowed=schedule.ranges.some(function(r){return generateSlots_(r.startTime,r.endTime,r.slotDuration).indexOf(time)!==-1;});
@@ -4470,7 +4471,7 @@ function testCreateBookingCore() {
         customerId: 'TESTCUS-' + unique,
         firstName: 'TEST',
         lastName: 'KaenatChi',
-        mobile: 'TEST-' + unique,
+        mobile: '09' + String(Date.now()).slice(-9),
         serviceId: serviceId,
         serviceName: serviceName,
         appointmentDate: jalaliDate,
@@ -4863,7 +4864,7 @@ function testPaymentFlowSubmitOnly() {
       customerId:'PAYTEST-CUS-'+unique,
       firstName:'PAYMENT',
       lastName:'TEST',
-      mobile:'PAYTEST-'+unique,
+      mobile:'09'+String(Date.now()).slice(-9),
       serviceId:serviceId,
       serviceName:serviceName,
       appointmentDate:date,
@@ -4955,7 +4956,7 @@ function testPaymentFlowRejectWithoutProof() {
     var unique=String(new Date().getTime());
     var create=createBooking_({
       requestId:'PAYNO-'+unique,telegramId:'PAYNO-TG-'+unique,customerId:'PAYNO-CUS-'+unique,
-      firstName:'PAYMENT',lastName:'NO-PROOF',mobile:'PAYNO-'+unique,
+      firstName:'PAYMENT',lastName:'NO-PROOF',mobile:'09'+String(Date.now()).slice(-9),
       serviceId:String(firstField_(service,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||''),
       serviceName:String(firstField_(service,['نام خدمت','Service Name','Name','Title','عنوان'])||''),
       appointmentDate:date,appointmentTime:normalizeTime_(free.time),discountCode:''
@@ -5041,7 +5042,7 @@ function testPaymentApprovalFlow() {
       customerId:'PAYAPP-CUS-'+unique,
       firstName:'PAYMENT',
       lastName:'APPROVAL',
-      mobile:'PAYAPP-'+unique,
+      mobile:'09'+String(Date.now()).slice(-9),
       serviceId:serviceId,
       serviceName:serviceName,
       appointmentDate:date,
@@ -5172,7 +5173,7 @@ function testPaymentFlowDuplicate() {
       customerId:'PAYDUP-CUS-'+unique,
       firstName:'PAYMENT',
       lastName:'DUPLICATE',
-      mobile:'PAYDUP-'+unique,
+      mobile:'09'+String(Date.now()).slice(-9),
       serviceId:serviceId,
       serviceName:serviceName,
       appointmentDate:date,
@@ -5280,7 +5281,7 @@ function testApprovalBlockedBeforePayment() {
     var unique=String(new Date().getTime());
     var create=createBooking_({
       requestId:'PAYBLOCK-'+unique,telegramId:'PAYBLOCK-TG-'+unique,customerId:'PAYBLOCK-CUS-'+unique,
-      firstName:'PAYMENT',lastName:'BLOCK',mobile:'PAYBLOCK-'+unique,
+      firstName:'PAYMENT',lastName:'BLOCK',mobile:'09'+String(Date.now()).slice(-9),
       serviceId:String(firstField_(service,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||''),
       serviceName:String(firstField_(service,['نام خدمت','Service Name','Name','Title','عنوان'])||''),
       appointmentDate:date,appointmentTime:normalizeTime_(free.time),discountCode:''
@@ -5456,7 +5457,7 @@ function testVIPDiscountPaymentFlow() {
       customerId: tempCustomerId,
       firstName: 'VIP',
       lastName: 'REGRESSION',
-      mobile: 'VIPPAY-REG-' + unique,
+      mobile: '09' + String(Date.now()).slice(-9),
       serviceId: String(service.id || ''),
       serviceName: String(service.name || ''),
       appointmentDate: selectedSlot.date,

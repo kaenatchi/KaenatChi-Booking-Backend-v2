@@ -1186,16 +1186,17 @@ function buildBookingTelegramText_(booking, eventType) {
   }
 
   return (
-    '🧾 <b>فیش پرداخت کائنات‌چی دریافت شد</b>\\n\\n' +
-    '👤 ' + customer + '\\n' +
-    '✨ ' + service + '\\n' +
-    '📅 ' + date + ' — ' + time + '\\n' +
-    '💳 مبلغ: ' + price + '\\n' +
-    '🧾 شناسه نوبت: <code>' + bookingId + '</code>\\n' +
-    '🎫 کد پیگیری نوبت: <code>' + tracking + '</code>\\n' +
-    '🏦 کد پیگیری اعلام‌شده: <code>' + transactionNumber + '</code>\\n\\n' +
+    '🧾 <b>فیش پرداخت کائنات‌چی دریافت شد</b>\n\n' +
+    '👤 ' + customer + '\n' +
+    '✨ ' + service + '\n' +
+    '📅 ' + date + ' — ' + time + '\n' +
+    '💳 مبلغ: ' + price + '\n' +
+    '🧾 شناسه نوبت: <code>' + bookingId + '</code>\n' +
+    '🎫 کد پیگیری نوبت: <code>' + tracking + '</code>\n' +
+    '🏦 کد پیگیری اعلام‌شده: <code>' + transactionNumber + '</code>\n\n' +
     '⏳ وضعیت: در انتظار بررسی ادمین'
-  );}
+  );
+}
 
 function sendBookingTelegramNotifications_(booking, eventType) {
   var config=getTelegramConfig_();

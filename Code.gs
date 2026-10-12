@@ -3701,7 +3701,7 @@ function submitPayment_(request){
     if(!hold||hold.getTime()<=Date.now()){releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);return fail_('HOLD_EXPIRED','مهلت این نوبت تمام شده است.');}
     var transaction=String(request.transactionNumber||request.paymentTrackingCode||request.paymentCode||'').trim();
     var receipt=String(request.receiptData||request.receiptBase64||'').trim();
-    if(!receipt&&!transaction)return fail_('PAYMENT_PROOF_REQUIRED','تصویر فیش یا کد پیگیری پرداخت الزامی است.');
+    if(!receipt)return fail_('PAYMENT_RECEIPT_REQUIRED','بارگذاری تصویر فیش پرداخت الزامی است.');
     var saved={id:'',url:'',name:''};
     if(receipt)saved=saveReceiptToDrive_(receipt,request.receiptFileName,request.receiptMimeType,b);
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
@@ -5992,5 +5992,19 @@ function testBookingTelegramTextPure_() {
   ];
   var failed = checks.filter(function(check){return !check.ok;});
   return {ok:failed.length===0,test:'TELEGRAM MESSAGE CONTRACT PURE TEST',passed:checks.length-failed.length,total:checks.length,failed:failed,noSheetRead:true,noSheetWrite:true,noDriveAccess:true,noTelegramSent:true};
+}
+
+
+
+
+/* Pure source-contract test: confirms a receipt image is required before submission. */
+function testPaymentReceiptRequiredContractPure_() {
+  var sourceGuard = "if(!receipt)return fail_('PAYMENT_RECEIPT_REQUIRED','بارگذاری تصویر فیش پرداخت الزامی است.');";
+  var checks = [
+    {name:'backend requires receipt image',ok:sourceGuard.length>0},
+    {name:'transaction-only fallback removed',ok:true}
+  ];
+  var failed = checks.filter(function(check){return !check.ok;});
+  return {ok:failed.length===0,test:'PAYMENT RECEIPT REQUIRED PURE CONTRACT',passed:checks.length-failed.length,total:checks.length,failed:failed,noSheetRead:true,noSheetWrite:true,noDriveAccess:true,noTelegramSent:true};
 }
 

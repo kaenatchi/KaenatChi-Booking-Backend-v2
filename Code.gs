@@ -248,6 +248,9 @@ function routeRequest_(action, request) {
     case 'getBooking':
       return getBooking_(request);
 
+    case 'getBookingPublicStatus':
+      return getBookingPublicStatus_(request);
+
     case 'getServices': return getServices_(request);
     case 'validateDiscount': return validateDiscount_(request);
     case 'createBooking': return createBooking_(request);
@@ -319,6 +322,34 @@ function getBookedSlots_() {
   });
 
   return { ok: true, bookedSlots: bookedSlots };
+}
+
+function normalizeMobileForMatch_(value) {
+  var s=String(value||'').trim();
+  var fa='۰۱۲۳۴۵۶۷۸۹', ar='٠١٢٣٤٥٦٧٨٩';
+  s=s.replace(/[۰-۹]/g,function(c){return String(fa.indexOf(c));})
+     .replace(/[٠-٩]/g,function(c){return String(ar.indexOf(c));})
+     .replace(/\\D/g,'');
+  if(s.indexOf('0098')===0)s=s.slice(4);
+  else if(s.indexOf('98')===0&&s.length>10)s=s.slice(2);
+  if(s.indexOf('0')===0&&s.length>10)s=s.slice(1);
+  return s;
+}
+
+function getBookingPublicStatus_(request) {
+  var tracking=String(request.trackingCode||'').trim();
+  var mobile=normalizeMobileForMatch_(request.mobile||request.phone||'');
+  if(!tracking||!mobile)return fail_('TRACKING_AND_MOBILE_REQUIRED','کد پیگیری و شماره موبایل الزامی است.');
+  var b=getBookingByIdObject_(tracking);
+  if(!b||normalizeMobileForMatch_(b['Mobile']||'')!==mobile)
+    return fail_('BOOKING_NOT_FOUND','با این کد پیگیری و شماره موبایل نوبتی پیدا نشد.');
+  return {ok:true,found:true,booking:{
+    bookingId:String(b['Booking ID']||''),trackingCode:String(b['Tracking Code']||''),
+    serviceName:String(b['Service Name']||''),appointmentDate:String(b['Appointment Date']||''),
+    appointmentTime:String(b['Appointment Time']||''),appointmentStatus:String(b['Appointment Status']||''),
+    paymentStatus:String(b['Payment Status']||''),finalPrice:toNumber_(b['Final Price']),
+    currency:String(b['Currency']||'IRR')
+  }};
 }
 
 function getBookingStatusByRequestId_(request) {
@@ -3644,6 +3675,9 @@ function submitPayment_(request){
   return withBookingLock_(function(){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
     if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+    var suppliedMobile=normalizeMobileForMatch_(request.mobile||request.phone||'');
+    var storedMobile=normalizeMobileForMatch_(b['Mobile']||'');
+    if(!suppliedMobile||!storedMobile||suppliedMobile!==storedMobile)return fail_('MOBILE_VERIFICATION_FAILED','شماره موبایل با اطلاعات ثبت‌شده مطابقت ندارد.');
     if(String(b['Appointment Status']||'')!==CONFIG.STATUSES.BOOKING_PENDING)return fail_('BOOKING_NOT_PENDING','این نوبت در وضعیت قابل پرداخت نیست.');
     if(String(b['Admin Note']||'').indexOf('INITIAL_REQUEST_APPROVED')===-1)return fail_('INITIAL_APPROVAL_REQUIRED','ابتدا باید درخواست نوبت توسط ادمین تأیید اولیه شود.');
     if(String(b['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED||String(b['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_APPROVED){

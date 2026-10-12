@@ -1198,7 +1198,16 @@ function queueBookingTelegramNotification_(booking, eventType) {
         return {ok:false,queued:false,error:'TELEGRAM_QUEUE_STORAGE_LIMIT'};
       }
       props.setProperty(queueKey, JSON.stringify(candidateQueue));
-      return {ok:true,queued:true};
+      try {
+        ensureTelegramQueueTriggerScheduled_(props, 'KAENATCHI_TELEGRAM_TRIGGER_SCHEDULED', 5000);
+      } catch (triggerError) {
+        // Keep the queued item. Report the scheduling failure explicitly so
+        // monitoring can detect that a trigger needs attention.
+        console.error('Telegram item queued but trigger scheduling failed: ' +
+          String(triggerError && triggerError.message ? triggerError.message : triggerError));
+        return {ok:false,queued:true,triggerScheduled:false,error:'TELEGRAM_TRIGGER_SCHEDULE_FAILED'};
+      }
+      return {ok:true,queued:true,triggerScheduled:true};
     } finally {
       lock.releaseLock();
     }
@@ -1263,6 +1272,16 @@ function testTelegramRetrySchedulePure_() {
     delaysMs:delays,noExternalCalls:true};
 }
 
+function ensureTelegramQueueTriggerScheduled_(props, triggerKey, delayMs) {
+  if (String(props.getProperty(triggerKey) || '') === '1') return {ok:true,alreadyScheduled:true};
+  ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
+    .timeBased()
+    .after(Math.max(5000, Number(delayMs || 5000)))
+    .create();
+  props.setProperty(triggerKey, '1');
+  return {ok:true,scheduled:true};
+}
+
 function readTelegramQueueProperty_(props, key) {
   var raw = props.getProperty(key);
   if (raw === null || raw === '') return [];
@@ -1309,6 +1328,14 @@ function processBookingTelegramNotificationQueue_() {
     var leaseParts = leaseRaw.split('|');
     var leaseExpiry = Number(leaseParts[0] || 0);
     if (leaseExpiry > Date.now()) {
+      // A one-shot trigger may have fired while another worker held the lease.
+      // Replace it so the queue is not stranded after this skipped execution.
+      leaseProps.deleteProperty('KAENATCHI_TELEGRAM_TRIGGER_SCHEDULED');
+      ensureTelegramQueueTriggerScheduled_(
+        leaseProps,
+        'KAENATCHI_TELEGRAM_TRIGGER_SCHEDULED',
+        leaseExpiry - Date.now()
+      );
       return {ok:true,skipped:true,reason:'WORKER_ALREADY_RUNNING'};
     }
     // Lease expires after five minutes if execution terminates unexpectedly.
@@ -1435,9 +1462,7 @@ function processBookingTelegramNotificationQueue_() {
       });
       var earliestDue = Math.min.apply(null, dueTimes);
       var delayMs = Math.max(5000, earliestDue - nowMs);
-      ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
-        .timeBased().after(delayMs).create();
-      props3.setProperty(triggerKey, '1');
+      ensureTelegramQueueTriggerScheduled_(props3, triggerKey, delayMs);
     }
   } finally {
     lock.releaseLock();

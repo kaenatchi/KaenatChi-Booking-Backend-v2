@@ -1228,6 +1228,41 @@ function testTelegramQueueStorageLimitPure_() {
   return {ok:failed.length===0,test:'TELEGRAM QUEUE STORAGE LIMIT PURE TEST',passed:cases.length-failed.length,total:cases.length,failed:failed,noExternalCalls:true};
 }
 
+function isTelegramQueueItemReadyPure_(item, nowMs) {
+  if (!item || item.permanentFailure === true) return false;
+  var retryAt = Date.parse(String(item.retryAt || ''));
+  return !isFinite(retryAt) || retryAt <= Number(nowMs || Date.now());
+}
+
+function getTelegramRetryDelayMsPure_(attempts) {
+  var count = Math.max(1, Number(attempts || 1));
+  // Exponential backoff, capped at one minute; no external services involved.
+  return Math.min(60000, 5000 * Math.pow(2, count - 1));
+}
+
+function testTelegramRetrySchedulePure_() {
+  var now = Date.parse('2026-10-13T00:00:00.000Z');
+  var cases = [
+    {name:'new item is ready immediately',item:{attempts:0},expected:true},
+    {name:'retry with future retryAt waits',item:{attempts:1,retryAt:'2026-10-13T00:00:10.000Z'},expected:false},
+    {name:'retry becomes ready at retryAt',item:{attempts:1,retryAt:'2026-10-13T00:00:10.000Z'},expected:true,now:now+10000},
+    {name:'permanent failure is never auto-retried',item:{permanentFailure:true},expected:false},
+    {name:'missing retryAt is recoverable after interruption',item:{attempts:2},expected:true}
+  ];
+  var failed = cases.filter(function(test) {
+    return isTelegramQueueItemReadyPure_(test.item, test.now === undefined ? now : test.now) !== test.expected;
+  });
+  var delays = [1,2,3,4,5,6,8].map(function(attempts) {
+    return getTelegramRetryDelayMsPure_(attempts);
+  });
+  var delayOk = delays[0] === 5000 && delays[1] === 10000 &&
+    delays[2] === 20000 && delays[3] === 40000 &&
+    delays[4] === 60000 && delays[6] === 60000;
+  return {ok:failed.length===0 && delayOk,test:'TELEGRAM RETRY SCHEDULE PURE TEST',
+    passed:cases.length-failed.length+(delayOk?1:0),total:cases.length+1,failed:failed,
+    delaysMs:delays,noExternalCalls:true};
+}
+
 function readTelegramQueueProperty_(props, key) {
   var raw = props.getProperty(key);
   if (raw === null || raw === '') return [];
@@ -1295,7 +1330,9 @@ function processBookingTelegramNotificationQueue_() {
     props.setProperty(inflightKey, JSON.stringify(combined));
     props.setProperty(queueKey, '[]');
     props.deleteProperty(triggerKey);
-    items = combined.filter(function(item) { return item.permanentFailure !== true; });
+    items = combined.filter(function(item) {
+      return isTelegramQueueItemReadyPure_(item, Date.now());
+    });
   } finally {
     lock.releaseLock();
   }
@@ -1339,7 +1376,7 @@ function processBookingTelegramNotificationQueue_() {
         if (shouldRetryTelegramNotification_(attempts)) {
           item.attempts = attempts;
           item.lastError = failureMessage;
-          item.retryAt = new Date().toISOString();
+          item.retryAt = new Date(Date.now() + getTelegramRetryDelayMsPure_(attempts)).toISOString();
           if (currentIndex !== -1) inflight2[currentIndex] = item;
           else inflight2.push(item);
         } else {
@@ -1372,10 +1409,17 @@ function processBookingTelegramNotificationQueue_() {
   try {
     var props3 = PropertiesService.getScriptProperties();
     remaining = readTelegramQueueProperty_(props3, inflightKey);
-    if (remaining.some(function(item) { return !item.permanentFailure; }) &&
-        String(props3.getProperty(triggerKey) || '') !== '1') {
+    var retryable = remaining.filter(function(item) { return item.permanentFailure !== true; });
+    if (retryable.length && String(props3.getProperty(triggerKey) || '') !== '1') {
+      var nowMs = Date.now();
+      var dueTimes = retryable.map(function(item) {
+        var parsed = Date.parse(String(item.retryAt || ''));
+        return isFinite(parsed) ? parsed : nowMs;
+      });
+      var earliestDue = Math.min.apply(null, dueTimes);
+      var delayMs = Math.max(5000, earliestDue - nowMs);
       ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
-        .timeBased().after(5000).create();
+        .timeBased().after(delayMs).create();
       props3.setProperty(triggerKey, '1');
     }
   } finally {

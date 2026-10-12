@@ -27,3 +27,5 @@ jobs:
         run: node tests/payment-flow-safety.test.cjs
       - name: Block shared CMS/VIP spreadsheet in staging
         run: node tests/staging-isolation.test.cjs
+      - name: Test runtime spreadsheet safety guard
+        run: node tests/staging-runtime-guard.test.cjs

@@ -348,7 +348,8 @@ function getBookingPublicStatus_(request) {
     serviceName:String(b['Service Name']||''),appointmentDate:String(b['Appointment Date']||''),
     appointmentTime:String(b['Appointment Time']||''),appointmentStatus:String(b['Appointment Status']||''),
     paymentStatus:String(b['Payment Status']||''),finalPrice:toNumber_(b['Final Price']),
-    currency:String(b['Currency']||'IRR')
+    currency:String(b['Currency']||'IRR'),
+    canPay:String(b['Admin Note']||'').indexOf('INITIAL_REQUEST_APPROVED')!==-1 && String(b['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_PENDING && (parseDateValue_(b['Hold Until'])||new Date(0)).getTime()>Date.now()
   }};
 }
 

@@ -3688,7 +3688,9 @@ function submitPayment_(request){
     if(!hold||hold.getTime()<=Date.now()){releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);return fail_('HOLD_EXPIRED','مهلت این نوبت تمام شده است.');}
     var transaction=String(request.transactionNumber||request.paymentTrackingCode||request.paymentCode||'').trim();
     var receipt=String(request.receiptData||request.receiptBase64||'').trim();
-    if(!receipt&&!transaction)return fail_('PAYMENT_PROOF_REQUIRED','تصویر فیش یا کد پیگیری پرداخت الزامی است.');
+    // A receipt image is mandatory for admin verification. A transaction
+    // reference may accompany it, but must never replace the receipt.
+    if(!receipt)return fail_('PAYMENT_RECEIPT_REQUIRED','ارسال تصویر فیش پرداخت الزامی است.');
     var saved={id:'',url:'',name:''};
     if(receipt)saved=saveReceiptToDrive_(receipt,request.receiptFileName,request.receiptMimeType,b);
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{

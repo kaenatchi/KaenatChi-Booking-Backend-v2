@@ -4112,9 +4112,13 @@ function submitPayment_(request){
       }
       try {
         updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
-          'Payment Status':CONFIG.STATUSES.PAYMENT_PENDING,
-          'Transaction Number':'','Receipt Link':'','Receipt URL':'','Receipt File ID':'',
-          'Payment Submitted At':'','Hold Until':hold
+          'Payment Status':String(b['Payment Status']||CONFIG.STATUSES.PAYMENT_PENDING),
+          'Transaction Number':b['Transaction Number']||'',
+          'Receipt Link':b['Receipt Link']||'',
+          'Receipt URL':b['Receipt URL']||'',
+          'Receipt File ID':b['Receipt File ID']||'',
+          'Payment Submitted At':b['Payment Submitted At']||'',
+          'Hold Until':hold
         });
       } catch(bookingRollbackError) {
         console.warn('Booking row compensation failed: '+String(bookingRollbackError));

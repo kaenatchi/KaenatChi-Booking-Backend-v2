@@ -22,4 +22,4 @@ jobs:
         with:
           node-version: 22
       - name: Run isolated payment consistency tests
-        run: node --experimental-default-type=module tests/payment-consistency.test.cjs
+        run: node tests/payment-consistency.test.cjs

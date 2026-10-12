@@ -1123,10 +1123,12 @@ function sendBookingTelegramNotifications_(booking, eventType) {
   var config=getTelegramConfig_();
   var text=buildBookingTelegramText_(booking,eventType);
   var results=[];
+  var adminResult=null;
 
   /*
-   * Only payment_received needs admin action buttons.
-   * Approved/rejected messages are terminal and do not expose action buttons.
+   * Admin delivery is the critical notification: a customer delivery must
+   * never make a failed admin delivery look successful to the retry queue.
+   * Action buttons are sent only to the configured admin chat.
    */
   var replyMarkup = eventType === 'request_received'
     ? getBookingTelegramAdminKeyboard_(booking['Booking ID'], 'request')
@@ -1134,33 +1136,23 @@ function sendBookingTelegramNotifications_(booking, eventType) {
       ? getBookingTelegramAdminKeyboard_(booking['Booking ID'], 'payment') : null;
 
   if(config.adminChatId){
-    results.push(
-      sendTelegramMessage_(
-        config.adminChatId,
-        text,
-        replyMarkup
-      )
-    );
+    adminResult=sendTelegramMessage_(config.adminChatId,text,replyMarkup);
+    results.push({recipient:'admin',result:adminResult});
   } else {
-    results.push({
-      ok:false,
-      skipped:true,
-      reason:'ADMIN_CHAT_ID_NOT_CONFIGURED'
-    });
+    adminResult={ok:false,skipped:true,reason:'ADMIN_CHAT_ID_NOT_CONFIGURED'};
+    results.push({recipient:'admin',result:adminResult});
   }
 
   var customerChatId=String(booking['Telegram ID']||'').trim();
   if(customerChatId && customerChatId!==config.adminChatId){
-    results.push(
-      sendTelegramMessage_(
-        customerChatId,
-        text
-      )
-    );
+    results.push({
+      recipient:'customer',
+      result:sendTelegramMessage_(customerChatId,text)
+    });
   }
 
   return {
-    ok: results.some(function(item){ return item && item.ok === true; }),
+    ok: !!(adminResult && adminResult.ok === true),
     results: results
   };
 }

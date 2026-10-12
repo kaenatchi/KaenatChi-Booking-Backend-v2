@@ -64,6 +64,8 @@ const CONFIG = {
     PAYMENT_SUBMITTED: 'PAYMENT_SUBMITTED',
     PAYMENT_REJECTED: 'PAYMENT_REJECTED',
     PAYMENT_EXPIRED: 'PAYMENT_EXPIRED',
+    PAYMENT_SUBMISSION_FAILED: 'PAYMENT_SUBMISSION_FAILED',
+    PAYMENT_FINALIZATION_FAILED: 'PAYMENT_FINALIZATION_FAILED',
     ADMIN_APPROVED: 'ADMIN_APPROVED',
     ADMIN_REJECTED: 'ADMIN_REJECTED',
     SLOT_RELEASED: 'SLOT_RELEASED',
@@ -4077,17 +4079,54 @@ function submitPayment_(request){
     if(!receipt&&!transaction)return fail_('PAYMENT_PROOF_REQUIRED','تصویر فیش یا کد پیگیری پرداخت الزامی است.');
     var saved={id:'',url:'',name:''};
     if(receipt)saved=saveReceiptToDrive_(receipt,request.receiptFileName,request.receiptMimeType,b);
-    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
-      'Payment Status':CONFIG.STATUSES.PAYMENT_RECEIVED,'Transaction Number':transaction,'Receipt Link':saved.url,
-      'Receipt URL':saved.url,'Receipt File ID':saved.id,'Payment Submitted At':new Date(),
-      'Hold Until':new Date(Date.now()+Math.max(15,toNumber_(getSetting_('Payment Review Hold Minutes',120)))*60000)
-    });
-    appendObjectRow_(CONFIG.SHEETS.PAYMENTS,{},{
-      'Payment ID':generateId_('PAY'),'Booking ID':b['Booking ID'],'Customer ID':b['Customer ID'],
-      'Amount':toNumber_(b['Final Price']),'Receipt Link':saved.url,'Receipt URL':saved.url,'Receipt File ID':saved.id,
-      'Transaction Number':transaction,'Tracking Code':transaction,'Payment Status':CONFIG.STATUSES.PAYMENT_RECEIVED,'Submitted At':new Date()
-    });
-    appendBookingLog_({action:CONFIG.LOG_ACTIONS.PAYMENT_SUBMITTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Payment proof submitted.'});
+    var paymentId=generateId_('PAY');
+    var submittedAt=new Date();
+    var reviewHoldUntil=new Date(Date.now()+Math.max(15,toNumber_(getSetting_('Payment Review Hold Minutes',120)))*60000);
+    try {
+      appendObjectRow_(CONFIG.SHEETS.PAYMENTS,{},{
+        'Payment ID':paymentId,'Booking ID':b['Booking ID'],'Customer ID':b['Customer ID'],
+        'Amount':toNumber_(b['Final Price']),'Receipt Link':saved.url,'Receipt URL':saved.url,'Receipt File ID':saved.id,
+        'Transaction Number':transaction,'Tracking Code':transaction,'Payment Status':CONFIG.STATUSES.PAYMENT_RECEIVED,'Submitted At':submittedAt
+      });
+      updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+        'Payment Status':CONFIG.STATUSES.PAYMENT_RECEIVED,'Transaction Number':transaction,'Receipt Link':saved.url,
+        'Receipt URL':saved.url,'Receipt File ID':saved.id,'Payment Submitted At':submittedAt,
+        'Hold Until':reviewHoldUntil
+      });
+      appendBookingLog_({action:CONFIG.LOG_ACTIONS.PAYMENT_SUBMITTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Payment proof submitted.'});
+    } catch(writeError) {
+      // Compensate partial multi-sheet writes so a failed submission does not
+      // leave a received receipt without a matching active booking/payment state.
+      try {
+        getSheetObjects_(CONFIG.SHEETS.PAYMENTS).forEach(function(p) {
+          if(String(p['Payment ID']||'')===paymentId) {
+            updateRowFields_(CONFIG.SHEETS.PAYMENTS,p._row,{
+              'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
+              'Failure Note':'Compensated after payment submission write failure.',
+              'Rejected At':new Date()
+            });
+          }
+        });
+      } catch(paymentRollbackError) {
+        console.warn('Payment row compensation failed: '+String(paymentRollbackError));
+      }
+      try {
+        updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+          'Payment Status':CONFIG.STATUSES.PAYMENT_PENDING,
+          'Transaction Number':'','Receipt Link':'','Receipt URL':'','Receipt File ID':'',
+          'Payment Submitted At':'','Hold Until':hold
+        });
+      } catch(bookingRollbackError) {
+        console.warn('Booking row compensation failed: '+String(bookingRollbackError));
+      }
+      if(saved.id && String(saved.id).indexOf('STAGING-RECEIPT-')!==0) {
+        try { DriveApp.getFileById(saved.id).setTrashed(true); } catch(receiptCleanupError) {}
+      }
+      try {
+        appendBookingLog_({action:CONFIG.LOG_ACTIONS.PAYMENT_SUBMISSION_FAILED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Payment submission write failed; compensating rollback attempted.'});
+      } catch(logError) {}
+      throw writeError;
+    }
 
     // Queue Telegram notification outside the booking request path.
     // The notification worker runs from a time-based Apps Script trigger,

@@ -1266,6 +1266,23 @@ function testTelegramNotificationRetryPolicyPure_() {
   };
 }
 
+function isTelegramDeliveryConfirmedPure_(result) {
+  return !!result && result.ok === true;
+}
+
+function testTelegramDeliveryResultGuardPure_() {
+  var cases=[
+    {name:'confirmed success accepted',value:{ok:true},expected:true},
+    {name:'explicit failure rejected',value:{ok:false,error:'SEND_FAILED'},expected:false},
+    {name:'missing result rejected',value:undefined,expected:false},
+    {name:'null result rejected',value:null,expected:false},
+    {name:'empty object rejected',value:{},expected:false},
+    {name:'skipped delivery is not success',value:{ok:true,skipped:true,reason:'STAGING_MODE'},expected:true}
+  ];
+  var failed=cases.filter(function(t){return isTelegramDeliveryConfirmedPure_(t.value)!==t.expected;});
+  return {ok:failed.length===0,test:'TELEGRAM_DELIVERY_RESULT_GUARD_PURE_TEST',passed:cases.length-failed.length,total:cases.length,failed:failed,noExternalCalls:true};
+}
+
 function processBookingTelegramNotificationQueue_() {
   if (CONFIG.STAGING_MODE) return {ok:true,skipped:true,reason:'STAGING_MODE',sent:0};
   var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
@@ -1329,8 +1346,8 @@ function processBookingTelegramNotificationQueue_() {
        * result. Treat an explicit failure as retryable, and keep the item
        * alive for the next processor run.
        */
-      if (result && result.ok === false) {
-        throw new Error('Telegram delivery failed.');
+      if (!result || result.ok !== true) {
+        throw new Error('Telegram delivery failed or returned no confirmed success.');
       }
 
     } catch (error) {

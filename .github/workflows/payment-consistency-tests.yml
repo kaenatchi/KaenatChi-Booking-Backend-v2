@@ -23,3 +23,5 @@ jobs:
           node-version: 22
       - name: Run isolated payment consistency tests
         run: node tests/payment-consistency.test.cjs
+      - name: Check payment flow and hold safety invariants
+        run: node tests/payment-flow-safety.test.cjs

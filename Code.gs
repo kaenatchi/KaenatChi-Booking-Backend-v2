@@ -4226,10 +4226,12 @@ function releaseExpiredHolds_(request){
   return withBookingLock_(function(){
     var rows=getSheetObjects_(CONFIG.SHEETS.BOOKINGS),released=0,now=Date.now();
     rows.forEach(function(r){
+      var status=String(r['Appointment Status']||'');
       var hold=parseDateValue_(r['Hold Until']);
-      if(String(r['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING&&hold&&hold.getTime()<=now){
-        updateRowFields_(CONFIG.SHEETS.BOOKINGS,r._row,{'Appointment Status':CONFIG.STATUSES.BOOKING_CANCELLED,'Hold Until':'','Admin Note':'Expired hold released.'});
-        appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_RELEASED,bookingId:r['Booking ID'],slotKey:r['Slot Key'],details:'Expired hold released.'});
+      var activeHold=status===CONFIG.STATUSES.BOOKING_PENDING ||
+        status===CONFIG.STATUSES.BOOKING_AWAITING_PAYMENT;
+      if(activeHold&&(!hold||hold.getTime()<=now)){
+        releaseBookingRow_(r._row,r['Booking ID'],r['Slot Key']);
         released++;
       }
     });
@@ -5634,8 +5636,8 @@ function testApprovalBlockedBeforePayment() {
   var result={
     ok:false,
     bookingId:'',
-    blockedBeforePayment:false,
-    paymentStatusStillPending:false,
+    approvalAllowedAfterManagerAction:false,
+    paymentStatusMovedToAwaitingPayment:false,
     cleanedUp:false,
     error:''
   };
@@ -5669,13 +5671,13 @@ function testApprovalBlockedBeforePayment() {
     result.bookingId=String(create.booking.bookingId||'').trim();
 
     var approval=approveBooking_({bookingId:result.bookingId,adminId:'PAYMENT-FLOW-TEST'});
-    result.blockedBeforePayment=!!approval&&approval.ok===false&&approval.error==='PAYMENT_NOT_READY';
+    result.approvalAllowedAfterManagerAction=!!approval&&approval.ok===true;
 
     var b=getBookingByIdObject_(result.bookingId);
-    result.paymentStatusStillPending=!!b&&String(b['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_PENDING;
+    result.paymentStatusMovedToAwaitingPayment=!!b&&String(b['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_PENDING&&String(b['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_AWAITING_PAYMENT;
 
-    if(!result.blockedBeforePayment)throw new Error('Approval بدون Payment دریافت‌شده مسدود نشد.');
-    if(!result.paymentStatusStillPending)throw new Error('Payment Status بدون پرداخت تغییر کرده است.');
+    if(!result.approvalAllowedAfterManagerAction)throw new Error('تأیید اولیه مدیر به مرحله پرداخت منتقل نشد: '+JSON.stringify(approval));
+    if(!result.paymentStatusMovedToAwaitingPayment)throw new Error('وضعیت رزرو پس از تأیید مدیر به انتظار پرداخت تغییر نکرد.');
 
     result.ok=true;
   }catch(e){result.error=String(e&&e.message?e.message:e);}

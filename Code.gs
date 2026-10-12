@@ -961,33 +961,14 @@ function getPaymentReviewTelegramKeyboard_(bookingId) {
 }
 
 function getBookingTelegramResultKeyboard_(status) {
-  if (status === 'approved') {
-    return {
-      inline_keyboard: [
-        [
-          {
-            text:'✅ درخواست تأیید شد؛ منتظر پرداخت',
-            callback_data:'kaenatchi:noop'
-          }
-        ]
-      ]
-    };
-  }
-
-  if (status === 'rejected') {
-    return {
-      inline_keyboard: [
-        [
-          {
-            text:'❌ فیش رد شد',
-            callback_data:'kaenatchi:noop'
-          }
-        ]
-      ]
-    };
-  }
-
-  return {inline_keyboard:[]};
+  var labels = {
+    approved:'✅ درخواست تأیید شد؛ منتظر پرداخت',
+    booking_rejected:'❌ درخواست نوبت رد شد',
+    receipt_approved:'✅ فیش تأیید شد؛ نوبت قطعی است',
+    rejected:'❌ فیش رد شد؛ امکان اصلاح تا پایان مهلت'
+  };
+  var label=labels[String(status||'')]||'این درخواست قبلاً تعیین تکلیف شده است';
+  return {inline_keyboard:[[{text:label,callback_data:'kaenatchi:noop'}]]};
 }
 
 function handleTelegramCallbackQuery_(callbackQuery) {

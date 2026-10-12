@@ -308,8 +308,15 @@ function getBookedSlots_() {
 
     if (!date || !time) return;
 
+    const paymentStatus = String(row['Payment Status'] || '');
+    const holdUntil = parseDateValue_(row['Hold Until']);
+    const pendingStillReservesSlot = status === CONFIG.STATUSES.BOOKING_PENDING && (
+      paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
+      (holdUntil && holdUntil.getTime() > Date.now())
+    );
+
     if (
-      status === CONFIG.STATUSES.BOOKING_PENDING ||
+      pendingStillReservesSlot ||
       status === CONFIG.STATUSES.BOOKING_CONFIRMED
     ) {
       bookedSlots.push({
@@ -669,7 +676,8 @@ function getTelegramConfig_() {
   var props = PropertiesService.getScriptProperties();
   return {
     botToken: String(props.getProperty('KAENATCHI_TELEGRAM_BOT_TOKEN') || '').trim(),
-    adminChatId: String(props.getProperty('KAENATCHI_TELEGRAM_ADMIN_CHAT_ID') || '').trim()
+    adminChatId: String(props.getProperty('KAENATCHI_TELEGRAM_ADMIN_CHAT_ID') || '').trim(),
+    adminUserId: String(props.getProperty('KAENATCHI_TELEGRAM_ADMIN_USER_ID') || '').trim()
   };
 }
 
@@ -921,11 +929,14 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   var chatId = String(
     message.chat && message.chat.id || ''
   ).trim();
+  var chatType = String(message.chat && message.chat.type || '').trim();
+  var actorId = String(callbackQuery.from && callbackQuery.from.id || '').trim();
 
-  /*
-   * Only the configured admin chat may execute approval/rejection actions.
-   */
-  if (!config.adminChatId || chatId !== config.adminChatId) {
+  /* Validate both the configured chat and the user pressing the button. */
+  var expectedAdminUserId = config.adminUserId ||
+    (chatType === 'private' ? config.adminChatId : '');
+  if (!config.adminChatId || chatId !== config.adminChatId ||
+      !actorId || !expectedAdminUserId || actorId !== expectedAdminUserId) {
     answerTelegramCallbackQuery_(
       queryId,
       'این عملیات فقط برای ادمین مجاز است.',
@@ -970,13 +981,13 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   var result;
 
   if (action === 'request_approve') {
-    result = approveBookingRequest_({bookingId:bookingId,adminId:config.adminChatId});
+    result = approveBookingRequest_({bookingId:bookingId,adminId:actorId});
   } else if (action === 'request_reject') {
-    result = rejectBookingRequest_({bookingId:bookingId,adminId:config.adminChatId,reason:'رد درخواست نوبت توسط ادمین از طریق تلگرام'});
+    result = rejectBookingRequest_({bookingId:bookingId,adminId:actorId,reason:'رد درخواست نوبت توسط ادمین از طریق تلگرام'});
   } else if (action === 'approve') {
-    result = approveBooking_({bookingId:bookingId,adminId:config.adminChatId});
+    result = approveBooking_({bookingId:bookingId,adminId:actorId});
   } else {
-    result = rejectBooking_({bookingId:bookingId,adminId:config.adminChatId,reason:'رد فیش توسط ادمین از طریق تلگرام'});
+    result = rejectBooking_({bookingId:bookingId,adminId:actorId,reason:'رد فیش توسط ادمین از طریق تلگرام'});
   }
 
   if (!result || result.ok !== true) {
@@ -1069,7 +1080,7 @@ function buildBookingTelegramText_(booking, eventType) {
       '👤 ' + customer + '\n' + '✨ ' + service + '\n' +
       '📅 ' + date + ' — ' + time + '\n' + '💳 مبلغ قابل پرداخت: ' + price + '\n' +
       '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' +
-      'برای پرداخت، در مینی‌اپ کائنات‌چی وارد بخش «پیگیری درخواست» شو و کد پیگیری و شماره موبایل ثبت‌شده را وارد کن؛ سپس رسید یا کد پرداخت را بفرست. مهلت پرداخت: ۳۰ دقیقه.');
+      'برای پرداخت، در مینی‌اپ کائنات‌چی وارد بخش «پیگیری درخواست» شو و کد پیگیری و شماره موبایل ثبت‌شده را وارد کن؛ سپس تصویر فیش پرداخت را بارگذاری کن. کد پیگیری بانکی اختیاری است. مهلت پرداخت: ۳۰ دقیقه.');
   }
   if (eventType === 'request_rejected') {
     return ('❌ <b>درخواست نوبت پذیرفته نشد</b>\n\n' +
@@ -1112,10 +1123,12 @@ function sendBookingTelegramNotifications_(booking, eventType) {
   var config=getTelegramConfig_();
   var text=buildBookingTelegramText_(booking,eventType);
   var results=[];
+  var adminResult=null;
 
   /*
-   * Only payment_received needs admin action buttons.
-   * Approved/rejected messages are terminal and do not expose action buttons.
+   * Admin delivery is the critical notification: a customer delivery must
+   * never make a failed admin delivery look successful to the retry queue.
+   * Action buttons are sent only to the configured admin chat.
    */
   var replyMarkup = eventType === 'request_received'
     ? getBookingTelegramAdminKeyboard_(booking['Booking ID'], 'request')
@@ -1123,33 +1136,23 @@ function sendBookingTelegramNotifications_(booking, eventType) {
       ? getBookingTelegramAdminKeyboard_(booking['Booking ID'], 'payment') : null;
 
   if(config.adminChatId){
-    results.push(
-      sendTelegramMessage_(
-        config.adminChatId,
-        text,
-        replyMarkup
-      )
-    );
+    adminResult=sendTelegramMessage_(config.adminChatId,text,replyMarkup);
+    results.push({recipient:'admin',result:adminResult});
   } else {
-    results.push({
-      ok:false,
-      skipped:true,
-      reason:'ADMIN_CHAT_ID_NOT_CONFIGURED'
-    });
+    adminResult={ok:false,skipped:true,reason:'ADMIN_CHAT_ID_NOT_CONFIGURED'};
+    results.push({recipient:'admin',result:adminResult});
   }
 
   var customerChatId=String(booking['Telegram ID']||'').trim();
   if(customerChatId && customerChatId!==config.adminChatId){
-    results.push(
-      sendTelegramMessage_(
-        customerChatId,
-        text
-      )
-    );
+    results.push({
+      recipient:'customer',
+      result:sendTelegramMessage_(customerChatId,text)
+    });
   }
 
   return {
-    ok: results.some(function(item){ return item && item.ok === true; }),
+    ok: !!(adminResult && adminResult.ok === true),
     results: results
   };
 }
@@ -1161,12 +1164,15 @@ function sendBookingTelegramNotifications_(booking, eventType) {
  * request itself.
  */
 function queueBookingTelegramNotification_(booking, eventType) {
+  var lock = LockService.getScriptLock();
   try {
     /*
-     * CUSTOMER REQUEST PATH:
-     * Only persist the notification item. No trigger creation, no Telegram
-     * network call, and no extra ScriptApp work is allowed here.
+     * Serialize queue writes with the worker's read/clear and requeue steps.
+     * Without this lock, a simultaneous enqueue can be overwritten when the
+     * worker clears the queue, silently losing an admin notification.
+     * No trigger creation or Telegram network call occurs in this request.
      */
+    lock.waitLock(5000);
     var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
     var props = PropertiesService.getScriptProperties();
     var raw = String(props.getProperty(queueKey) || '[]');
@@ -1191,7 +1197,6 @@ function queueBookingTelegramNotification_(booking, eventType) {
     }
 
     props.setProperty(queueKey, JSON.stringify(queue));
-
     return {ok:true,queued:true};
 
   } catch (error) {
@@ -1203,8 +1208,11 @@ function queueBookingTelegramNotification_(booking, eventType) {
       'Telegram notification queue failed: ' +
       String(error && error.message ? error.message : error)
     );
-
     return {ok:false,queued:false};
+  } finally {
+    try {
+      lock.releaseLock();
+    } catch (ignored) {}
   }
 }
 
@@ -2353,6 +2361,11 @@ function getSlotStatus_(
     if (
       status === CONFIG.STATUSES.BOOKING_PENDING
     ) {
+      // Keep slots reserved while a submitted payment awaits final admin review.
+      const paymentStatus = String(booking['Payment Status'] || '');
+      if (paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED) {
+        return CONFIG.SLOT_STATUS.HELD;
+      }
 
       if (
         holdUntil &&
@@ -3688,7 +3701,8 @@ function submitPayment_(request){
     if(!hold||hold.getTime()<=Date.now()){releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);return fail_('HOLD_EXPIRED','مهلت این نوبت تمام شده است.');}
     var transaction=String(request.transactionNumber||request.paymentTrackingCode||request.paymentCode||'').trim();
     var receipt=String(request.receiptData||request.receiptBase64||'').trim();
-    if(!receipt&&!transaction)return fail_('PAYMENT_PROOF_REQUIRED','تصویر فیش یا کد پیگیری پرداخت الزامی است.');
+    // A transaction reference may accompany the receipt, but cannot replace it.
+    if(!receipt)return fail_('PAYMENT_RECEIPT_REQUIRED','ارسال تصویر فیش پرداخت الزامی است.');
     var saved={id:'',url:'',name:''};
     if(receipt)saved=saveReceiptToDrive_(receipt,request.receiptFileName,request.receiptMimeType,b);
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
@@ -3811,16 +3825,28 @@ function rejectBooking_(request){
   return withBookingLock_(function(){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
     if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+    if(String(b['Appointment Status']||'')!==CONFIG.STATUSES.BOOKING_PENDING)
+      return fail_('BOOKING_NOT_PENDING','این نوبت دیگر در انتظار بررسی پرداخت نیست.');
+    if(String(b['Payment Status']||'')!==CONFIG.STATUSES.PAYMENT_RECEIVED)
+      return fail_('PAYMENT_NOT_READY','برای رد فیش، ابتدا باید پرداخت ارسال شده باشد.');
+
+    var admin=String(request.adminId||request.admin||'admin');
+    var reason=String(request.note||request.reason||'');
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
-      'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),
-      'Admin Note':String(request.note||request.reason||''),'Hold Until':''
+      'Rejected At':new Date(),'Rejected By':admin,
+      'Admin Note':reason,'Hold Until':''
     });
-    appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.note||request.reason||'')});
-
-    // Queue the rejection notification outside the booking request path.
-    queueBookingTelegramNotification_(b, 'rejected');
-
+    getSheetObjects_(CONFIG.SHEETS.PAYMENTS).forEach(function(p){
+      if(String(p['Booking ID']||'')===String(b['Booking ID']||'') &&
+         String(p['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED){
+        updateRowFields_(CONFIG.SHEETS.PAYMENTS,p._row,{
+          'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,'Rejected At':new Date(),'Rejected By':admin
+        });
+      }
+    });
+    appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:reason});
+    queueBookingTelegramNotification_(getBookingByIdObject_(b['Booking ID']), 'rejected');
     return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_REJECTED};
   });
 }
@@ -3840,7 +3866,10 @@ function releaseExpiredHolds_(request){
     var rows=getSheetObjects_(CONFIG.SHEETS.BOOKINGS),released=0,now=Date.now();
     rows.forEach(function(r){
       var hold=parseDateValue_(r['Hold Until']);
-      if(String(r['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING&&hold&&hold.getTime()<=now){
+      // Expire unpaid holds only; submitted payments await final admin review.
+      if(String(r['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING&&
+         String(r['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_PENDING&&
+         hold&&hold.getTime()<=now){
         updateRowFields_(CONFIG.SHEETS.BOOKINGS,r._row,{'Appointment Status':CONFIG.STATUSES.BOOKING_CANCELLED,'Hold Until':'','Admin Note':'Expired hold released.'});
         appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_RELEASED,bookingId:r['Booking ID'],slotKey:r['Slot Key'],details:'Expired hold released.'});
         released++;

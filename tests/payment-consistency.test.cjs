@@ -1,8 +1,9 @@
 const fs = require("node:fs");
+const path = require("node:path");
 const vm = require("node:vm");
 const assert = require("node:assert/strict");
 
-const source = fs.readFileSync(new URL("../Code.gs", import.meta.url), "utf8");
+const source = fs.readFileSync(path.join(process.cwd(), "Code.gs"), "utf8");
 const startMarker = "function normalizePaymentConsistencyStatusPure_(value) {";
 const endMarker = "function validatePaymentSubmissionPreflightPure_(rows, bookingId) {";
 const start = source.indexOf(startMarker);

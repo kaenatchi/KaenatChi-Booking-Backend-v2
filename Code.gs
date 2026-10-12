@@ -4094,6 +4094,158 @@ function testPaymentConsistencyRecoveryPlanPure_() {
   return {ok:failed.length===0,test:'PAYMENT CONSISTENCY RECOVERY PLAN PURE TEST',passed:cases.length-failed.length,total:cases.length,failed,noSheetRead:true,noSheetWrite:true,noExternalCalls:true};
 }
 
+
+/*
+ * Read-only inconsistency inventory.
+ * This report never changes booking/payment rows and never exposes receipt URLs,
+ * receipt file IDs, customer names, mobile numbers, or transaction numbers.
+ */
+function buildPaymentConsistencyDiagnosticReportPure_(bookings, paymentRows) {
+  var bookingList = Array.isArray(bookings) ? bookings : [];
+  var payments = Array.isArray(paymentRows) ? paymentRows : [];
+  var bookingById = {};
+  var paymentGroups = {};
+  var ids = {};
+  bookingList.forEach(function(b) {
+    var id = String((b || {})['Booking ID'] || '').trim();
+    if (!id) return;
+    if (!bookingById[id]) bookingById[id] = [];
+    bookingById[id].push(b);
+    ids[id] = true;
+  });
+  payments.forEach(function(p) {
+    var id = String((p || {})['Booking ID'] || '').trim();
+    if (!id) return;
+    if (!paymentGroups[id]) paymentGroups[id] = [];
+    paymentGroups[id].push(p);
+    ids[id] = true;
+  });
+  var cases = [];
+  Object.keys(ids).forEach(function(id) {
+    var matchingBookings = bookingById[id] || [];
+    var matchingPayments = paymentGroups[id] || [];
+    if (matchingBookings.length === 1) {
+      var b = matchingBookings[0];
+      var classification = classifyPaymentSubmissionConsistencyPure_(b, matchingPayments);
+      if (classification.state === 'NO_PAYMENT_RECORD' ||
+          classification.state === 'PAYMENT_RECORDS_ALIGNED_RECEIVED' ||
+          classification.state === 'PAYMENT_RECORDS_ALIGNED_APPROVED') return;
+      var plan = buildPaymentConsistencyRecoveryPlanPure_(b, matchingPayments);
+      cases.push({
+        bookingId:id,
+        trackingCode:String(b['Tracking Code'] || ''),
+        appointmentDate:String(b['Appointment Date'] || ''),
+        appointmentTime:String(b['Appointment Time'] || ''),
+        appointmentStatus:String(b['Appointment Status'] || ''),
+        bookingPaymentStatus:String(b['Payment Status'] || ''),
+        paymentRowCount:matchingPayments.length,
+        paymentIds:matchingPayments.map(function(p){return String(p['Payment ID'] || '');}),
+        paymentStatuses:matchingPayments.map(function(p){return String(p['Payment Status'] || '');}),
+        receiptPresent:matchingPayments.some(function(p){
+          return !!String(p['Receipt File ID'] || p['Receipt URL'] || p['Receipt Link'] || '').trim();
+        }),
+        state:classification.state,
+        recommendedAction:plan.action,
+        safeToAutoRepair:false
+      });
+      return;
+    }
+    cases.push({
+      bookingId:id,
+      trackingCode:'',
+      appointmentDate:'',
+      appointmentTime:'',
+      appointmentStatus:'',
+      bookingPaymentStatus:'',
+      paymentRowCount:matchingPayments.length,
+      paymentIds:matchingPayments.map(function(p){return String(p['Payment ID'] || '');}),
+      paymentStatuses:matchingPayments.map(function(p){return String(p['Payment Status'] || '');}),
+      receiptPresent:matchingPayments.some(function(p){
+        return !!String(p['Receipt File ID'] || p['Receipt URL'] || p['Receipt Link'] || '').trim();
+      }),
+      state:matchingBookings.length === 0 ? 'PAYMENT_ROW_WITHOUT_BOOKING' : 'DUPLICATE_BOOKING_ROWS',
+      recommendedAction:'MANUAL_REVIEW_REQUIRED',
+      safeToAutoRepair:false
+    });
+  });
+  cases.sort(function(a,b) {
+    return String(a.state).localeCompare(String(b.state)) ||
+      String(a.bookingId).localeCompare(String(b.bookingId));
+  });
+  return {
+    ok:true,
+    report:'PAYMENT_CONSISTENCY_READ_ONLY',
+    caseCount:cases.length,
+    cases:cases,
+    safeToAutoRepair:false,
+    noWrites:true,
+    noTelegramSent:true,
+    noReceiptLinksExposed:true
+  };
+}
+
+/*
+ * Operator-only diagnostic entry point: run manually from the Apps Script editor.
+ * Deliberately not registered in the public doGet/doPost action router.
+ */
+function diagnosePaymentConsistencyCasesReadOnly_() {
+  var bookings = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
+  var payments = getSheetObjects_(CONFIG.SHEETS.PAYMENTS);
+  var report = buildPaymentConsistencyDiagnosticReportPure_(bookings, payments);
+  Logger.log(JSON.stringify(report, null, 2));
+  return report;
+}
+
+function testPaymentConsistencyDiagnosticReportPure_() {
+  var tests = [
+    {
+      name:'orphan received payment is listed without exposing receipt link',
+      bookings:[{'Booking ID':'B1','Tracking Code':'T1','Payment Status':'در انتظار پرداخت'}],
+      payments:[{'Booking ID':'B1','Payment ID':'P1','Payment Status':'فیش دریافت شد','Receipt URL':'PRIVATE-URL'}],
+      expectedState:'PAYMENT_ROW_RECEIVED_BOOKING_NOT_UPDATED'
+    },
+    {
+      name:'duplicate payment rows remain manual review',
+      bookings:[{'Booking ID':'B2','Payment Status':'فیش دریافت شد'}],
+      payments:[{'Booking ID':'B2','Payment ID':'P2','Payment Status':'فیش دریافت شد'},{'Booking ID':'B2','Payment ID':'P3','Payment Status':'فیش دریافت شد'}],
+      expectedState:'DUPLICATE_PAYMENT_ROWS'
+    },
+    {
+      name:'payment row without a booking is reported',
+      bookings:[],
+      payments:[{'Booking ID':'B3','Payment ID':'P4','Payment Status':'فیش دریافت شد'}],
+      expectedState:'PAYMENT_ROW_WITHOUT_BOOKING'
+    },
+    {
+      name:'aligned received records are omitted',
+      bookings:[{'Booking ID':'B4','Payment Status':'فیش دریافت شد'}],
+      payments:[{'Booking ID':'B4','Payment ID':'P5','Payment Status':'فیش دریافت شد'}],
+      expectedState:'NONE'
+    },
+    {
+      name:'duplicate booking rows are not silently selected',
+      bookings:[{'Booking ID':'B5','Payment Status':'در انتظار پرداخت'},{'Booking ID':'B5','Payment Status':'در انتظار پرداخت'}],
+      payments:[{'Booking ID':'B5','Payment ID':'P6','Payment Status':'فیش دریافت شد'}],
+      expectedState:'DUPLICATE_BOOKING_ROWS'
+    }
+  ];
+  var failed = [];
+  tests.forEach(function(t) {
+    var report = buildPaymentConsistencyDiagnosticReportPure_(t.bookings, t.payments);
+    var actualState = report.cases.length ? report.cases[0].state : 'NONE';
+    if (actualState !== t.expectedState ||
+        report.safeToAutoRepair !== false ||
+        report.noWrites !== true ||
+        report.noTelegramSent !== true ||
+        JSON.stringify(report).indexOf('PRIVATE-URL') !== -1) {
+      failed.push({name:t.name,actualState:actualState,expectedState:t.expectedState,reportFlags:{
+        safeToAutoRepair:report.safeToAutoRepair,noWrites:report.noWrites,noTelegramSent:report.noTelegramSent
+      }});
+    }
+  });
+  return {ok:failed.length===0,test:'PAYMENT CONSISTENCY DIAGNOSTIC REPORT PURE TEST',passed:tests.length-failed.length,total:tests.length,failed,noSheetRead:true,noSheetWrite:true,noExternalCalls:true};
+}
+
 function validatePaymentSubmissionPreflightPure_(rows, bookingId) {
   var id=String(bookingId||'').trim();
   if(!id)return {ok:false,error:'BOOKING_ID_REQUIRED'};

@@ -3976,6 +3976,59 @@ function hasRequiredReceiptImage_(receipt) {
   return true;
 }
 
+function classifyPaymentSubmissionConsistencyPure_(booking, paymentRows) {
+  var b = booking || {};
+  var rows = Array.isArray(paymentRows) ? paymentRows : [];
+  var bookingStatus = String(b['Payment Status'] || '');
+  var bookingHasReceipt = !!String(b['Receipt File ID'] || '').trim() ||
+    !!String(b['Receipt URL'] || b['Receipt Link'] || '').trim();
+  if (rows.length === 0) {
+    if (bookingStatus === 'PAYMENT_RECEIVED' || bookingStatus === 'PAYMENT_APPROVED' || bookingHasReceipt) {
+      return {state:'BOOKING_PAYMENT_WITHOUT_PAYMENT_ROW',recoverable:false,action:'MANUAL_REVIEW'};
+    }
+    return {state:'NO_PAYMENT_RECORD',recoverable:true,action:'ALLOW_NEW_SUBMISSION'};
+  }
+  if (rows.length > 1) {
+    return {state:'DUPLICATE_PAYMENT_ROWS',recoverable:false,action:'MANUAL_REVIEW'};
+  }
+  var p = rows[0] || {};
+  var paymentStatus = String(p['Payment Status'] || '');
+  var paymentHasReceipt = !!String(p['Receipt File ID'] || '').trim() ||
+    !!String(p['Receipt URL'] || p['Receipt Link'] || '').trim();
+  if (bookingStatus === 'PAYMENT_RECEIVED' && paymentStatus === 'PAYMENT_RECEIVED') {
+    return {state:'PAYMENT_RECORDS_ALIGNED_RECEIVED',recoverable:true,action:'CONTINUE_NORMAL_FLOW'};
+  }
+  if (bookingStatus === 'PAYMENT_APPROVED' && paymentStatus === 'PAYMENT_APPROVED') {
+    return {state:'PAYMENT_RECORDS_ALIGNED_APPROVED',recoverable:true,action:'CONTINUE_NORMAL_FLOW'};
+  }
+  if (bookingStatus === 'PAYMENT_RECEIVED' && paymentStatus !== 'PAYMENT_RECEIVED' && paymentStatus !== 'PAYMENT_APPROVED') {
+    return {state:'BOOKING_RECEIVED_PAYMENT_ROW_NOT_READY',recoverable:false,action:'MANUAL_REVIEW'};
+  }
+  if (bookingStatus !== 'PAYMENT_RECEIVED' && bookingStatus !== 'PAYMENT_APPROVED' &&
+      paymentStatus === 'PAYMENT_RECEIVED' && paymentHasReceipt) {
+    return {state:'PAYMENT_ROW_RECEIVED_BOOKING_NOT_UPDATED',recoverable:true,action:'RECOVER_FROM_PAYMENT_ROW'};
+  }
+  return {state:'PAYMENT_STATUS_MISMATCH',recoverable:false,action:'MANUAL_REVIEW'};
+}
+
+function testPaymentSubmissionConsistencyClassificationPure_() {
+  var cases = [
+    {name:'clean pending booking allows submission',b:{'Payment Status':'PAYMENT_PENDING'},p:[],state:'NO_PAYMENT_RECORD',action:'ALLOW_NEW_SUBMISSION'},
+    {name:'booking updated but payment append failed needs review',b:{'Payment Status':'PAYMENT_RECEIVED','Receipt File ID':'FILE1'},p:[],state:'BOOKING_PAYMENT_WITHOUT_PAYMENT_ROW',action:'MANUAL_REVIEW'},
+    {name:'payment row written before booking update is recoverable',b:{'Payment Status':'PAYMENT_PENDING'},p:[{'Payment Status':'PAYMENT_RECEIVED','Receipt File ID':'FILE1'}],state:'PAYMENT_ROW_RECEIVED_BOOKING_NOT_UPDATED',action:'RECOVER_FROM_PAYMENT_ROW'},
+    {name:'matching received records are aligned',b:{'Payment Status':'PAYMENT_RECEIVED'},p:[{'Payment Status':'PAYMENT_RECEIVED'}],state:'PAYMENT_RECORDS_ALIGNED_RECEIVED',action:'CONTINUE_NORMAL_FLOW'},
+    {name:'duplicate payment rows need review',b:{'Payment Status':'PAYMENT_RECEIVED'},p:[{'Payment Status':'PAYMENT_RECEIVED'},{'Payment Status':'PAYMENT_RECEIVED'}],state:'DUPLICATE_PAYMENT_ROWS',action:'MANUAL_REVIEW'},
+    {name:'payment approved while booking pending is mismatch',b:{'Payment Status':'PAYMENT_PENDING'},p:[{'Payment Status':'PAYMENT_APPROVED'}],state:'PAYMENT_STATUS_MISMATCH',action:'MANUAL_REVIEW'},
+    {name:'booking receipt without payment row is detected',b:{'Payment Status':'PAYMENT_PENDING','Receipt URL':'receipt-link'},p:[],state:'BOOKING_PAYMENT_WITHOUT_PAYMENT_ROW',action:'MANUAL_REVIEW'}
+  ];
+  var failed = [];
+  cases.forEach(function(t) {
+    var result = classifyPaymentSubmissionConsistencyPure_(t.b,t.p);
+    if (result.state !== t.state || result.action !== t.action) failed.push({name:t.name,actual:result,expected:{state:t.state,action:t.action}});
+  });
+  return {ok:failed.length===0,test:'PAYMENT SUBMISSION CONSISTENCY CLASSIFICATION PURE TEST',passed:cases.length-failed.length,total:cases.length,failed,noSheetRead:true,noSheetWrite:true,noExternalCalls:true};
+}
+
 function validatePaymentSubmissionPreflightPure_(rows, bookingId) {
   var id=String(bookingId||'').trim();
   if(!id)return {ok:false,error:'BOOKING_ID_REQUIRED'};

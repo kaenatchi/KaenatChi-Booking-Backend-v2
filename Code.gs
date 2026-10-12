@@ -350,13 +350,17 @@ function getBookingPublicStatus_(request) {
   var b=getBookingByIdObject_(tracking);
   if(!b||normalizeMobileForMatch_(b['Mobile']||'')!==mobile)
     return fail_('BOOKING_NOT_FOUND','با این کد پیگیری و شماره موبایل نوبتی پیدا نشد.');
+  var appointmentStatus=String(b['Appointment Status']||'');
+  var paymentStatus=String(b['Payment Status']||'');
+  var initiallyApproved=String(b['Admin Note']||'').indexOf('INITIAL_REQUEST_APPROVED')!==-1;
+  var holdUntil=parseDateValue_(b['Hold Until']);
   return {ok:true,found:true,booking:{
     bookingId:String(b['Booking ID']||''),requestId:String(b['Request ID']||''),trackingCode:String(b['Tracking Code']||''),
     serviceName:String(b['Service Name']||''),appointmentDate:String(b['Appointment Date']||''),
     appointmentTime:String(b['Appointment Time']||''),appointmentStatus:String(b['Appointment Status']||''),
     paymentStatus:String(b['Payment Status']||''),finalPrice:toNumber_(b['Final Price']),
     currency:String(b['Currency']||'IRR'),
-    canPay:String(b['Admin Note']||'').indexOf('INITIAL_REQUEST_APPROVED')!==-1 && String(b['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_PENDING && (parseDateValue_(b['Hold Until'])||new Date(0)).getTime()>Date.now()
+    canPay:appointmentStatus===CONFIG.STATUSES.BOOKING_PENDING && initiallyApproved && paymentStatus===CONFIG.STATUSES.PAYMENT_PENDING && holdUntil && holdUntil.getTime()>Date.now()
   }};
 }
 
@@ -3627,6 +3631,11 @@ function createBooking_(request){
     var date=normalizeJalaliDate_(request.date||request.appointmentDate);
     var time=normalizeTime_(request.time||request.appointmentTime);
     if(!date||!time)return fail_('DATE_TIME_REQUIRED','تاریخ و ساعت الزامی است.');
+    var firstName=String(request.firstName||'').trim();
+    var lastName=String(request.lastName||'').trim();
+    var mobile=String(request.mobile||request.phone||'').trim();
+    if(!firstName||!lastName||!mobile)return fail_('CUSTOMER_DETAILS_REQUIRED','نام، نام خانوادگی و شماره موبایل الزامی است.');
+    if(!normalizeMobileForMatch_(mobile))return fail_('INVALID_MOBILE','شماره موبایل معتبر نیست.');
     if(!isDateAvailable_(date))return fail_('DATE_NOT_AVAILABLE','این تاریخ قابل رزرو نیست.');
     var schedule=getScheduleForDate_(date);
     var allowed=schedule.ranges.some(function(r){return generateSlots_(r.startTime,r.endTime,r.slotDuration).indexOf(time)!==-1;});
@@ -3653,8 +3662,8 @@ function createBooking_(request){
       telegramFirstName:String(request.telegramFirstName||'').trim(),
       telegramLastName:String(request.telegramLastName||'').trim(),
       customerId:String(request.customerId||''),
-      firstName:String(request.firstName||'').trim(),lastName:String(request.lastName||'').trim(),
-      mobile:String(request.mobile||request.phone||'').trim(),serviceId:String(service.id||request.serviceId||''),
+      firstName:firstName,lastName:lastName,
+      mobile:mobile,serviceId:String(service.id||request.serviceId||''),
       serviceName:String(service.name),appointmentDate:date,appointmentTime:time,slotKey:slotKey,
       originalPrice:basePrice,discountCode:discountCode,discountType:discountCode?'VIP':'',
       discountPercent:discount.discountPercent,discountAmount:discount.discountAmount,finalPrice:discount.finalPrice,

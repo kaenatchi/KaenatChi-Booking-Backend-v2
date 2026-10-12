@@ -344,7 +344,7 @@ function getBookingPublicStatus_(request) {
   if(!b||normalizeMobileForMatch_(b['Mobile']||'')!==mobile)
     return fail_('BOOKING_NOT_FOUND','با این کد پیگیری و شماره موبایل نوبتی پیدا نشد.');
   return {ok:true,found:true,booking:{
-    bookingId:String(b['Booking ID']||''),trackingCode:String(b['Tracking Code']||''),
+    bookingId:String(b['Booking ID']||''),requestId:String(b['Request ID']||''),trackingCode:String(b['Tracking Code']||''),
     serviceName:String(b['Service Name']||''),appointmentDate:String(b['Appointment Date']||''),
     appointmentTime:String(b['Appointment Time']||''),appointmentStatus:String(b['Appointment Status']||''),
     paymentStatus:String(b['Payment Status']||''),finalPrice:toNumber_(b['Final Price']),

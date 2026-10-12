@@ -2237,29 +2237,23 @@ function resolveBookingStatuses_(bookingRows, targetDate, excludeBookingId) {
 
     const key = buildSlotKey_(rowDate, rowTime);
     const appointmentStatus = String(row['Appointment Status'] || '');
-    const paymentStatus = String(row['Payment Status'] || '');
+    const holdUntil = parseDateValue_(row['Hold Until']);
 
+    // Confirmed bookings remain occupied independently of their former hold.
     if (appointmentStatus === CONFIG.STATUSES.BOOKING_CONFIRMED) {
       statuses[key] = CONFIG.SLOT_STATUS.CONFIRMED;
       return;
     }
-    if (appointmentStatus !== CONFIG.STATUSES.BOOKING_PENDING) return;
 
-    if (
-      paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
-      paymentStatus === CONFIG.STATUSES.PAYMENT_APPROVED
-    ) {
-      if (statuses[key] !== CONFIG.SLOT_STATUS.CONFIRMED) statuses[key] = CONFIG.SLOT_STATUS.HELD;
-      return;
-    }
+    // Both manager-pending and payment-pending bookings own a live hold.
+    // Expired holds must not remain occupied merely because a receipt was submitted.
+    const holdable =
+      appointmentStatus === CONFIG.STATUSES.BOOKING_PENDING ||
+      appointmentStatus === CONFIG.STATUSES.BOOKING_AWAITING_PAYMENT;
 
-    const holdUntil = parseDateValue_(row['Hold Until']);
-    if (
-      holdUntil &&
-      holdUntil.getTime() > Date.now() &&
-      statuses[key] !== CONFIG.SLOT_STATUS.CONFIRMED &&
-      statuses[key] !== CONFIG.SLOT_STATUS.HELD
-    ) {
+    if (!holdable || !holdUntil || holdUntil.getTime() <= Date.now()) return;
+
+    if (statuses[key] !== CONFIG.SLOT_STATUS.CONFIRMED) {
       statuses[key] = CONFIG.SLOT_STATUS.HELD;
     }
   });
@@ -3891,6 +3885,26 @@ function validateDiscount_(request){
 
 function createBooking_(request){
   return withBookingLock_(function(){
+    // Idempotency guard: a transport retry with the same requestId must return
+    // the original booking rather than creating a second hold.
+    var requestId=String(request.requestId||request.clientRequestId||'').trim();
+    if(requestId){
+      var existing=getSheetObjects_(CONFIG.SHEETS.BOOKINGS).find(function(row){
+        return String(row['Request ID']||'').trim()===requestId;
+      });
+      if(existing){
+        return {
+          ok:true,
+          booking:publicBooking_(existing),
+          message:'این درخواست قبلاً ثبت شده است؛ همان رزرو قبلی بازیابی شد.',
+          nextStep:String(existing['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING
+            ? 'WAITING_FOR_MANAGER_APPROVAL'
+            : String(existing['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_AWAITING_PAYMENT
+              ? 'WAITING_FOR_PAYMENT'
+              : 'EXISTING_BOOKING'
+        };
+      }
+    }
     var date=normalizeJalaliDate_(request.date||request.appointmentDate);
     var time=normalizeTime_(request.time||request.appointmentTime);
     if(!date||!time)return fail_('DATE_TIME_REQUIRED','تاریخ و ساعت الزامی است.');
@@ -4055,10 +4069,18 @@ function approveReceipt_(request) {
       releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);
       return fail_('PAYMENT_REVIEW_EXPIRED','مهلت پرداخت یا بررسی فیش تمام شده است.');
     }
-    var slotKey=String(b['Slot Key']||buildSlotKey_(normalizeJalaliDate_(b['Appointment Date']),normalizeTime_(b['Appointment Time'])));
-    var slotStatus=getSlotStatus_(slotKey,normalizeJalaliDate_(b['Appointment Date']),normalizeTime_(b['Appointment Time']),b['Booking ID']);
+    var appointmentDate=normalizeJalaliDate_(b['Appointment Date']);
+    var appointmentTime=normalizeTime_(b['Appointment Time']);
+    var slotKey=String(b['Slot Key']||buildSlotKey_(appointmentDate,appointmentTime));
+    var slotStatus=getSlotStatus_(slotKey,appointmentDate,appointmentTime,b['Booking ID']);
     if(slotStatus!==CONFIG.SLOT_STATUS.FREE) {
       return fail_('SLOT_UNAVAILABLE','این زمان دیگر آزاد نیست؛ نوبت قطعی نشد و نیاز به بررسی مدیر دارد.');
+    }
+    var service=findServiceRecord_(String(b['Service ID']||''),String(b['Service Name']||''));
+    var duration=Math.max(1,Number(service&&service.duration)||toNumber_(getSetting_('Default Slot Duration',30))||30);
+    var currentBookings=getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
+    if(isAppointmentTimeConflicting_(appointmentDate,appointmentTime,duration,currentBookings,String(b['Booking ID']||''))) {
+      return fail_('SLOT_OVERLAP','این نوبت با بازهٔ زمانی نوبت دیگری تداخل دارد؛ قطعی‌سازی متوقف شد.');
     }
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,
@@ -6295,6 +6317,26 @@ function appointmentFitsWithinRange_(startTime, duration, endTime) {
   return startMinutes>=0 && endMinutes>startMinutes && startMinutes+minutes<=endMinutes;
 }
 
+function testBookingHoldStatusesPure_() {
+  function assert(name,actual,expected){if(actual!==expected)throw new Error(name+': expected '+expected+', got '+actual);}
+  var future=new Date(Date.now()+60*60*1000);
+  var past=new Date(Date.now()-60*1000);
+  var date='1405/07/14';
+  var base={'Appointment Date':date,'Appointment Time':'11:00','Booking ID':'B1','Hold Until':future};
+  var pending=Object.assign({},base,{'Appointment Status':CONFIG.STATUSES.BOOKING_PENDING,'Payment Status':CONFIG.STATUSES.PAYMENT_NOT_REQUESTED});
+  var awaiting=Object.assign({},base,{'Appointment Status':CONFIG.STATUSES.BOOKING_AWAITING_PAYMENT,'Payment Status':CONFIG.STATUSES.PAYMENT_PENDING});
+  var receipt=Object.assign({},base,{'Appointment Status':CONFIG.STATUSES.BOOKING_AWAITING_PAYMENT,'Payment Status':CONFIG.STATUSES.PAYMENT_RECEIVED});
+  var expired=Object.assign({},receipt,{'Hold Until':past});
+  var confirmed=Object.assign({},expired,{'Appointment Status':CONFIG.STATUSES.BOOKING_CONFIRMED});
+  assert('manager-pending hold is occupied',resolveBookingStatuses_([pending],date)['1405/07/14|11:00'],CONFIG.SLOT_STATUS.HELD);
+  assert('awaiting-payment hold is occupied',resolveBookingStatuses_([awaiting],date)['1405/07/14|11:00'],CONFIG.SLOT_STATUS.HELD);
+  assert('receipt review hold is occupied',resolveBookingStatuses_([receipt],date)['1405/07/14|11:00'],CONFIG.SLOT_STATUS.HELD);
+  assert('expired receipt hold is released',resolveBookingStatuses_([expired],date)['1405/07/14|11:00'],undefined);
+  assert('confirmed booking remains occupied after old hold expiry',resolveBookingStatuses_([confirmed],date)['1405/07/14|11:00'],CONFIG.SLOT_STATUS.CONFIRMED);
+  assert('own booking can be excluded for its final slot check',resolveBookingStatuses_([pending],date,'B1')['1405/07/14|11:00'],undefined);
+  return {ok:true,test:'BOOKING HOLD STATUS PURE TEST',passed:6,noSheetRead:true,noSheetWrite:true,noBookingCreated:true,noPaymentChange:true,noTelegramSent:true};
+}
+
 function testAppointmentDurationOverlapPure_() {
   function assert(name,actual,expected){if(actual!==expected)throw new Error(name+': expected '+expected+', got '+actual);}
   assert('20 minute session then 30 min start at +30',appointmentIntervalsOverlap_('11:00',20,'11:30',30),false);
@@ -6353,6 +6395,7 @@ function runStagingSafeSuite() {
         : [],
       therapyChecks: therapyChecks
     };
+    report.checks.bookingHoldStatusesPure = testBookingHoldStatusesPure_();
     report.checks.durationOverlapPure = testAppointmentDurationOverlapPure_();
 
     var settingsResult = getBookingSettings_();
@@ -6367,6 +6410,7 @@ function runStagingSafeSuite() {
       {ok: true},
       report.checks.bookedSlotsFeedPure,
       report.checks.rejectGuardPure,
+      report.checks.bookingHoldStatusesPure,
       report.checks.servicesRead,
       report.checks.durationOverlapPure,
       report.checks.bookingSettingsRead

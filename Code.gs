@@ -1299,6 +1299,23 @@ function processBookingTelegramNotificationQueue_() {
   var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
   var inflightKey = 'KAENATCHI_TELEGRAM_INFLIGHT';
   var triggerKey = 'KAENATCHI_TELEGRAM_TRIGGER_SCHEDULED';
+  var workerLeaseKey = 'KAENATCHI_TELEGRAM_WORKER_LEASE';
+  var workerToken = Utilities.getUuid();
+  var leaseLock = LockService.getScriptLock();
+  leaseLock.waitLock(5000);
+  try {
+    var leaseProps = PropertiesService.getScriptProperties();
+    var leaseRaw = String(leaseProps.getProperty(workerLeaseKey) || '');
+    var leaseParts = leaseRaw.split('|');
+    var leaseExpiry = Number(leaseParts[0] || 0);
+    if (leaseExpiry > Date.now()) {
+      return {ok:true,skipped:true,reason:'WORKER_ALREADY_RUNNING'};
+    }
+    // Lease expires after five minutes if execution terminates unexpectedly.
+    leaseProps.setProperty(workerLeaseKey, String(Date.now() + 300000) + '|' + workerToken);
+  } finally {
+    leaseLock.releaseLock();
+  }
 
   // Do reminder work before claiming notifications. Its failure must not
   // remove booking notifications from the persistent queue.
@@ -1424,6 +1441,18 @@ function processBookingTelegramNotificationQueue_() {
     }
   } finally {
     lock.releaseLock();
+  }
+
+  var finishLock = LockService.getScriptLock();
+  finishLock.waitLock(5000);
+  try {
+    var finishProps = PropertiesService.getScriptProperties();
+    var currentLease = String(finishProps.getProperty(workerLeaseKey) || '');
+    if (currentLease.split('|')[1] === workerToken) {
+      finishProps.deleteProperty(workerLeaseKey);
+    }
+  } finally {
+    finishLock.releaseLock();
   }
 
   return {ok:failedCount===0,processed:items.length,sent:sent,failed:failedCount,remaining:remaining.length};

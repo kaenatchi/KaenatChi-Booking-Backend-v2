@@ -1337,8 +1337,8 @@ function processBookingTelegramNotificationQueue_() {
     lock.releaseLock();
   }
 
-  if (!items.length) return {ok:true,processed:0,failed:0};
-
+  // Continue to the scheduling phase even when every retained item is
+  // waiting for retryAt; otherwise a future retry could be stranded.
   var sent = 0;
   var failedCount = 0;
   items.forEach(function(item) {

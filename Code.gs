@@ -669,7 +669,8 @@ function getTelegramConfig_() {
   var props = PropertiesService.getScriptProperties();
   return {
     botToken: String(props.getProperty('KAENATCHI_TELEGRAM_BOT_TOKEN') || '').trim(),
-    adminChatId: String(props.getProperty('KAENATCHI_TELEGRAM_ADMIN_CHAT_ID') || '').trim()
+    adminChatId: String(props.getProperty('KAENATCHI_TELEGRAM_ADMIN_CHAT_ID') || '').trim(),
+    adminUserId: String(props.getProperty('KAENATCHI_TELEGRAM_ADMIN_USER_ID') || '').trim()
   };
 }
 
@@ -921,11 +922,19 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   var chatId = String(
     message.chat && message.chat.id || ''
   ).trim();
+  var chatType = String(message.chat && message.chat.type || '').trim();
+  var actorId = String(callbackQuery.from && callbackQuery.from.id || '').trim();
 
   /*
-   * Only the configured admin chat may execute approval/rejection actions.
+   * Verify both the target chat and the person pressing the inline button.
+   * In a private admin chat, the configured chat ID is also the admin user ID
+   * unless an explicit KAENATCHI_TELEGRAM_ADMIN_USER_ID is configured.
+   * Group chats fail closed unless that explicit user ID is configured.
    */
-  if (!config.adminChatId || chatId !== config.adminChatId) {
+  var expectedAdminUserId = config.adminUserId ||
+    (chatType === 'private' ? config.adminChatId : '');
+  if (!config.adminChatId || chatId !== config.adminChatId ||
+      !actorId || !expectedAdminUserId || actorId !== expectedAdminUserId) {
     answerTelegramCallbackQuery_(
       queryId,
       'این عملیات فقط برای ادمین مجاز است.',

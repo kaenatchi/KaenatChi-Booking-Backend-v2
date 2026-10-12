@@ -4057,8 +4057,8 @@ function approveReceipt_(request) {
     }
     var slotKey=String(b['Slot Key']||buildSlotKey_(normalizeJalaliDate_(b['Appointment Date']),normalizeTime_(b['Appointment Time'])));
     var slotStatus=getSlotStatus_(slotKey,normalizeJalaliDate_(b['Appointment Date']),normalizeTime_(b['Appointment Time']),b['Booking ID']);
-    if(slotStatus===CONFIG.SLOT_STATUS.BLOCKED || slotStatus===CONFIG.SLOT_STATUS.CONFIRMED) {
-      return fail_('SLOT_UNAVAILABLE','این زمان دیگر قابل تأیید نیست.');
+    if(slotStatus!==CONFIG.SLOT_STATUS.FREE) {
+      return fail_('SLOT_UNAVAILABLE','این زمان دیگر آزاد نیست؛ نوبت قطعی نشد و نیاز به بررسی مدیر دارد.');
     }
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,

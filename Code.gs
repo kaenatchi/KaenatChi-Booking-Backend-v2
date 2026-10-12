@@ -1184,14 +1184,20 @@ function queueBookingTelegramNotification_(booking, eventType) {
         return {ok:false,queued:false,error:'TELEGRAM_QUEUE_FULL'};
       }
 
-      queue.push({
+      var newItem = {
         id: Utilities.getUuid(),
         bookingId: bookingId,
         eventType: normalizedEvent,
         queuedAt: new Date().toISOString(),
         attempts: 0
-      });
-      props.setProperty(queueKey, JSON.stringify(queue));
+      };
+      var candidateQueue = queue.concat([newItem]);
+      if (!isTelegramQueuePropertyWithinLimitPure_(candidateQueue, 8000)) {
+        console.error('Telegram notification queue reached its safe storage limit; item not queued: ' +
+          bookingId + ' / ' + normalizedEvent);
+        return {ok:false,queued:false,error:'TELEGRAM_QUEUE_STORAGE_LIMIT'};
+      }
+      props.setProperty(queueKey, JSON.stringify(candidateQueue));
       return {ok:true,queued:true};
     } finally {
       lock.releaseLock();
@@ -1219,6 +1225,13 @@ function readTelegramQueueProperty_(props, key) {
   }
   if (!Array.isArray(parsed)) throw new Error('TELEGRAM_QUEUE_NOT_ARRAY:' + key);
   return parsed;
+}
+
+/* Apps Script property values have a small per-value quota; leave headroom. */
+function isTelegramQueuePropertyWithinLimitPure_(items, maxBytes) {
+  var serialized = JSON.stringify(Array.isArray(items) ? items : []);
+  var utf8Bytes = encodeURIComponent(serialized).replace(/%[0-9A-F]{2}/g, 'x').length;
+  return utf8Bytes <= Number(maxBytes || 8000);
 }
 
 /*
@@ -1262,10 +1275,13 @@ function processBookingTelegramNotificationQueue_() {
       // Do not truncate. Preserve everything and fail visibly for operator review.
       throw new Error('TELEGRAM_QUEUE_CAPACITY_EXCEEDED:' + combined.length);
     }
+    if (!isTelegramQueuePropertyWithinLimitPure_(combined, 8000)) {
+      throw new Error('TELEGRAM_QUEUE_STORAGE_LIMIT_EXCEEDED: refusing to overwrite either queue.');
+    }
     props.setProperty(inflightKey, JSON.stringify(combined));
     props.setProperty(queueKey, '[]');
     props.deleteProperty(triggerKey);
-    items = combined.slice();
+    items = combined.filter(function(item) { return item.permanentFailure !== true; });
   } finally {
     lock.releaseLock();
   }
@@ -1325,6 +1341,9 @@ function processBookingTelegramNotificationQueue_() {
         failedCount++;
       }
 
+      if (!isTelegramQueuePropertyWithinLimitPure_(inflight2, 8000)) {
+        throw new Error('TELEGRAM_QUEUE_STORAGE_LIMIT_EXCEEDED: item state remains recoverable in prior property value.');
+      }
       props2.setProperty(inflightKey, JSON.stringify(inflight2));
     } finally {
       lock2.releaseLock();

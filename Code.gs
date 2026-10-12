@@ -3635,7 +3635,7 @@ function createBooking_(request){
     });
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.BOOKING_CREATED,bookingId:booking.bookingId,slotKey:slotKey,details:'Booking request created; awaiting initial admin review.'});
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_HELD,bookingId:booking.bookingId,slotKey:slotKey,details:'Slot held for initial review (120 minutes).'});
-    queueBookingTelegramNotification_(booking, 'request_received');
+    queueBookingTelegramNotification_(getBookingByIdObject_(booking.bookingId), 'request_received');
     return {ok:true,booking:publicBooking_(booking),message:'درخواست نوبت ثبت شد و تا ۲ ساعت در انتظار بررسی اولیه است.'};
   });
 }
@@ -3696,7 +3696,7 @@ function approveBookingRequest_(request) {
       'Initial Approved At':new Date(),'Initial Approved By':String(request.adminId||request.admin||'admin')
     });
     appendBookingLog_({action:'INITIAL_REQUEST_APPROVED',bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Initial request approved; 30-minute payment window started.'});
-    queueBookingTelegramNotification_(b,'request_approved');
+    queueBookingTelegramNotification_(getBookingByIdObject_(b['Booking ID']), 'request_approved');
     return {ok:true,bookingId:b['Booking ID'],trackingCode:b['Tracking Code'],status:'AWAITING_PAYMENT'};
   });
 }
@@ -3715,7 +3715,7 @@ function rejectBookingRequest_(request) {
       'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),'Hold Until':''
     });
     appendBookingLog_({action:'INITIAL_REQUEST_REJECTED',bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.reason||'Initial request rejected.')});
-    queueBookingTelegramNotification_(b,'request_rejected');
+    queueBookingTelegramNotification_(getBookingByIdObject_(b['Booking ID']), 'request_rejected');
     return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_REJECTED};
   });
 }

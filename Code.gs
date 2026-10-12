@@ -1214,6 +1214,20 @@ function queueBookingTelegramNotification_(booking, eventType) {
  * queue silently. A malformed queue is preserved for diagnosis and throws,
  * preventing the worker from overwriting recoverable notification data.
  */
+
+function testTelegramQueueStorageLimitPure_() {
+  var small = [{id:'1',bookingId:'BK-1',eventType:'payment_received',queuedAt:'2026-10-13T00:00:00.000Z',attempts:0}];
+  var large = [{id:'2',bookingId:'BK-2',eventType:'payment_received',lastError:new Array(9000).join('x')}];
+  var cases = [
+    {name:'small queue fits safe property budget',actual:isTelegramQueuePropertyWithinLimitPure_(small,8000),expected:true},
+    {name:'oversized queue is rejected before property write',actual:isTelegramQueuePropertyWithinLimitPure_(large,8000),expected:false},
+    {name:'empty queue fits',actual:isTelegramQueuePropertyWithinLimitPure_([],8000),expected:true},
+    {name:'Unicode queue size is counted in UTF-8 bytes',actual:isTelegramQueuePropertyWithinLimitPure_([{text:'مایا'.repeat(100)}],8000),expected:true}
+  ];
+  var failed=cases.filter(function(test){return test.actual!==test.expected;});
+  return {ok:failed.length===0,test:'TELEGRAM QUEUE STORAGE LIMIT PURE TEST',passed:cases.length-failed.length,total:cases.length,failed:failed,noExternalCalls:true};
+}
+
 function readTelegramQueueProperty_(props, key) {
   var raw = props.getProperty(key);
   if (raw === null || raw === '') return [];

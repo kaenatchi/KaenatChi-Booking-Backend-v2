@@ -261,7 +261,7 @@ function routeRequest_(action, request) {
     // Administrative approval/rejection is intentionally not exposed through
     // the public JSON/JSONP action router. These operations are invoked only
     // from the authenticated Telegram callback handler.
-    case 'cancelBooking': return cancelBooking_(request);
+    // Direct public cancellation is disabled; customer cancellation must be manager-reviewed.
     case 'releaseExpiredHolds': return releaseExpiredHolds_(request);
 
     default:
@@ -808,6 +808,54 @@ function sendTelegramMessage_(chatId, text, replyMarkup) {
   }
 }
 
+function sendTelegramPhoto_(chatId, fileId, caption, replyMarkup) {
+  chatId = String(chatId || '').trim();
+  fileId = String(fileId || '').trim();
+  if (!chatId || !fileId || !caption) {
+    return {ok:false,error:'TELEGRAM_PHOTO_ARGUMENTS_MISSING'};
+  }
+
+  var config = getTelegramConfig_();
+  if (!config.botToken) {
+    return {ok:false,skipped:true,reason:'BOT_TOKEN_NOT_CONFIGURED'};
+  }
+
+  try {
+    var file = DriveApp.getFileById(fileId);
+    var payload = {
+      chat_id: chatId,
+      photo: file.getBlob(),
+      caption: caption,
+      parse_mode: 'HTML'
+    };
+    if (replyMarkup) payload.reply_markup = JSON.stringify(replyMarkup);
+
+    var response = UrlFetchApp.fetch(
+      'https://api.telegram.org/bot' + encodeURIComponent(config.botToken) + '/sendPhoto',
+      {
+        method:'post',
+        muteHttpExceptions:true,
+        payload:payload
+      }
+    );
+
+    var code = response.getResponseCode();
+    var body = response.getContentText();
+    var parsed = {};
+    try { parsed = JSON.parse(body); } catch(e) {}
+
+    if (code >= 200 && code < 300 && parsed.ok === true) {
+      return {ok:true,result:parsed.result || null};
+    }
+
+    console.warn('Telegram photo delivery failed: HTTP ' + code + ' ' + body);
+    return {ok:false,error:'TELEGRAM_PHOTO_SEND_FAILED',httpCode:code};
+  } catch(error) {
+    console.warn('Telegram photo delivery exception: ' + (error && error.message ? error.message : error));
+    return {ok:false,error:'TELEGRAM_PHOTO_EXCEPTION'};
+  }
+}
+
 function telegramApiRequest_(method, payload) {
   var config = getTelegramConfig_();
 
@@ -1090,12 +1138,18 @@ function buildBookingTelegramText_(booking, eventType) {
   var price = escapeTelegramHtml_(
     booking['Final Price'] || ''
   );
+  var bookingId = escapeTelegramHtml_(
+    booking['Booking ID'] || ''
+  );
+  var transactionNumber = escapeTelegramHtml_(
+    booking['Transaction Number'] || 'ثبت نشده'
+  );
 
   if (eventType === 'request_received') {
     return ('📩 <b>درخواست جدید نوبت کائنات‌چی</b>\n\n' +
       '👤 ' + customer + '\n' + '✨ ' + service + '\n' +
       '📅 ' + date + ' — ' + time + '\n' + '💳 مبلغ: ' + price + '\n' +
-      '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' + '⏳ مهلت بررسی اولیه: ۲ ساعت');
+      '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' + '⏳ مهلت بررسی اولیه: ۱۲ ساعت');
   }
   if (eventType === 'request_approved') {
     return ('✅ <b>درخواست نوبت تأیید اولیه شد</b>\n\n' +
@@ -1132,14 +1186,16 @@ function buildBookingTelegramText_(booking, eventType) {
   }
 
   return (
-    '🧾 <b>فیش پرداخت کائنات‌چی دریافت شد</b>\n\n' +
-    '👤 ' + customer + '\n' +
-    '✨ ' + service + '\n' +
-    '📅 ' + date + ' — ' + time + '\n' +
-    '🎫 کد پیگیری: ' + tracking + '\n\n' +
+    '🧾 <b>فیش پرداخت کائنات‌چی دریافت شد</b>\\n\\n' +
+    '👤 ' + customer + '\\n' +
+    '✨ ' + service + '\\n' +
+    '📅 ' + date + ' — ' + time + '\\n' +
+    '💳 مبلغ: ' + price + '\\n' +
+    '🧾 شناسه نوبت: <code>' + bookingId + '</code>\\n' +
+    '🎫 کد پیگیری نوبت: <code>' + tracking + '</code>\\n' +
+    '🏦 کد پیگیری اعلام‌شده: <code>' + transactionNumber + '</code>\\n\\n' +
     '⏳ وضعیت: در انتظار بررسی ادمین'
-  );
-}
+  );}
 
 function sendBookingTelegramNotifications_(booking, eventType) {
   var config=getTelegramConfig_();
@@ -1158,7 +1214,14 @@ function sendBookingTelegramNotifications_(booking, eventType) {
       ? getBookingTelegramAdminKeyboard_(booking['Booking ID'], 'payment') : null;
 
   if(config.adminChatId){
-    adminResult=sendTelegramMessage_(config.adminChatId,text,replyMarkup);
+    if (eventType === 'payment_received') {
+      var receiptFileId = String(booking['Receipt File ID'] || '').trim();
+      adminResult = receiptFileId
+        ? sendTelegramPhoto_(config.adminChatId, receiptFileId, text, replyMarkup)
+        : {ok:false,error:'PAYMENT_RECEIPT_FILE_ID_MISSING'};
+    } else {
+      adminResult=sendTelegramMessage_(config.adminChatId,text,replyMarkup);
+    }
     results.push({recipient:'admin',result:adminResult});
   } else {
     adminResult={ok:false,skipped:true,reason:'ADMIN_CHAT_ID_NOT_CONFIGURED'};
@@ -3687,7 +3750,7 @@ function createBooking_(request){
       originalPrice:basePrice,discountCode:discountCode,discountType:discountCode?'VIP':'',
       discountPercent:discount.discountPercent,discountAmount:discount.discountAmount,finalPrice:discount.finalPrice,
       paymentStatus:CONFIG.STATUSES.PAYMENT_PENDING,appointmentStatus:CONFIG.STATUSES.BOOKING_PENDING,
-      trackingCode:generateTrackingCode_(),holdUntil:new Date(Date.now()+Math.max(5,toNumber_(getSetting_('Initial Request Hold Minutes',120)))*60000)
+      trackingCode:generateTrackingCode_(),holdUntil:new Date(Date.now()+Math.max(5,toNumber_(getSetting_('Initial Request Hold Minutes',720)))*60000)
     };
     if(discountCode&&discount.valid&&discount.vipCustomerId&&!booking.customerId){
       booking.customerId=discount.vipCustomerId;
@@ -3705,7 +3768,7 @@ function createBooking_(request){
       'Appointment Status':booking.appointmentStatus,'Tracking Code':booking.trackingCode,'Hold Until':booking.holdUntil
     });
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.BOOKING_CREATED,bookingId:booking.bookingId,slotKey:slotKey,details:'Booking request created; awaiting initial admin review.'});
-    appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_HELD,bookingId:booking.bookingId,slotKey:slotKey,details:'Slot held for initial review (120 minutes).'});
+    appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_HELD,bookingId:booking.bookingId,slotKey:slotKey,details:'Slot held for initial review (12 hours).'});
     queueBookingTelegramNotification_(getBookingByIdObject_(booking.bookingId), 'request_received');
     return {ok:true,booking:publicBooking_(booking),message:'درخواست نوبت ثبت شد و تا ۲ ساعت در انتظار بررسی اولیه است.'};
   });
@@ -3911,13 +3974,12 @@ function rejectBooking_(request){
 }
 
 function cancelBooking_(request){
-  return withBookingLock_(function(){
-    var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
-    if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
-    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{'Appointment Status':CONFIG.STATUSES.BOOKING_CANCELLED,'Cancelled At':new Date(),'Hold Until':'','Cancel Reason':String(request.reason||'')});
-    appendBookingLog_({action:CONFIG.LOG_ACTIONS.BOOKING_CANCELLED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.reason||'')});
-    return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_CANCELLED};
-  });
+  // Direct cancellation is intentionally disabled until a manager-reviewed
+  // cancellation-request flow is implemented.
+  return fail_(
+    'CANCELLATION_REQUEST_REVIEW_REQUIRED',
+    'لغو نوبت باید به‌صورت درخواست برای بررسی ادمین ثبت شود.'
+  );
 }
 
 function releaseExpiredHolds_(request){

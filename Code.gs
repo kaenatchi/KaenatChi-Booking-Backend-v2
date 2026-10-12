@@ -4048,6 +4048,52 @@ function testPaymentSubmissionConsistencyClassificationPure_() {
   return {ok:failed.length===0,test:'PAYMENT SUBMISSION CONSISTENCY CLASSIFICATION PURE TEST',passed:cases.length-failed.length,total:cases.length,failed,noSheetRead:true,noSheetWrite:true,noExternalCalls:true};
 }
 
+function buildPaymentConsistencyRecoveryPlanPure_(booking, paymentRows) {
+  var result = classifyPaymentSubmissionConsistencyPure_(booking, paymentRows);
+  var rows = Array.isArray(paymentRows) ? paymentRows : [];
+  if (result.state === 'NO_PAYMENT_RECORD') {
+    return {state:result.state,action:'NO_ACTION',safeToAutoRepair:false,reason:'No inconsistency detected.'};
+  }
+  if (result.state === 'PAYMENT_RECORDS_ALIGNED_RECEIVED' ||
+      result.state === 'PAYMENT_RECORDS_ALIGNED_APPROVED') {
+    return {state:result.state,action:'NO_ACTION',safeToAutoRepair:false,reason:'Records already agree.'};
+  }
+  if (result.state === 'PAYMENT_ROW_RECEIVED_BOOKING_NOT_UPDATED' && rows.length === 1) {
+    return {
+      state:result.state,
+      action:'MANUAL_REVIEW_PAYMENT_ROW_HAS_RECEIPT',
+      safeToAutoRepair:false,
+      bookingId:String((booking||{})['Booking ID']||''),
+      paymentId:String(rows[0]['Payment ID']||''),
+      receiptPresent:!!String(rows[0]['Receipt File ID']||rows[0]['Receipt URL']||rows[0]['Receipt Link']||'').trim(),
+      reason:'A receipt row exists but the booking state does not match. Verify the receipt and booking history before any repair.'
+    };
+  }
+  return {
+    state:result.state,
+    action:'MANUAL_REVIEW_REQUIRED',
+    safeToAutoRepair:false,
+    bookingId:String((booking||{})['Booking ID']||''),
+    reason:'Ambiguous or duplicate payment records must not be repaired automatically.'
+  };
+}
+
+function testPaymentConsistencyRecoveryPlanPure_() {
+  var cases = [
+    {name:'clean pending booking needs no action',b:{'Booking ID':'B1','Payment Status':'PAYMENT_PENDING'},p:[],state:'NO_ACTION',safe:false},
+    {name:'aligned received records need no repair',b:{'Booking ID':'B1','Payment Status':'فیش دریافت شد'},p:[{'Payment ID':'P1','Payment Status':'PAYMENT_RECEIVED'}],state:'NO_ACTION',safe:false},
+    {name:'orphan received payment is sent for manual review',b:{'Booking ID':'B2','Payment Status':'در انتظار پرداخت'},p:[{'Payment ID':'P2','Payment Status':'فیش دریافت شد','Receipt File ID':'F2'}],state:'MANUAL_REVIEW_PAYMENT_ROW_HAS_RECEIPT',safe:false},
+    {name:'duplicate rows are never auto repaired',b:{'Booking ID':'B3','Payment Status':'فیش دریافت شد'},p:[{'Payment Status':'PAYMENT_RECEIVED'},{'Payment Status':'PAYMENT_RECEIVED'}],state:'MANUAL_REVIEW_REQUIRED',safe:false},
+    {name:'booking payment state without payment row is manual review',b:{'Booking ID':'B4','Payment Status':'فیش دریافت شد','Receipt File ID':'F4'},p:[],state:'MANUAL_REVIEW_REQUIRED',safe:false}
+  ];
+  var failed=[];
+  cases.forEach(function(t){
+    var plan=buildPaymentConsistencyRecoveryPlanPure_(t.b,t.p);
+    if(plan.action!==t.state||plan.safeToAutoRepair!==t.safe)failed.push({name:t.name,actual:plan,expected:{action:t.state,safeToAutoRepair:t.safe}});
+  });
+  return {ok:failed.length===0,test:'PAYMENT CONSISTENCY RECOVERY PLAN PURE TEST',passed:cases.length-failed.length,total:cases.length,failed,noSheetRead:true,noSheetWrite:true,noExternalCalls:true};
+}
+
 function validatePaymentSubmissionPreflightPure_(rows, bookingId) {
   var id=String(bookingId||'').trim();
   if(!id)return {ok:false,error:'BOOKING_ID_REQUIRED'};

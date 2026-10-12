@@ -1212,6 +1212,33 @@ function setupBookingTelegramQueueTrigger_() {
 }
 
 
+function shouldRetryTelegramNotification_(attempts) {
+  return Number(attempts || 0) < 5;
+}
+
+function testTelegramNotificationRetryPolicyPure_() {
+  var cases = [
+    {attempts:0,expected:true},
+    {attempts:1,expected:true},
+    {attempts:4,expected:true},
+    {attempts:5,expected:false},
+    {attempts:6,expected:false}
+  ];
+  var failed = cases.filter(function(test) {
+    return shouldRetryTelegramNotification_(test.attempts) !== test.expected;
+  });
+  return {
+    ok:failed.length === 0,
+    test:'TELEGRAM NOTIFICATION RETRY POLICY PURE TEST',
+    passed:cases.length-failed.length,
+    total:cases.length,
+    failed:failed,
+    noSheetRead:true,
+    noSheetWrite:true,
+    noTelegramSent:true
+  };
+}
+
 function processBookingTelegramNotificationQueue_() {
   if (CONFIG.STAGING_MODE) return {ok:true,skipped:true,reason:'STAGING_MODE',sent:0};
   var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
@@ -1259,7 +1286,10 @@ function processBookingTelegramNotificationQueue_() {
       var booking = getBookingByIdObject_(item.bookingId);
 
       if (!booking) {
-        return;
+        // Do not silently discard an admin alert if the booking row is
+        // temporarily unavailable. Treat it as retryable; the bounded retry
+        // policy below will stop after five attempts.
+        throw new Error('BOOKING_NOT_FOUND_FOR_NOTIFICATION');
       }
 
       var result = sendBookingTelegramNotifications_(
@@ -1283,7 +1313,7 @@ function processBookingTelegramNotificationQueue_() {
        * Keep retrying a small number of times so temporary Telegram/Google
        * failures do not silently lose the admin notification.
        */
-      if (attempts <= 5) {
+      if (shouldRetryTelegramNotification_(attempts - 1)) {
         item.attempts = attempts;
         item.lastError = String(
           error && error.message

@@ -3685,6 +3685,10 @@ function createBooking_(request){
   });
 }
 
+function hasRequiredReceiptImage_(receipt) {
+  return String(receipt || '').trim().length > 0;
+}
+
 function submitPayment_(request){
   return withBookingLock_(function(){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
@@ -3701,7 +3705,7 @@ function submitPayment_(request){
     if(!hold||hold.getTime()<=Date.now()){releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);return fail_('HOLD_EXPIRED','مهلت این نوبت تمام شده است.');}
     var transaction=String(request.transactionNumber||request.paymentTrackingCode||request.paymentCode||'').trim();
     var receipt=String(request.receiptData||request.receiptBase64||'').trim();
-    if(!receipt)return fail_('PAYMENT_RECEIPT_REQUIRED','بارگذاری تصویر فیش پرداخت الزامی است.');
+    if(!hasRequiredReceiptImage_(receipt))return fail_('PAYMENT_RECEIPT_REQUIRED','بارگذاری تصویر فیش پرداخت الزامی است.');
     var saved={id:'',url:'',name:''};
     if(receipt)saved=saveReceiptToDrive_(receipt,request.receiptFileName,request.receiptMimeType,b);
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
@@ -5999,12 +6003,14 @@ function testBookingTelegramTextPure_() {
 
 /* Pure source-contract test: confirms a receipt image is required before submission. */
 function testPaymentReceiptRequiredContractPure_() {
-  var sourceGuard = "if(!receipt)return fail_('PAYMENT_RECEIPT_REQUIRED','بارگذاری تصویر فیش پرداخت الزامی است.');";
-  var checks = [
-    {name:'backend requires receipt image',ok:sourceGuard.length>0},
-    {name:'transaction-only fallback removed',ok:true}
+  var cases = [
+    {name:'valid receipt data is accepted', value:'data:image/jpeg;base64,TEST', expected:true},
+    {name:'empty receipt is rejected', value:'', expected:false},
+    {name:'whitespace-only receipt is rejected', value:'   ', expected:false},
+    {name:'null receipt is rejected', value:null, expected:false}
   ];
-  var failed = checks.filter(function(check){return !check.ok;});
-  return {ok:failed.length===0,test:'PAYMENT RECEIPT REQUIRED PURE CONTRACT',passed:checks.length-failed.length,total:checks.length,failed:failed,noSheetRead:true,noSheetWrite:true,noDriveAccess:true,noTelegramSent:true};
+  var failed = cases.filter(function(test) {
+    return hasRequiredReceiptImage_(test.value) !== test.expected;
+  });
+  return {ok:failed.length===0,test:'PAYMENT RECEIPT REQUIRED PURE TEST',passed:cases.length-failed.length,total:cases.length,failed:failed,noSheetRead:true,noSheetWrite:true,noDriveAccess:true,noTelegramSent:true};
 }
-

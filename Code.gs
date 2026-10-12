@@ -3976,10 +3976,26 @@ function hasRequiredReceiptImage_(receipt) {
   return true;
 }
 
+function normalizePaymentConsistencyStatusPure_(value) {
+  var status = String(value || '').trim();
+  var aliases = {
+    'فیش دریافت شد':'PAYMENT_RECEIVED',
+    'تأیید شد':'PAYMENT_APPROVED',
+    'تایید شد':'PAYMENT_APPROVED',
+    'در انتظار پرداخت':'PAYMENT_PENDING',
+    'رد شد':'PAYMENT_REJECTED',
+    'PAYMENT_RECEIVED':'PAYMENT_RECEIVED',
+    'PAYMENT_APPROVED':'PAYMENT_APPROVED',
+    'PAYMENT_PENDING':'PAYMENT_PENDING',
+    'PAYMENT_REJECTED':'PAYMENT_REJECTED'
+  };
+  return aliases[status] || status;
+}
+
 function classifyPaymentSubmissionConsistencyPure_(booking, paymentRows) {
   var b = booking || {};
   var rows = Array.isArray(paymentRows) ? paymentRows : [];
-  var bookingStatus = String(b['Payment Status'] || '');
+  var bookingStatus = normalizePaymentConsistencyStatusPure_(b['Payment Status']);
   var bookingHasReceipt = !!String(b['Receipt File ID'] || '').trim() ||
     !!String(b['Receipt URL'] || b['Receipt Link'] || '').trim();
   if (rows.length === 0) {
@@ -3992,7 +4008,7 @@ function classifyPaymentSubmissionConsistencyPure_(booking, paymentRows) {
     return {state:'DUPLICATE_PAYMENT_ROWS',recoverable:false,action:'MANUAL_REVIEW'};
   }
   var p = rows[0] || {};
-  var paymentStatus = String(p['Payment Status'] || '');
+  var paymentStatus = normalizePaymentConsistencyStatusPure_(p['Payment Status']);
   var paymentHasReceipt = !!String(p['Receipt File ID'] || '').trim() ||
     !!String(p['Receipt URL'] || p['Receipt Link'] || '').trim();
   if (bookingStatus === 'PAYMENT_RECEIVED' && paymentStatus === 'PAYMENT_RECEIVED') {
@@ -4019,7 +4035,10 @@ function testPaymentSubmissionConsistencyClassificationPure_() {
     {name:'matching received records are aligned',b:{'Payment Status':'PAYMENT_RECEIVED'},p:[{'Payment Status':'PAYMENT_RECEIVED'}],state:'PAYMENT_RECORDS_ALIGNED_RECEIVED',action:'CONTINUE_NORMAL_FLOW'},
     {name:'duplicate payment rows need review',b:{'Payment Status':'PAYMENT_RECEIVED'},p:[{'Payment Status':'PAYMENT_RECEIVED'},{'Payment Status':'PAYMENT_RECEIVED'}],state:'DUPLICATE_PAYMENT_ROWS',action:'MANUAL_REVIEW'},
     {name:'payment approved while booking pending is mismatch',b:{'Payment Status':'PAYMENT_PENDING'},p:[{'Payment Status':'PAYMENT_APPROVED'}],state:'PAYMENT_STATUS_MISMATCH',action:'MANUAL_REVIEW'},
-    {name:'booking receipt without payment row is detected',b:{'Payment Status':'PAYMENT_PENDING','Receipt URL':'receipt-link'},p:[],state:'BOOKING_PAYMENT_WITHOUT_PAYMENT_ROW',action:'MANUAL_REVIEW'}
+    {name:'booking receipt without payment row is detected',b:{'Payment Status':'PAYMENT_PENDING','Receipt URL':'receipt-link'},p:[],state:'BOOKING_PAYMENT_WITHOUT_PAYMENT_ROW',action:'MANUAL_REVIEW'},
+    {name:'real Persian received statuses are normalized',b:{'Payment Status':'فیش دریافت شد'},p:[{'Payment Status':'فیش دریافت شد'}],state:'PAYMENT_RECORDS_ALIGNED_RECEIVED',action:'CONTINUE_NORMAL_FLOW'},
+    {name:'real Persian approved statuses are normalized',b:{'Payment Status':'تأیید شد'},p:[{'Payment Status':'تأیید شد'}],state:'PAYMENT_RECORDS_ALIGNED_APPROVED',action:'CONTINUE_NORMAL_FLOW'},
+    {name:'real Persian pending status can recover received payment row',b:{'Payment Status':'در انتظار پرداخت'},p:[{'Payment Status':'فیش دریافت شد','Receipt File ID':'FILE1'}],state:'PAYMENT_ROW_RECEIVED_BOOKING_NOT_UPDATED',action:'RECOVER_FROM_PAYMENT_ROW'}
   ];
   var failed = [];
   cases.forEach(function(t) {

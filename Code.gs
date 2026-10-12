@@ -3715,6 +3715,16 @@ function submitPayment_(request){
     var receipt=String(request.receiptData||request.receiptBase64||'').trim();
     // A transaction reference may accompany the receipt, but cannot replace it.
     if(!receipt)return fail_('PAYMENT_RECEIPT_REQUIRED','ارسال تصویر فیش پرداخت الزامی است.');
+    var receiptMime=String(request.receiptMimeType||'').trim().toLowerCase();
+    if(receipt.indexOf('data:')===0){
+      var receiptComma=receipt.indexOf(',');
+      if(receiptComma<0)return fail_('PAYMENT_RECEIPT_INVALID','تصویر فیش نامعتبر است.');
+      var receiptMeta=receipt.substring(5,receiptComma);
+      var receiptMimeMatch=receiptMeta.match(/^([^;]+)/);
+      if(receiptMimeMatch)receiptMime=String(receiptMimeMatch[1]||'').toLowerCase();
+    }
+    if(['image/jpeg','image/png','image/webp'].indexOf(receiptMime)===-1)
+      return fail_('PAYMENT_RECEIPT_IMAGE_REQUIRED','فقط تصویر فیش با فرمت JPG، PNG یا WebP پذیرفته می‌شود.');
     var saved={id:'',url:'',name:''};
     if(receipt)saved=saveReceiptToDrive_(receipt,request.receiptFileName,request.receiptMimeType,b);
     var submittedAt=new Date();
@@ -4907,9 +4917,9 @@ function testPaymentFlowSubmitOnly() {
       bookingId:result.bookingId,
       mobile:String(before['Mobile']||''),
       transactionNumber:'MOCK-PAY-'+unique,
-      receiptData:'data:text/plain;base64,UEFZTUVOVCBURVNU',
+      receiptData:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pQAAAABJRU5ErkJggg==',
       receiptFileName:'payment-test-'+unique+'.txt',
-      receiptMimeType:'text/plain'
+      receiptMimeType:'image/png'
     });
     if(!submit || !submit.ok) throw new Error('Submit Payment failed: '+JSON.stringify(submit));
     result.paymentSubmitted=true;
@@ -5087,9 +5097,9 @@ function testPaymentApprovalFlow() {
       bookingId:result.bookingId,
       mobile:String(beforeApproval['Mobile']||''),
       transactionNumber:'MOCK-APPROVAL-'+unique,
-      receiptData:'data:text/plain;base64,UEFZTUVOVCBFVkFMLUFQUFJPVkFM',
+      receiptData:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pQAAAABJRU5ErkJggg==',
       receiptFileName:'payment-approval-test-'+unique+'.txt',
-      receiptMimeType:'text/plain'
+      receiptMimeType:'image/png'
     });
     if(!submit||!submit.ok)throw new Error('Submit Payment failed: '+JSON.stringify(submit));
     result.paymentSubmitted=true;
@@ -5222,9 +5232,9 @@ function testPaymentFlowDuplicate() {
       bookingId:result.bookingId,
       mobile:String(beforeDuplicate['Mobile']||''),
       transactionNumber:'MOCK-DUP-1-'+unique,
-      receiptData:'data:text/plain;base64,UEFZTUVOVCBEVVAtMQ==',
+      receiptData:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pQAAAABJRU5ErkJggg==',
       receiptFileName:'payment-duplicate-test-1-'+unique+'.txt',
-      receiptMimeType:'text/plain'
+      receiptMimeType:'image/png'
     });
     if(!first||!first.ok)throw new Error('First payment submit failed: '+JSON.stringify(first));
     result.firstPaymentSubmitted=true;
@@ -5233,9 +5243,9 @@ function testPaymentFlowDuplicate() {
       bookingId:result.bookingId,
       mobile:String(beforeDuplicate['Mobile']||''),
       transactionNumber:'MOCK-DUP-2-'+unique,
-      receiptData:'data:text/plain;base64,UEFZTUVOVCBEVVAtMg==',
+      receiptData:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pQAAAABJRU5ErkJggg==',
       receiptFileName:'payment-duplicate-test-2-'+unique+'.txt',
-      receiptMimeType:'text/plain'
+      receiptMimeType:'image/png'
     });
     result.secondPaymentRejected=!!second&&second.ok===false;
 
@@ -5572,9 +5582,9 @@ function testVIPDiscountPaymentFlow() {
       bookingId: result.bookingId,
       mobile: String(beforeVIPPayment['Mobile']||''),
       transactionNumber: 'MOCK-VIP-REG-' + unique,
-      receiptData: 'data:text/plain;base64,VklQIFJFU0JFUlZBVElPTiBURVNU',
+      receiptData: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pQAAAABJRU5ErkJggg==',
       receiptFileName: 'vip-regression-test-' + unique + '.txt',
-      receiptMimeType: 'text/plain'
+      receiptMimeType:'image/png'
     });
 
     if (!submit || !submit.ok) {

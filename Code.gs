@@ -1200,9 +1200,50 @@ function buildBookingTelegramText_(booking, eventType) {
   );
 }
 
+function buildCustomerBookingTelegramText_(booking, eventType) {
+  var customer=escapeTelegramHtml_((String(booking['First Name']||'')+' '+String(booking['Last Name']||'')).trim()||'مشتری');
+  var service=escapeTelegramHtml_(booking['Service Name']||'');
+  var date=escapeTelegramHtml_(normalizeJalaliDate_(booking['Appointment Date']||''));
+  var time=escapeTelegramHtml_(normalizeTime_(booking['Appointment Time']||''));
+  var tracking=escapeTelegramHtml_(booking['Tracking Code']||'');
+  var price=escapeTelegramHtml_(booking['Final Price']||'');
+
+  if(eventType==='booking_request'){
+    return '📝 <b>درخواست نوبت دریافت شد</b>\n\n' +
+      '👤 '+customer+'\n✨ '+service+'\n📅 '+date+' — '+time+'\n' +
+      '🎫 کد پیگیری: <code>'+tracking+'</code>\n\n' +
+      'درخواستت برای بررسی مدیر ثبت شد. فعلاً پرداخت نکن؛ اگر تأیید شود، اطلاعات پرداخت برایت ارسال می‌شود.';
+  }
+  if(eventType==='payment_instructions'){
+    return '✅ <b>درخواست نوبت تأیید شد</b>\n\n' +
+      '✨ '+service+'\n📅 '+date+' — '+time+'\n💳 مبلغ قابل پرداخت: '+price+'\n' +
+      '🎫 کد پیگیری: <code>'+tracking+'</code>\n\n' +
+      'اکنون اطلاعات پرداخت را در مینی‌اپ ببین و پس از پرداخت، رسید یا کد پیگیری تراکنش را ثبت کن. نوبت پس از بررسی دستی فیش قطعی می‌شود.';
+  }
+  if(eventType==='booking_rejected'){
+    return '❌ <b>درخواست نوبت پذیرفته نشد</b>\n\n' +
+      '✨ '+service+'\n📅 '+date+' — '+time+'\n🎫 کد پیگیری: <code>'+tracking+'</code>\n\n' +
+      'این درخواست رد شده و زمان رزرو آزاد شده است.';
+  }
+  if(eventType==='approved'){
+    return '✅ <b>پرداخت تأیید شد و نوبت قطعی است</b>\n\n' +
+      '✨ '+service+'\n📅 '+date+' — '+time+'\n💳 مبلغ: '+price+'\n' +
+      '🎫 کد پیگیری: <code>'+tracking+'</code>';
+  }
+  if(eventType==='rejected'){
+    return '❌ <b>فیش پرداخت تأیید نشد</b>\n\n' +
+      '✨ '+service+'\n📅 '+date+' — '+time+'\n🎫 کد پیگیری: <code>'+tracking+'</code>\n\n' +
+      'اگر مهلت پرداخت باقی است، فیش اصلاح‌شده را در مینی‌اپ ارسال کن.';
+  }
+  return '🧾 <b>فیش پرداخت دریافت شد</b>\n\n' +
+    '✨ '+service+'\n📅 '+date+' — '+time+'\n🎫 کد پیگیری: <code>'+tracking+'</code>\n\n' +
+    'فیش برای بررسی دستی مدیر ارسال شد؛ تا تأیید نهایی، نوبت قطعی نیست.';
+}
+
 function sendBookingTelegramNotifications_(booking, eventType) {
   var config=getTelegramConfig_();
-  var text=buildBookingTelegramText_(booking,eventType);
+  var adminText=buildBookingTelegramText_(booking,eventType);
+  var customerText=buildCustomerBookingTelegramText_(booking,eventType);
   var results=[];
 
   /*
@@ -1220,7 +1261,7 @@ function sendBookingTelegramNotifications_(booking, eventType) {
     results.push(
       sendTelegramMessage_(
         config.adminChatId,
-        text,
+        adminText,
         replyMarkup
       )
     );
@@ -1237,7 +1278,7 @@ function sendBookingTelegramNotifications_(booking, eventType) {
     results.push(
       sendTelegramMessage_(
         customerChatId,
-        text
+        customerText
       )
     );
   }

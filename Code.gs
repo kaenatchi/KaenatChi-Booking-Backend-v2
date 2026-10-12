@@ -3726,7 +3726,13 @@ function submitPayment_(request){
     if(['image/jpeg','image/png','image/webp'].indexOf(receiptMime)===-1)
       return fail_('PAYMENT_RECEIPT_IMAGE_REQUIRED','فقط تصویر فیش با فرمت JPG، PNG یا WebP پذیرفته می‌شود.');
     var saved={id:'',url:'',name:''};
-    if(receipt)saved=saveReceiptToDrive_(receipt,request.receiptFileName,request.receiptMimeType,b);
+    if(receipt){
+      try {
+        saved=saveReceiptToDrive_(receipt,request.receiptFileName,receiptMime,b);
+      } catch(receiptError) {
+        return fail_('PAYMENT_RECEIPT_INVALID','ذخیره تصویر فیش ناموفق بود؛ لطفاً تصویر معتبر دیگری ارسال کن.');
+      }
+    }
     var submittedAt=new Date();
     var reviewHoldUntil=new Date(Date.now()+Math.max(15,toNumber_(getSetting_('Payment Review Hold Minutes',120)))*60000);
     try {

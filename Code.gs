@@ -1376,10 +1376,14 @@ function processBookingTelegramNotificationQueue_() {
     }
     // Lease expires after five minutes if execution terminates unexpectedly.
     leaseProps.setProperty(workerLeaseKey, String(Date.now() + 300000) + '|' + workerToken);
+    // This one-shot trigger has fired. Clear its marker immediately so any
+    // unexpected error can schedule a replacement in the outer catch.
+    leaseProps.deleteProperty(triggerKey);
   } finally {
     leaseLock.releaseLock();
   }
 
+  try {
   // Do reminder work before claiming notifications. Its failure must not
   // remove booking notifications from the persistent queue.
   try {
@@ -1504,19 +1508,36 @@ function processBookingTelegramNotificationQueue_() {
     lock.releaseLock();
   }
 
-  var finishLock = LockService.getScriptLock();
-  finishLock.waitLock(5000);
-  try {
-    var finishProps = PropertiesService.getScriptProperties();
-    var currentLease = String(finishProps.getProperty(workerLeaseKey) || '');
-    if (currentLease.split('|')[1] === workerToken) {
-      finishProps.deleteProperty(workerLeaseKey);
-    }
-  } finally {
-    finishLock.releaseLock();
-  }
-
   return {ok:failedCount===0,processed:items.length,sent:sent,failed:failedCount,remaining:remaining.length};
+  } catch (workerError) {
+    try {
+      var recoveryLock = LockService.getScriptLock();
+      recoveryLock.waitLock(5000);
+      try {
+        var recoveryProps = PropertiesService.getScriptProperties();
+        recoveryProps.deleteProperty(triggerKey);
+        ensureTelegramQueueTriggerScheduled_(recoveryProps, triggerKey, 5000);
+      } finally {
+        recoveryLock.releaseLock();
+      }
+    } catch (scheduleError) {
+      console.error('Telegram queue recovery scheduling failed: ' +
+        String(scheduleError && scheduleError.message ? scheduleError.message : scheduleError));
+    }
+    throw workerError;
+  } finally {
+    var finishLock = LockService.getScriptLock();
+    finishLock.waitLock(5000);
+    try {
+      var finishProps = PropertiesService.getScriptProperties();
+      var currentLease = String(finishProps.getProperty(workerLeaseKey) || '');
+      if (currentLease.split('|')[1] === workerToken) {
+        finishProps.deleteProperty(workerLeaseKey);
+      }
+    } finally {
+      finishLock.releaseLock();
+    }
+  }
 }
 
 function setupBookingTelegramQueueTrigger_() {

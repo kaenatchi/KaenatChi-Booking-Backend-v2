@@ -1038,6 +1038,18 @@ function buildBookingTelegramText_(booking, eventType) {
     booking['Final Price'] || ''
   );
 
+  if (eventType === 'booking_created') {
+    return (
+      '🆕 <b>درخواست نوبت جدید کائنات‌چی</b>\n\n' +
+      '👤 ' + customer + '\n' +
+      '✨ ' + service + '\n' +
+      '📅 ' + date + ' — ' + time + '\n' +
+      '💳 مبلغ نهایی: ' + price + '\n' +
+      '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' +
+      '⏳ وضعیت: رزرو موقت ثبت شد؛ در انتظار پرداخت مشتری'
+    );
+  }
+
   if (eventType === 'approved') {
     return (
       '✅ <b>نوبت کائنات‌چی تأیید شد</b>\n\n' +
@@ -1102,8 +1114,13 @@ function sendBookingTelegramNotifications_(booking, eventType) {
     });
   }
 
+  /*
+   * A newly created booking is an admin heads-up only. The customer
+   * receives the tracking code in the Mini App; do not send the admin
+   * queue message back to the customer.
+   */
   var customerChatId=String(booking['Telegram ID']||'').trim();
-  if(customerChatId && customerChatId!==config.adminChatId){
+  if(eventType !== 'booking_created' && customerChatId && customerChatId!==config.adminChatId){
     results.push(
       sendTelegramMessage_(
         customerChatId,
@@ -3631,6 +3648,21 @@ function createBooking_(request){
     });
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.BOOKING_CREATED,bookingId:booking.bookingId,slotKey:slotKey,details:'Booking created.'});
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_HELD,bookingId:booking.bookingId,slotKey:slotKey,details:'Slot held.'});
+
+    // Best-effort admin notification: queue only; never call Telegram in the
+    // booking request and never fail a successfully created booking on queue errors.
+    queueBookingTelegramNotification_({
+      'Booking ID': booking.bookingId,
+      'Tracking Code': booking.trackingCode,
+      'First Name': booking.firstName,
+      'Last Name': booking.lastName,
+      'Service Name': booking.serviceName,
+      'Appointment Date': booking.appointmentDate,
+      'Appointment Time': booking.appointmentTime,
+      'Final Price': booking.finalPrice,
+      'Telegram ID': booking.telegramId
+    }, 'booking_created');
+
     return {ok:true,booking:publicBooking_(booking),message:'نوبت موقتاً نگه داشته شد. پرداخت را ثبت کنید.'};
   });
 }

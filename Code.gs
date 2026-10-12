@@ -983,7 +983,7 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   } else if (action === 'approve') {
     result = approveBooking_({bookingId:bookingId,adminId:config.adminChatId});
   } else {
-    result = rejectBooking_({bookingId:bookingId,adminId:config.adminChatId,reason:'رد فیش توسط ادمین از طریق تلگرام'},paymentReview:true});
+    result = rejectBooking_({bookingId:bookingId,adminId:config.adminChatId,reason:'رد فیش توسط ادمین از طریق تلگرام',paymentReview:true});
   }
 
   if (!result || result.ok !== true) {

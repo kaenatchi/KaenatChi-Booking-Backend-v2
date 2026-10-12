@@ -946,21 +946,18 @@ function editTelegramMessageReplyMarkup_(chatId, messageId, replyMarkup) {
 
 function getBookingTelegramAdminKeyboard_(bookingId) {
   var id = String(bookingId || '').trim();
+  return {inline_keyboard:[[
+    {text:'✅ تأیید درخواست',callback_data:'kaenatchi:approve:' + id},
+    {text:'❌ رد درخواست',callback_data:'kaenatchi:reject:' + id}
+  ]]};
+}
 
-  return {
-    inline_keyboard: [
-      [
-        {
-          text:'✅ بررسی و تأیید درخواست',
-          callback_data:'kaenatchi:approve:' + id
-        },
-        {
-          text:'❌ رد درخواست',
-          callback_data:'kaenatchi:reject:' + id
-        }
-      ]
-    ]
-  };
+function getPaymentReviewTelegramKeyboard_(bookingId) {
+  var id = String(bookingId || '').trim();
+  return {inline_keyboard:[[
+    {text:'✅ تأیید فیش و قطعی‌کردن نوبت',callback_data:'kaenatchi:receipt_approve:' + id},
+    {text:'❌ رد فیش',callback_data:'kaenatchi:receipt_reject:' + id}
+  ]]};
 }
 
 function getBookingTelegramResultKeyboard_(status) {
@@ -1034,7 +1031,7 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   }
 
   var match = data.match(
-    /^kaenatchi:(approve|reject):([^:]+)$/
+    /^kaenatchi:(approve|reject|receipt_approve|receipt_reject):([^:]+)$/
   );
 
   if (!match) {
@@ -1055,16 +1052,13 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   var result;
 
   if (action === 'approve') {
-    result = approveBooking_({
-      bookingId:bookingId,
-      adminId:config.adminChatId
-    });
+    result = approveBooking_({bookingId:bookingId,adminId:config.adminChatId});
+  } else if (action === 'reject') {
+    result = rejectBooking_({bookingId:bookingId,adminId:config.adminChatId,reason:'رد درخواست نوبت توسط ادمین از طریق تلگرام'});
+  } else if (action === 'receipt_approve') {
+    result = approveReceipt_( {bookingId:bookingId,adminId:config.adminChatId} );
   } else {
-    result = rejectBooking_({
-      bookingId:bookingId,
-      adminId:config.adminChatId,
-      reason:'رد فیش توسط ادمین از طریق تلگرام'
-    });
+    result = rejectReceipt_({bookingId:bookingId,adminId:config.adminChatId,reason:'رد فیش توسط ادمین از طریق تلگرام'});
   }
 
   if (!result || result.ok !== true) {
@@ -1083,10 +1077,9 @@ function handleTelegramCallbackQuery_(callbackQuery) {
     };
   }
 
-  var finalStatus =
-    action === 'approve'
-      ? 'approved'
-      : 'rejected';
+  var finalStatus = action === 'approve' ? 'approved' :
+    action === 'reject' ? 'booking_rejected' :
+    action === 'receipt_approve' ? 'receipt_approved' : 'rejected';
 
   editTelegramMessageReplyMarkup_(
     chatId,
@@ -1096,9 +1089,10 @@ function handleTelegramCallbackQuery_(callbackQuery) {
 
   answerTelegramCallbackQuery_(
     queryId,
-    action === 'approve'
-      ? 'نوبت با موفقیت تأیید شد.'
-      : 'فیش با موفقیت رد شد.',
+    action === 'approve' ? 'درخواست تأیید شد؛ مرحله پرداخت آغاز شد.' :
+    action === 'reject' ? 'درخواست نوبت رد شد.' :
+    action === 'receipt_approve' ? 'فیش تأیید شد و نوبت قطعی شد.' :
+    'فیش رد شد؛ در صورت باقی‌بودن مهلت، مشتری می‌تواند رسید اصلاح‌شده بفرستد.',
     false
   );
 
@@ -1214,7 +1208,9 @@ function sendBookingTelegramNotifications_(booking, eventType) {
   var replyMarkup =
     eventType === 'booking_request'
       ? getBookingTelegramAdminKeyboard_(booking['Booking ID'])
-      : null;
+      : eventType === 'payment_received'
+        ? getPaymentReviewTelegramKeyboard_(booking['Booking ID'])
+        : null;
 
   if(config.adminChatId){
     results.push(
@@ -4052,6 +4048,76 @@ function approveBooking_(request){
   });
 }
 
+
+function approveReceipt_(request) {
+  return withBookingLock_(function() {
+    var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
+    if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+    if(String(b['Appointment Status']||'')!==CONFIG.STATUSES.BOOKING_AWAITING_PAYMENT ||
+       String(b['Payment Status']||'')!==CONFIG.STATUSES.PAYMENT_RECEIVED) {
+      return fail_('RECEIPT_NOT_PENDING','این نوبت فیشی در انتظار بررسی ندارد.');
+    }
+    var hold=parseDateValue_(b['Hold Until']);
+    if(!hold||hold.getTime()<=Date.now()) {
+      releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);
+      return fail_('PAYMENT_REVIEW_EXPIRED','مهلت پرداخت یا بررسی فیش تمام شده است.');
+    }
+    var slotKey=String(b['Slot Key']||buildSlotKey_(normalizeJalaliDate_(b['Appointment Date']),normalizeTime_(b['Appointment Time'])));
+    var slotStatus=getSlotStatus_(slotKey,normalizeJalaliDate_(b['Appointment Date']),normalizeTime_(b['Appointment Time']),b['Booking ID']);
+    if(slotStatus===CONFIG.SLOT_STATUS.BLOCKED || slotStatus===CONFIG.SLOT_STATUS.CONFIRMED) {
+      return fail_('SLOT_UNAVAILABLE','این زمان دیگر قابل تأیید نیست.');
+    }
+    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+      'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,
+      'Appointment Status':CONFIG.STATUSES.BOOKING_CONFIRMED,
+      'Payment Approved At':new Date(),
+      'Payment Approved By':String(request.adminId||request.admin||'admin'),
+      'Approved At':new Date(),
+      'Approved By':String(request.adminId||request.admin||'admin'),
+      'Hold Until':''
+    });
+    getSheetObjects_(CONFIG.SHEETS.PAYMENTS).forEach(function(p) {
+      if(String(p['Booking ID']||'')===String(b['Booking ID']||'') &&
+         String(p['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED) {
+        updateRowFields_(CONFIG.SHEETS.PAYMENTS,p._row,{
+          'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,
+          'Approved At':new Date(),
+          'Approved By':String(request.adminId||request.admin||'admin')
+        });
+      }
+    });
+    consumeDiscountToken_(String(b['Discount Code']||''),String(b['Customer ID']||''),String(b['Telegram ID']||''),String(b['Tracking Code']||''));
+    appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_APPROVED,bookingId:b['Booking ID'],slotKey:slotKey,details:'Receipt manually approved; booking confirmed.'});
+    queueBookingTelegramNotification_(b,'approved');
+    return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_CONFIRMED,message:'فیش تأیید شد و نوبت قطعی شد.'};
+  });
+}
+
+function rejectReceipt_(request) {
+  return withBookingLock_(function() {
+    var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
+    if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+    if(String(b['Appointment Status']||'')!==CONFIG.STATUSES.BOOKING_AWAITING_PAYMENT ||
+       String(b['Payment Status']||'')!==CONFIG.STATUSES.PAYMENT_RECEIVED) {
+      return fail_('RECEIPT_NOT_PENDING','این نوبت فیشی در انتظار رد ندارد.');
+    }
+    var hold=parseDateValue_(b['Hold Until']);
+    if(!hold||hold.getTime()<=Date.now()) {
+      releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);
+      return fail_('PAYMENT_REVIEW_EXPIRED','مهلت پرداخت یا بررسی فیش تمام شده است.');
+    }
+    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+      'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
+      'Appointment Status':CONFIG.STATUSES.BOOKING_AWAITING_PAYMENT,
+      'Payment Rejected At':new Date(),
+      'Payment Rejected By':String(request.adminId||request.admin||'admin'),
+      'Admin Note':String(request.reason||request.note||'فیش نیاز به اصلاح دارد')
+    });
+    appendBookingLog_({action:CONFIG.LOG_ACTIONS.PAYMENT_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.reason||request.note||'Receipt rejected; correction may be submitted before deadline.')});
+    queueBookingTelegramNotification_(b,'rejected');
+    return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.PAYMENT_REJECTED,message:'فیش رد شد؛ مشتری می‌تواند در مهلت باقی‌مانده فیش اصلاح‌شده بفرستد.'};
+  });
+}
 function isRejectableBookingStatus_(status) {
   return String(status || '') === CONFIG.STATUSES.BOOKING_PENDING;
 }
@@ -4093,20 +4159,10 @@ function rejectBooking_(request){
       return fail_('BOOKING_NOT_PENDING','فقط نوبت‌های در انتظار بررسی قابل رد هستند.');
     }
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
-      'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
-      'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),
-      'Admin Note':String(request.note||request.reason||''),'Hold Until':''
-    });
-    appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.note||request.reason||'')});
-
-    // Queue the rejection notification outside the booking request path.
-    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,
       'Payment Status':CONFIG.STATUSES.PAYMENT_NOT_REQUESTED,
-      'Rejected At':new Date(),
-      'Rejected By':String(request.adminId||request.admin||'admin'),
-      'Admin Note':String(request.note||request.reason||''),
-      'Hold Until':''
+      'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),
+      'Admin Note':String(request.note||request.reason||''),'Hold Until':''
     });
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Initial booking request rejected.'});
     queueBookingTelegramNotification_(b, 'booking_rejected');

@@ -47,6 +47,7 @@ const CONFIG = {
     PAYMENT_RECEIVED: 'فیش دریافت شد',
     PAYMENT_APPROVED: 'تأیید شد',
     PAYMENT_REJECTED: 'رد شد',
+    PAYMENT_EXPIRED: 'مهلت پرداخت تمام شد',
 
     BOOKING_PENDING: 'در انتظار تأیید مدیر',
     BOOKING_AWAITING_PAYMENT: 'در انتظار پرداخت',
@@ -988,7 +989,13 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   /*
    * Only the configured admin chat may execute approval/rejection actions.
    */
-  if (!config.adminChatId || chatId !== config.adminChatId) {
+  var senderId = String(callbackQuery && callbackQuery.from && callbackQuery.from.id || '').trim();
+  var chatType = String(message.chat && message.chat.type || '').trim();
+
+  // Approvals are only accepted from the configured admin's private chat.
+  // This prevents another group member from pressing an admin message button.
+  if (!config.adminChatId || chatId !== config.adminChatId ||
+      senderId !== config.adminChatId || chatType !== 'private') {
     answerTelegramCallbackQuery_(
       queryId,
       'این عملیات فقط برای ادمین مجاز است.',
@@ -3893,6 +3900,15 @@ function createBooking_(request){
         return String(row['Request ID']||'').trim()===requestId;
       });
       if(existing){
+        var requestedDate=normalizeJalaliDate_(request.date||request.appointmentDate);
+        var requestedTime=normalizeTime_(request.time||request.appointmentTime);
+        var requestedService=findServiceRecord_(String(request.serviceId||''),String(request.serviceName||request.service||''));
+        var sameRequest=
+          String(existing['Telegram ID']||'')===String(request.telegramId||request.telegramChatId||'').trim() &&
+          String(existing['Appointment Date']||'')===requestedDate &&
+          normalizeTime_(existing['Appointment Time'])===requestedTime &&
+          String(existing['Service Name']||'')===String(requestedService&&requestedService.name||request.serviceName||request.service||'');
+        if(!sameRequest)return fail_('REQUEST_ID_CONFLICT','شناسه درخواست قبلاً برای اطلاعات دیگری استفاده شده است.');
         return {
           ok:true,
           booking:publicBooking_(existing),
@@ -4128,6 +4144,16 @@ function rejectReceipt_(request) {
       'Payment Rejected By':String(request.adminId||request.admin||'admin'),
       'Admin Note':String(request.reason||request.note||'فیش نیاز به اصلاح دارد')
     });
+    getSheetObjects_(CONFIG.SHEETS.PAYMENTS).forEach(function(p) {
+      if(String(p['Booking ID']||'')===String(b['Booking ID']||'') &&
+         String(p['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED) {
+        updateRowFields_(CONFIG.SHEETS.PAYMENTS,p._row,{
+          'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
+          'Rejected At':new Date(),
+          'Rejected By':String(request.adminId||request.admin||'admin')
+        });
+      }
+    });
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.PAYMENT_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.reason||request.note||'Receipt rejected; correction may be submitted before deadline.')});
     queueBookingTelegramNotification_(b,'rejected');
     return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.PAYMENT_REJECTED,message:'فیش رد شد؛ مشتری می‌تواند در مهلت باقی‌مانده فیش اصلاح‌شده بفرستد.'};
@@ -4346,8 +4372,24 @@ function appendBookingLog_(entry){
 }
 
 function releaseBookingRow_(row,bookingId,slotKey){
-  updateRowFields_(CONFIG.SHEETS.BOOKINGS,row,{'Appointment Status':CONFIG.STATUSES.BOOKING_CANCELLED,'Hold Until':'','Admin Note':'Expired hold released before payment submission.'});
-  appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_RELEASED,bookingId:bookingId||'',slotKey:slotKey||'',details:'Expired booking hold released.'});
+  var booking=getSheetObjects_(CONFIG.SHEETS.BOOKINGS).find(function(r){return Number(r._row)===Number(row);});
+  var oldPaymentStatus=String(booking&&booking['Payment Status']||'');
+  var fields={'Appointment Status':CONFIG.STATUSES.BOOKING_CANCELLED,'Hold Until':'','Admin Note':'Expired booking/payment hold released.'};
+  if(oldPaymentStatus===CONFIG.STATUSES.PAYMENT_RECEIVED||oldPaymentStatus===CONFIG.STATUSES.PAYMENT_PENDING){
+    fields['Payment Status']=CONFIG.STATUSES.PAYMENT_EXPIRED;
+  }
+  updateRowFields_(CONFIG.SHEETS.BOOKINGS,row,fields);
+  getSheetObjects_(CONFIG.SHEETS.PAYMENTS).forEach(function(p){
+    var status=String(p['Payment Status']||'');
+    if(String(p['Booking ID']||'')===String(bookingId||'') &&
+       (status===CONFIG.STATUSES.PAYMENT_RECEIVED||status===CONFIG.STATUSES.PAYMENT_PENDING)){
+      updateRowFields_(CONFIG.SHEETS.PAYMENTS,p._row,{
+        'Payment Status':CONFIG.STATUSES.PAYMENT_EXPIRED,
+        'Expired At':new Date()
+      });
+    }
+  });
+  appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_RELEASED,bookingId:bookingId||'',slotKey:slotKey||'',details:'Expired booking/payment hold released; pending payment records synchronized.'});
 }
 
 function publicBooking_(b){

@@ -969,7 +969,7 @@ function getBookingTelegramResultKeyboard_(status) {
       inline_keyboard: [
         [
           {
-            text:'✅ نوبت تأیید شد',
+            text:'✅ درخواست تأیید شد؛ منتظر پرداخت',
             callback_data:'kaenatchi:noop'
           }
         ]

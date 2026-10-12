@@ -11,7 +11,9 @@
  *******************************************************/
 
 const CONFIG = {
-  SPREADSHEET_ID: '1cf6SFL80xJ8YrBPlr_Fp9TYhkKGkhu2U45D2WTSyNz0',
+  // Isolated staging only. Never use production CMS, VIP, Drive receipts, or Telegram.
+  STAGING_MODE: true,
+  SPREADSHEET_ID: '1xGgeqdsUGFzHhD00NIVVD8QqwnutnDfKwsmssHzaklw',
 
   SHEETS: {
     BOOKINGS: 'Bookings',
@@ -25,7 +27,7 @@ const CONFIG = {
   },
 
   VIP: {
-    SPREADSHEET_ID: '1TpljGwyRpHcxyyR6Zm1mbT2CPJBvFeHCvD3QH34BuGs',
+    SPREADSHEET_ID: '1xGgeqdsUGFzHhD00NIVVD8QqwnutnDfKwsmssHzaklw',
     CUSTOMERS_SHEET: 'مشتریان',
     TOKENS_SHEET: 'توکن ها',
     ACTIVE_STATUS: 'فعال',
@@ -681,6 +683,7 @@ function getTelegramConfig_() {
 }
 
 function setupTelegramWebhook() {
+  if (CONFIG.STAGING_MODE) return {ok:true,skipped:true,reason:'STAGING_MODE'};
   var props = PropertiesService.getScriptProperties();
   var config = getTelegramConfig_();
 
@@ -737,6 +740,7 @@ function setupTelegramWebhook() {
 }
 
 function sendTelegramMessage_(chatId, text, replyMarkup) {
+  if (CONFIG.STAGING_MODE) return {ok:false,skipped:true,reason:'STAGING_MODE'};
   chatId = String(chatId || '').trim();
   if (!chatId || !text) return {ok:false,skipped:true};
 
@@ -786,6 +790,7 @@ function sendTelegramMessage_(chatId, text, replyMarkup) {
 }
 
 function telegramApiRequest_(method, payload) {
+  if (CONFIG.STAGING_MODE) return {ok:false,skipped:true,error:'STAGING_MODE'};
   var config = getTelegramConfig_();
 
   if (!config.botToken) {
@@ -1168,6 +1173,7 @@ function sendBookingTelegramNotifications_(booking, eventType) {
  * request itself.
  */
 function queueBookingTelegramNotification_(booking, eventType) {
+  if (CONFIG.STAGING_MODE) return {ok:true,queued:false,skipped:true,reason:'STAGING_MODE'};
   try {
     /*
      * CUSTOMER REQUEST PATH:
@@ -1221,6 +1227,7 @@ function queueBookingTelegramNotification_(booking, eventType) {
  * The worker is deliberately outside the customer booking/payment request.
  */
 function setupBookingTelegramQueueTrigger_() {
+  if (CONFIG.STAGING_MODE) return {ok:true,skipped:true,reason:'STAGING_MODE',triggerCount:0};
   var functionName = 'processBookingTelegramNotificationQueue_';
   var triggers = ScriptApp.getProjectTriggers();
   var existing = triggers.filter(function(trigger) {
@@ -1243,6 +1250,7 @@ function setupBookingTelegramQueueTrigger_() {
 
 
 function processBookingTelegramNotificationQueue_() {
+  if (CONFIG.STAGING_MODE) return {ok:true,skipped:true,reason:'STAGING_MODE',sent:0};
   var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
   var triggerKey = 'KAENATCHI_TELEGRAM_TRIGGER_SCHEDULED';
   var items = [];
@@ -3741,10 +3749,10 @@ function approveBookingRequest_(request) {
     }
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Admin Note':'INITIAL_REQUEST_APPROVED',
-      'Hold Until':new Date(Date.now()+Math.max(15,toNumber_(getSetting_('Payment Hold Minutes',30)))*60000),
+      'Hold Until':new Date(Date.now()+Math.max(1,toNumber_(getSetting_('Payment Hold Minutes',10))||10)*60000),
       'Initial Approved At':new Date(),'Initial Approved By':String(request.adminId||request.admin||'admin')
     });
-    appendBookingLog_({action:'INITIAL_REQUEST_APPROVED',bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Initial request approved; 30-minute payment window started.'});
+    appendBookingLog_({action:'INITIAL_REQUEST_APPROVED',bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Initial request approved; 10-minute payment window started.'});
     queueBookingTelegramNotification_(getBookingByIdObject_(b['Booking ID']), 'request_approved');
     return {ok:true,bookingId:b['Booking ID'],trackingCode:b['Tracking Code'],status:'AWAITING_PAYMENT'};
   });
@@ -3844,19 +3852,40 @@ function cancelBooking_(request){
   });
 }
 
+function shouldReleaseExpiredHold_(row, nowMs) {
+  var current = nowMs === undefined ? Date.now() : Number(nowMs);
+  var hold = parseDateValue_(row && row['Hold Until']);
+  return !!row &&
+    String(row['Appointment Status'] || '') === CONFIG.STATUSES.BOOKING_PENDING &&
+    String(row['Payment Status'] || '') === CONFIG.STATUSES.PAYMENT_PENDING &&
+    !!hold && hold.getTime() <= current;
+}
+
+/* Pure regression test: verifies that only unpaid, expired holds are releasable. */
+function testExpiredHoldReleaseGuardPure_() {
+  var now = Date.now();
+  var expired = new Date(now - 60000);
+  var future = new Date(now + 60000);
+  var cases = [
+    {name:'expired unpaid request releases', row:{'Appointment Status':CONFIG.STATUSES.BOOKING_PENDING,'Payment Status':CONFIG.STATUSES.PAYMENT_PENDING,'Hold Until':expired}, expected:true},
+    {name:'receipt received remains held', row:{'Appointment Status':CONFIG.STATUSES.BOOKING_PENDING,'Payment Status':CONFIG.STATUSES.PAYMENT_RECEIVED,'Hold Until':expired}, expected:false},
+    {name:'approved payment remains held until final approval', row:{'Appointment Status':CONFIG.STATUSES.BOOKING_PENDING,'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,'Hold Until':expired}, expected:false},
+    {name:'unexpired unpaid request remains held', row:{'Appointment Status':CONFIG.STATUSES.BOOKING_PENDING,'Payment Status':CONFIG.STATUSES.PAYMENT_PENDING,'Hold Until':future}, expected:false},
+    {name:'confirmed appointment is not released', row:{'Appointment Status':CONFIG.STATUSES.BOOKING_CONFIRMED,'Payment Status':CONFIG.STATUSES.PAYMENT_PENDING,'Hold Until':expired}, expected:false}
+  ];
+  var failed = cases.filter(function(test) {
+    return shouldReleaseExpiredHold_(test.row, now) !== test.expected;
+  });
+  return {ok:failed.length===0,test:'EXPIRED HOLD RELEASE GUARD PURE TEST',passed:cases.length-failed.length,total:cases.length,failed:failed,noSheetRead:true,noSheetWrite:true,noTelegramSent:true};
+}
+
 function releaseExpiredHolds_(request){
   return withBookingLock_(function(){
     var rows=getSheetObjects_(CONFIG.SHEETS.BOOKINGS),released=0,now=Date.now();
     rows.forEach(function(r){
-      var hold=parseDateValue_(r['Hold Until']);
-      // Only expire unpaid holds. Once payment proof/tracking details have
-      // been submitted, keep the appointment pending and the slot reserved
-      // until the final admin approve/reject action.
-      if(String(r['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING&&
-         String(r['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_PENDING&&
-         hold&&hold.getTime()<=now){
-        updateRowFields_(CONFIG.SHEETS.BOOKINGS,r._row,{'Appointment Status':CONFIG.STATUSES.BOOKING_CANCELLED,'Hold Until':'','Admin Note':'Expired hold released.'});
-        appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_RELEASED,bookingId:r['Booking ID'],slotKey:r['Slot Key'],details:'Expired hold released.'});
+      if(shouldReleaseExpiredHold_(r, now)){
+        updateRowFields_(CONFIG.SHEETS.BOOKINGS,r._row,{'Appointment Status':CONFIG.STATUSES.BOOKING_CANCELLED,'Hold Until':'','Admin Note':'Expired unpaid hold released.'});
+        appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_RELEASED,bookingId:r['Booking ID'],slotKey:r['Slot Key'],details:'Expired unpaid hold released.'});
         released++;
       }
     });
@@ -3997,6 +4026,7 @@ function publicBooking_(b){
 }
 
 function saveReceiptToDrive_(data,fileName,mimeType,booking){
+  if (CONFIG.STAGING_MODE) return {id:'STAGING-RECEIPT-'+String(booking['Booking ID']||'TEST'),url:'',name:String(fileName||'staging-receipt')};
   var raw=String(data||''),mime=String(mimeType||'image/jpeg');
   if(raw.indexOf('data:')===0){var comma=raw.indexOf(',');if(comma<0)throw new Error('تصویر فیش نامعتبر است.');var meta=raw.substring(5,comma);raw=raw.substring(comma+1);var m=meta.match(/^([^;]+)/);if(m)mime=m[1];}
   var bytes=Utilities.base64Decode(raw);
@@ -4008,6 +4038,7 @@ function saveReceiptToDrive_(data,fileName,mimeType,booking){
 }
 
 function getVIPSpreadsheet_(){
+  if (CONFIG.STAGING_MODE) throw new Error('STAGING_MODE: VIP access is disabled.');
   return SpreadsheetApp.openById(
     CONFIG.VIP.SPREADSHEET_ID
   );

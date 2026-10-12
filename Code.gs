@@ -1150,7 +1150,17 @@ function sendBookingTelegramNotifications_(booking, eventType) {
   return {ok:!!(adminResult && adminResult.ok === true),results:results};
 }
 function queueBookingTelegramNotificationWithAudit_(booking, eventType) {
-  var result = queueBookingTelegramNotification_(booking, eventType);
+  var result;
+  try {
+    result = queueBookingTelegramNotification_(booking, eventType);
+  } catch (queueError) {
+    result = {
+      ok:false,
+      queued:false,
+      error:'TELEGRAM_QUEUE_EXCEPTION',
+      message:String(queueError && queueError.message ? queueError.message : queueError)
+    };
+  }
   if (result && result.skipped === true && CONFIG.STAGING_MODE) return result;
   if (!result || result.ok !== true || result.queued !== true) {
     var bookingId = String(booking && booking['Booking ID'] || booking && booking.bookingId || '').trim();

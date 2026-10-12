@@ -2675,9 +2675,24 @@ function getBooking_(request) {
   }
 
 
+  /*
+   * Public lookup must not expose the full booking row (name, mobile,
+   * Telegram identifiers, receipt links, or internal admin notes).
+   * Return only the minimum fields needed by the customer's tracking view.
+   */
   return {
     ok: true,
-    booking: booking
+    booking: {
+      bookingId: String(booking['Booking ID'] || ''),
+      trackingCode: String(booking['Tracking Code'] || ''),
+      serviceName: String(booking['Service Name'] || ''),
+      appointmentDate: String(booking['Appointment Date'] || ''),
+      appointmentTime: String(booking['Appointment Time'] || ''),
+      appointmentStatus: String(booking['Appointment Status'] || ''),
+      paymentStatus: String(booking['Payment Status'] || ''),
+      finalPrice: toNumber_(booking['Final Price']),
+      createdAt: booking['Created At'] || ''
+    }
   };
 }
 

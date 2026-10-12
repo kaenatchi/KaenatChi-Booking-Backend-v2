@@ -1151,58 +1151,207 @@ function sendBookingTelegramNotifications_(booking, eventType) {
 }
 function queueBookingTelegramNotification_(booking, eventType) {
   if (CONFIG.STAGING_MODE) return {ok:true,queued:false,skipped:true,reason:'STAGING_MODE'};
+
+  var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
+  var inflightKey = 'KAENATCHI_TELEGRAM_INFLIGHT';
+  var lock = LockService.getScriptLock();
+
   try {
-    /*
-     * CUSTOMER REQUEST PATH:
-     * Only persist the notification item. No trigger creation, no Telegram
-     * network call, and no extra ScriptApp work is allowed here.
-     */
-    var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
-    var props = PropertiesService.getScriptProperties();
-    var raw = String(props.getProperty(queueKey) || '[]');
-    var queue = [];
-
+    lock.waitLock(5000);
     try {
-      queue = JSON.parse(raw);
-      if (!Array.isArray(queue)) queue = [];
-    } catch (parseError) {
-      queue = [];
+      var props = PropertiesService.getScriptProperties();
+      var queue = readTelegramQueueProperty_(props, queueKey);
+      var inflight = readTelegramQueueProperty_(props, inflightKey);
+      var bookingId = String(booking && booking['Booking ID'] || '').trim();
+      var normalizedEvent = String(eventType || '').trim();
+
+      if (!bookingId || !normalizedEvent) {
+        console.error('Telegram queue rejected an item without bookingId/eventType.');
+        return {ok:false,queued:false,error:'INVALID_NOTIFICATION_ITEM'};
+      }
+
+      var duplicate = queue.concat(inflight).some(function(item) {
+        return String(item.bookingId || '') === bookingId &&
+          String(item.eventType || '') === normalizedEvent;
+      });
+      if (duplicate) return {ok:true,queued:false,duplicate:true};
+
+      // Never silently discard an older notification to make room.
+      // Leave a visible failure for monitoring instead of truncating the queue.
+      if (queue.length + inflight.length >= 100) {
+        console.error('Telegram notification queue is full; new item was not queued: ' +
+          bookingId + ' / ' + normalizedEvent);
+        return {ok:false,queued:false,error:'TELEGRAM_QUEUE_FULL'};
+      }
+
+      queue.push({
+        id: Utilities.getUuid(),
+        bookingId: bookingId,
+        eventType: normalizedEvent,
+        queuedAt: new Date().toISOString(),
+        attempts: 0
+      });
+      props.setProperty(queueKey, JSON.stringify(queue));
+      return {ok:true,queued:true};
+    } finally {
+      lock.releaseLock();
     }
-
-    queue.push({
-      bookingId: String(booking['Booking ID'] || ''),
-      eventType: String(eventType || ''),
-      queuedAt: new Date().toISOString(),
-      attempts: 0
-    });
-
-    if (queue.length > 100) {
-      queue = queue.slice(queue.length - 100);
-    }
-
-    props.setProperty(queueKey, JSON.stringify(queue));
-
-    return {ok:true,queued:true};
-
   } catch (error) {
-    /*
-     * Notification failure must NEVER turn a successful booking/payment
-     * into a failed customer request.
-     */
-    console.warn(
-      'Telegram notification queue failed: ' +
-      String(error && error.message ? error.message : error)
-    );
-
-    return {ok:false,queued:false};
+    console.error('Telegram notification queue failed: ' +
+      String(error && error.message ? error.message : error));
+    return {ok:false,queued:false,error:'TELEGRAM_QUEUE_WRITE_FAILED'};
   }
 }
 
 /*
- * Run this function ONCE from the Apps Script editor.
- * It creates exactly one recurring worker for Telegram notifications.
- * The worker is deliberately outside the customer booking/payment request.
+ * Read a queue property without converting malformed data into an empty
+ * queue silently. A malformed queue is preserved for diagnosis and throws,
+ * preventing the worker from overwriting recoverable notification data.
  */
+function readTelegramQueueProperty_(props, key) {
+  var raw = props.getProperty(key);
+  if (raw === null || raw === '') return [];
+  var parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error('TELEGRAM_QUEUE_JSON_INVALID:' + key);
+  }
+  if (!Array.isArray(parsed)) throw new Error('TELEGRAM_QUEUE_NOT_ARRAY:' + key);
+  return parsed;
+}
+
+/*
+ * Queue worker notes:
+ * - Appointment reminders run before queue claims, so a reminder exception
+ *   cannot strand queued notifications.
+ * - Claimed notifications stay in an INFLIGHT property until delivery is
+ *   confirmed or the bounded retry policy is exhausted.
+ * - Queue property mutations share the same script lock as enqueue.
+ * - Telegram cannot provide exactly-once delivery here: if the send succeeds
+ *   but execution stops before state is saved, a retry may send a duplicate.
+ */
+function processBookingTelegramNotificationQueue_() {
+  if (CONFIG.STAGING_MODE) return {ok:true,skipped:true,reason:'STAGING_MODE',sent:0};
+
+  var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
+  var inflightKey = 'KAENATCHI_TELEGRAM_INFLIGHT';
+  var triggerKey = 'KAENATCHI_TELEGRAM_TRIGGER_SCHEDULED';
+
+  // Do reminder work before claiming notifications. Its failure must not
+  // remove booking notifications from the persistent queue.
+  try {
+    processAppointmentReminders_();
+  } catch (reminderError) {
+    console.error('Appointment reminder batch failed: ' +
+      String(reminderError && reminderError.message ? reminderError.message : reminderError));
+  }
+
+  var lock = LockService.getScriptLock();
+  var items = [];
+  lock.waitLock(5000);
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var queue = readTelegramQueueProperty_(props, queueKey);
+    var inflight = readTelegramQueueProperty_(props, inflightKey);
+
+    // Recover any items left in-flight by a terminated previous execution.
+    // Keep in-flight items first and preserve new enqueues behind them.
+    var combined = inflight.concat(queue);
+    if (combined.length > 100) {
+      // Do not truncate. Preserve everything and fail visibly for operator review.
+      throw new Error('TELEGRAM_QUEUE_CAPACITY_EXCEEDED:' + combined.length);
+    }
+    props.setProperty(inflightKey, JSON.stringify(combined));
+    props.setProperty(queueKey, '[]');
+    props.deleteProperty(triggerKey);
+    items = combined.slice();
+  } finally {
+    lock.releaseLock();
+  }
+
+  if (!items.length) return {ok:true,processed:0,failed:0};
+
+  var sent = 0;
+  var failedCount = 0;
+  items.forEach(function(item) {
+    var confirmed = false;
+    var failureMessage = '';
+    try {
+      var booking = getBookingByIdObject_(item.bookingId);
+      if (!booking) throw new Error('BOOKING_NOT_FOUND_FOR_NOTIFICATION');
+
+      var result = sendBookingTelegramNotifications_(booking, String(item.eventType || ''));
+      if (!isTelegramDeliveryConfirmedPure_(result)) {
+        throw new Error('Telegram delivery failed, was skipped, or returned no confirmed success.');
+      }
+      confirmed = true;
+    } catch (error) {
+      failureMessage = String(error && error.message ? error.message : error);
+    }
+
+    var lock2 = LockService.getScriptLock();
+    lock2.waitLock(5000);
+    try {
+      var props2 = PropertiesService.getScriptProperties();
+      var inflight2 = readTelegramQueueProperty_(props2, inflightKey);
+      var currentIndex = inflight2.findIndex(function(candidate) {
+        return String(candidate.id || '') === String(item.id || '') &&
+          String(candidate.bookingId || '') === String(item.bookingId || '') &&
+          String(candidate.eventType || '') === String(item.eventType || '');
+      });
+
+      if (confirmed) {
+        if (currentIndex !== -1) inflight2.splice(currentIndex, 1);
+        sent++;
+      } else {
+        var attempts = Number(item.attempts || 0) + 1;
+        if (shouldRetryTelegramNotification_(attempts)) {
+          item.attempts = attempts;
+          item.lastError = failureMessage;
+          item.retryAt = new Date().toISOString();
+          if (currentIndex !== -1) inflight2[currentIndex] = item;
+          else inflight2.push(item);
+        } else {
+          // Keep exhausted items for manual inspection instead of silently
+          // deleting a critical admin/payment notification.
+          item.attempts = attempts;
+          item.lastError = failureMessage;
+          item.failedPermanentlyAt = new Date().toISOString();
+          item.permanentFailure = true;
+          if (currentIndex !== -1) inflight2[currentIndex] = item;
+          else inflight2.push(item);
+        }
+        failedCount++;
+      }
+
+      props2.setProperty(inflightKey, JSON.stringify(inflight2));
+    } finally {
+      lock2.releaseLock();
+    }
+  });
+
+  // If retryable or permanently failed items remain, schedule a follow-up.
+  // Permanent failures are retained for manual inspection, but should not
+  // cause a tight trigger loop.
+  var remaining = [];
+  lock.waitLock(5000);
+  try {
+    var props3 = PropertiesService.getScriptProperties();
+    remaining = readTelegramQueueProperty_(props3, inflightKey);
+    if (remaining.some(function(item) { return !item.permanentFailure; }) &&
+        String(props3.getProperty(triggerKey) || '') !== '1') {
+      ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
+        .timeBased().after(5000).create();
+      props3.setProperty(triggerKey, '1');
+    }
+  } finally {
+    lock.releaseLock();
+  }
+
+  return {ok:failedCount===0,processed:items.length,sent:sent,failed:failedCount,remaining:remaining.length};
+}
+
 function setupBookingTelegramQueueTrigger_() {
   if (CONFIG.STAGING_MODE) return {ok:true,skipped:true,reason:'STAGING_MODE',triggerCount:0};
   var functionName = 'processBookingTelegramNotificationQueue_';

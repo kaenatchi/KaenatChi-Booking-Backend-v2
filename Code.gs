@@ -3743,6 +3743,31 @@ function hasRequiredReceiptImage_(receipt) {
   return true;
 }
 
+function validatePaymentSubmissionPreflightPure_(rows, bookingId) {
+  var id=String(bookingId||'').trim();
+  if(!id)return {ok:false,error:'BOOKING_ID_REQUIRED'};
+  var matches=(Array.isArray(rows)?rows:[]).filter(function(p){
+    return String(p['Booking ID']||'')===id;
+  });
+  return matches.length===0
+    ? {ok:true}
+    : {ok:false,error:'PAYMENT_RECORD_ALREADY_EXISTS'};
+}
+
+function testPaymentSubmissionPreflightPure_() {
+  var cases=[
+    {rows:[],id:'B1',expected:true},
+    {rows:[{'Booking ID':'B1'}],id:'B1',expected:false},
+    {rows:[{'Booking ID':'B1'},{'Booking ID':'B1'}],id:'B1',expected:false},
+    {rows:[{'Booking ID':'B2'}],id:'B1',expected:true},
+    {rows:[],id:'',expected:false}
+  ];
+  var failed=cases.filter(function(t){
+    return validatePaymentSubmissionPreflightPure_(t.rows,t.id).ok!==t.expected;
+  });
+  return {ok:failed.length===0,passed:cases.length-failed.length,total:cases.length,failed:failed};
+}
+
 function submitPayment_(request){
   return withBookingLock_(function(){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
@@ -3754,6 +3779,14 @@ function submitPayment_(request){
     if(String(b['Admin Note']||'').indexOf('INITIAL_REQUEST_APPROVED')===-1)return fail_('INITIAL_APPROVAL_REQUIRED','ابتدا باید درخواست نوبت توسط ادمین تأیید اولیه شود.');
     if(String(b['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED||String(b['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_APPROVED){
       return fail_('PAYMENT_ALREADY_SUBMITTED','برای این نوبت قبلاً پرداخت ارسال شده است.');
+    }
+    // Prevent duplicate payment rows after a partial prior write.
+    var existingPaymentRows=getSheetObjects_(CONFIG.SHEETS.PAYMENTS).filter(function(p){
+      return String(p['Booking ID']||'')===String(b['Booking ID']||'');
+    });
+    var paymentPreflight=validatePaymentSubmissionPreflightPure_(existingPaymentRows,b['Booking ID']);
+    if(!paymentPreflight.ok){
+      return fail_(paymentPreflight.error,'برای این نوبت رکورد پرداخت قبلی وجود دارد؛ برای جلوگیری از ثبت تکراری، پرداخت جدید متوقف شد.');
     }
     var hold=parseDateValue_(b['Hold Until']);
     if(!hold||hold.getTime()<=Date.now()){releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);return fail_('HOLD_EXPIRED','مهلت این نوبت تمام شده است.');}

@@ -3813,16 +3813,36 @@ function rejectBooking_(request){
   return withBookingLock_(function(){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
     if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+
+    // A stale Telegram button must not reverse a completed approval or
+    // reject a booking before a payment has actually been submitted.
+    if(String(b['Appointment Status']||'')!==CONFIG.STATUSES.BOOKING_PENDING)
+      return fail_('BOOKING_NOT_PENDING','این نوبت دیگر در انتظار بررسی پرداخت نیست.');
+    if(String(b['Payment Status']||'')!==CONFIG.STATUSES.PAYMENT_RECEIVED)
+      return fail_('PAYMENT_NOT_READY','برای رد فیش، ابتدا باید پرداخت ارسال شده باشد.');
+
+    var admin=String(request.adminId||request.admin||'admin');
+    var reason=String(request.note||request.reason||'');
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
-      'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),
-      'Admin Note':String(request.note||request.reason||''),'Hold Until':''
+      'Rejected At':new Date(),'Rejected By':admin,
+      'Admin Note':reason,'Hold Until':''
     });
-    appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.note||request.reason||'')});
 
-    // Queue the rejection notification outside the booking request path.
-    queueBookingTelegramNotification_(b, 'rejected');
+    // Keep the financial ledger aligned with the booking decision.
+    getSheetObjects_(CONFIG.SHEETS.PAYMENTS).forEach(function(p){
+      if(String(p['Booking ID']||'')===String(b['Booking ID']||'') &&
+         String(p['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED){
+        updateRowFields_(CONFIG.SHEETS.PAYMENTS,p._row,{
+          'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
+          'Rejected At':new Date(),
+          'Rejected By':admin
+        });
+      }
+    });
 
+    appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:reason});
+    queueBookingTelegramNotification_(getBookingByIdObject_(b['Booking ID']), 'rejected');
     return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_REJECTED};
   });
 }

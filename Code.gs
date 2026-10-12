@@ -3723,7 +3723,10 @@ function approveBookingRequest_(request) {
     var hold=parseDateValue_(b['Hold Until']);
     if(!hold||hold.getTime()<=Date.now()){
       releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);
-      return fail_('REQUEST_EXPIRED','مهلت دو ساعته درخواست پایان یافته است.');
+      return fail_('REQUEST_EXPIRED','مهلت درخواست پایان یافته است.');
+    }
+    if(String(b['Admin Note']||'').indexOf('INITIAL_REQUEST_APPROVED')!==-1){
+      return {ok:true,bookingId:b['Booking ID'],trackingCode:b['Tracking Code'],status:'AWAITING_PAYMENT',alreadyApproved:true};
     }
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Admin Note':'INITIAL_REQUEST_APPROVED',
@@ -3744,6 +3747,8 @@ function rejectBookingRequest_(request) {
       return fail_('BOOKING_NOT_PENDING','این درخواست دیگر در انتظار بررسی اولیه نیست.');
     if(String(b['Payment Status']||'')!==CONFIG.STATUSES.PAYMENT_PENDING)
       return fail_('REQUEST_ALREADY_PAID','برای این درخواست قبلاً پرداخت ثبت شده است.');
+    if(String(b['Admin Note']||'').indexOf('INITIAL_REQUEST_APPROVED')!==-1)
+      return fail_('REQUEST_ALREADY_APPROVED','درخواست قبلاً تأیید اولیه شده است و قابل رد در این مرحله نیست.');
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,
       'Admin Note':String(request.reason||'INITIAL_REQUEST_REJECTED'),

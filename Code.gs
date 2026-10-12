@@ -3635,9 +3635,9 @@ function createBooking_(request){
       'Appointment Status':booking.appointmentStatus,'Tracking Code':booking.trackingCode,'Hold Until':booking.holdUntil
     });
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.BOOKING_CREATED,bookingId:booking.bookingId,slotKey:slotKey,details:'Booking request created; awaiting initial admin review.'});
-    appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_HELD,bookingId:booking.bookingId,slotKey:slotKey,details:'Slot held for initial review (120 minutes).'});
+    appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_HELD,bookingId:booking.bookingId,slotKey:slotKey,details:'Slot held for initial review (12 hours).'});
     queueBookingTelegramNotification_(getBookingByIdObject_(booking.bookingId), 'request_received');
-    return {ok:true,booking:publicBooking_(booking),message:'درخواست نوبت ثبت شد و تا ۲ ساعت در انتظار بررسی اولیه است.'};
+    return {ok:true,booking:publicBooking_(booking),message:'درخواست نوبت ثبت شد و تا ۱۲ ساعت در انتظار بررسی اولیه است.'};
   });
 }
 

@@ -4085,10 +4085,21 @@ function submitPayment_(request){
     if(String(b['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED||String(b['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_APPROVED){
       return fail_('PAYMENT_ALREADY_SUBMITTED','برای این نوبت قبلاً پرداخت ارسال شده است.');
     }
-    // Prevent duplicate payment rows after a partial prior write.
+    // Fail closed when Booking and Payments disagree. This gate is read-only:
+    // it never repairs or confirms a payment automatically.
     var existingPaymentRows=getSheetObjects_(CONFIG.SHEETS.PAYMENTS).filter(function(p){
       return String(p['Booking ID']||'')===String(b['Booking ID']||'');
     });
+    var paymentConsistency=classifyPaymentSubmissionConsistencyPure_(b,existingPaymentRows);
+    if(paymentConsistency.state!=='NO_PAYMENT_RECORD'){
+      appendBookingLog_({
+        action:'PAYMENT_SUBMISSION_BLOCKED_FOR_CONSISTENCY_REVIEW',
+        bookingId:b['Booking ID'],
+        slotKey:b['Slot Key'],
+        details:'State='+paymentConsistency.state+'; action='+paymentConsistency.action
+      });
+      return fail_('PAYMENT_CONSISTENCY_REVIEW_REQUIRED','وضعیت رزرو و پرداخت نیاز به بررسی دارد؛ برای جلوگیری از ثبت یا تأیید اشتباه، ارسال فیش جدید متوقف شد.');
+    }
     var paymentPreflight=validatePaymentSubmissionPreflightPure_(existingPaymentRows,b['Booking ID']);
     if(!paymentPreflight.ok){
       return fail_(paymentPreflight.error,'برای این نوبت رکورد پرداخت قبلی وجود دارد؛ برای جلوگیری از ثبت تکراری، پرداخت جدید متوقف شد.');

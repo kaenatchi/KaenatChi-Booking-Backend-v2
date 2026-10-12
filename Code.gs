@@ -362,6 +362,12 @@ function getBookingPublicStatus_(request) {
   }};
 }
 
+function isBookingStatusMobileMatch_(storedMobile, suppliedMobile) {
+  var stored = normalizeMobileForMatch_(storedMobile || '');
+  var supplied = normalizeMobileForMatch_(suppliedMobile || '');
+  return !!stored && !!supplied && stored === supplied;
+}
+
 function getBookingStatusByRequestId_(request) {
   const requestId = String(
     request.requestId ||
@@ -419,6 +425,16 @@ function getBookingStatusByRequestId_(request) {
   headers.forEach(function(header, index) {
     booking[header] = rowValues[index];
   });
+
+  // Public status polling must verify the customer's mobile number as well as
+  // the opaque request ID. Do not reveal booking/tracking details on ID alone.
+  if (!isBookingStatusMobileMatch_(booking['Mobile'], request.mobile || request.phone || '')) {
+    return {
+      ok: true,
+      found: false,
+      requestId: requestId
+    };
+  }
 
   return {
     ok: true,
@@ -5984,4 +6000,20 @@ function testTelegramPaymentReviewButtonsPure_() {
   ];
   var failed=checks.filter(function(check){return !check.ok;});
   return {ok:failed.length===0,test:'TELEGRAM PAYMENT REVIEW BUTTONS PURE TEST',passed:checks.length-failed.length,total:checks.length,failed:failed,noSheetRead:true,noSheetWrite:true,noTelegramSent:true};
+}
+
+
+/* Pure status privacy contract test: no sheet/API access. */
+function testBookingStatusMobileMatchPure_() {
+  var cases = [
+    {name:'matching mobile accepted',stored:'09123456789',supplied:'09123456789',expected:true},
+    {name:'international format normalized',stored:'09123456789',supplied:'+989123456789',expected:true},
+    {name:'different mobile rejected',stored:'09123456789',supplied:'09111111111',expected:false},
+    {name:'missing supplied mobile rejected',stored:'09123456789',supplied:'',expected:false},
+    {name:'missing stored mobile rejected',stored:'',supplied:'09123456789',expected:false}
+  ];
+  var failed=cases.filter(function(test){
+    return isBookingStatusMobileMatch_(test.stored,test.supplied)!==test.expected;
+  });
+  return {ok:failed.length===0,test:'BOOKING STATUS MOBILE MATCH PURE TEST',passed:cases.length-failed.length,total:cases.length,failed:failed,noSheetRead:true,noSheetWrite:true,noTelegramSent:true};
 }

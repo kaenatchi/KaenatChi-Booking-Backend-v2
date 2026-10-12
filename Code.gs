@@ -1267,7 +1267,7 @@ function testTelegramNotificationRetryPolicyPure_() {
 }
 
 function isTelegramDeliveryConfirmedPure_(result) {
-  return !!result && result.ok === true;
+  return !!result && result.ok === true && result.skipped !== true;
 }
 
 function testTelegramDeliveryResultGuardPure_() {
@@ -1277,7 +1277,9 @@ function testTelegramDeliveryResultGuardPure_() {
     {name:'missing result rejected',value:undefined,expected:false},
     {name:'null result rejected',value:null,expected:false},
     {name:'empty object rejected',value:{},expected:false},
-    {name:'skipped delivery is not success',value:{ok:true,skipped:true,reason:'STAGING_MODE'},expected:true}
+    {name:'confirmed send accepted',value:{ok:true},expected:true},
+    {name:'skipped staging send is not delivery success',value:{ok:true,skipped:true,reason:'STAGING_MODE'},expected:false},
+    {name:'skipped send without reason is not delivery success',value:{ok:true,skipped:true},expected:false}
   ];
   var failed=cases.filter(function(t){return isTelegramDeliveryConfirmedPure_(t.value)!==t.expected;});
   return {ok:failed.length===0,test:'TELEGRAM_DELIVERY_RESULT_GUARD_PURE_TEST',passed:cases.length-failed.length,total:cases.length,failed:failed,noExternalCalls:true};
@@ -1346,8 +1348,8 @@ function processBookingTelegramNotificationQueue_() {
        * result. Treat an explicit failure as retryable, and keep the item
        * alive for the next processor run.
        */
-      if (!result || result.ok !== true) {
-        throw new Error('Telegram delivery failed or returned no confirmed success.');
+      if (!isTelegramDeliveryConfirmedPure_(result)) {
+        throw new Error('Telegram delivery failed, was skipped, or returned no confirmed success.');
       }
 
     } catch (error) {

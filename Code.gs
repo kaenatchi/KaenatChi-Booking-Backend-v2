@@ -1167,8 +1167,10 @@ function queueBookingTelegramNotification_(booking, eventType) {
       attempts: 0
     });
 
-    if (queue.length > 100) {
-      queue = queue.slice(queue.length - 100);
+    // Script Properties have a per-value size limit. Keep enough room for
+    // retry metadata so a full queue cannot exceed the property limit.
+    if (queue.length > 35) {
+      queue = queue.slice(queue.length - 35);
     }
 
     props.setProperty(queueKey, JSON.stringify(queue));
@@ -1249,9 +1251,17 @@ function processBookingTelegramNotificationQueue_() {
 
   /*
    * Appointment reminders share the existing one-minute Telegram worker.
-   * This runs even when the notification queue is empty.
+   * Isolate reminder errors so they cannot discard notifications already
+   * removed from the queue above.
    */
-  processAppointmentReminders_();
+  try {
+    processAppointmentReminders_();
+  } catch (reminderError) {
+    console.warn(
+      'Appointment reminder processing failed: ' +
+      String(reminderError && reminderError.message ? reminderError.message : reminderError)
+    );
+  }
 
   if (!items.length) {
     return;
@@ -1333,8 +1343,10 @@ function processBookingTelegramNotificationQueue_() {
 
     var combined = existing.concat(failed);
 
-    if (combined.length > 100) {
-      combined = combined.slice(combined.length - 100);
+    // Retry entries carry extra metadata, so use the same conservative
+    // bound to stay below the Script Properties value-size limit.
+    if (combined.length > 35) {
+      combined = combined.slice(combined.length - 35);
     }
 
     props2.setProperty(queueKey, JSON.stringify(combined));

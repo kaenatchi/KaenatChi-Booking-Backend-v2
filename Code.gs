@@ -477,6 +477,7 @@ function legacyBookingSubmit_(request) {
 
   const payment = submitPayment_({
     bookingId: bookingId,
+    mobile: request.mobile || '',
     transactionNumber: request.trackingCode || request.paymentTrackingCode || '',
     receiptData: request.receiptDataUrl || request.receiptData || request.receiptBase64 || '',
     receiptFileName: request.receiptName || request.receiptFileName || '',

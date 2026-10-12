@@ -279,7 +279,9 @@ function routeRequest_(action, request) {
       return getAvailableSlots_(request);
 
     case 'getBooking':
-      return getBooking_(request);
+      // The public Mini App tracks by high-entropy Request ID. A six-digit
+      // tracking code is display-only and must not be a public lookup secret.
+      return fail_('TRACKING_BY_REQUEST_ID_ONLY','برای پیگیری، از شناسه امن درخواست در همین مینی‌اپ استفاده کنید.');
 
     case 'getServices': return getServices_(request);
     case 'validateDiscount': return validateDiscount_(request);

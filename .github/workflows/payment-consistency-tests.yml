@@ -25,3 +25,5 @@ jobs:
         run: node tests/payment-consistency.test.cjs
       - name: Check payment flow and hold safety invariants
         run: node tests/payment-flow-safety.test.cjs
+      - name: Block shared CMS/VIP spreadsheet in staging
+        run: node tests/staging-isolation.test.cjs

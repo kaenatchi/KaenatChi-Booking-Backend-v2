@@ -897,6 +897,15 @@ function editTelegramMessageReplyMarkup_(chatId, messageId, replyMarkup) {
   );
 }
 
+function testPaymentReviewKeyboardPure_() {
+  var k=getBookingTelegramAdminKeyboard_('B-TEST','payment');
+  var buttons=(k.inline_keyboard||[]).reduce(function(a,row){return a.concat(row);},[]);
+  var actions=buttons.map(function(b){return String(b.callback_data||'');});
+  var expected=['kaenatchi:approve:B-TEST','kaenatchi:hold_review:B-TEST','kaenatchi:reject:B-TEST'];
+  var failed=expected.filter(function(x){return actions.indexOf(x)<0;});
+  return {ok:failed.length===0,test:'PAYMENT_REVIEW_KEYBOARD_PURE_TEST',passed:expected.length-failed.length,total:expected.length,failed:failed,noTelegramSent:true};
+}
+
 function getBookingTelegramAdminKeyboard_(bookingId, mode) {
   var id = String(bookingId || '').trim();
   var requestMode = mode === 'request';
@@ -906,10 +915,15 @@ function getBookingTelegramAdminKeyboard_(bookingId, mode) {
       {text:'❌ رد درخواست',callback_data:'kaenatchi:request_reject:'+id}
     ]]};
   }
-  return {inline_keyboard:[[
-    {text:'✅ تأیید پرداخت',callback_data:'kaenatchi:approve:'+id},
-    {text:'🕓 بررسی بانکی',callback_data:'kaenatchi:hold_review:'+id}
-  ]]};
+  return {inline_keyboard:[
+    [
+      {text:'✅ تأیید پرداخت',callback_data:'kaenatchi:approve:'+id},
+      {text:'🕓 بررسی بانکی',callback_data:'kaenatchi:hold_review:'+id}
+    ],
+    [
+      {text:'❌ رد فیش',callback_data:'kaenatchi:reject:'+id}
+    ]
+  ]};
 }
 function getBookingTelegramResultKeyboard_(status) {
   if (status === 'approved') {

@@ -1040,138 +1040,129 @@ function escapeTelegramHtml_(value) {
 }
 
 function buildBookingTelegramText_(booking, eventType) {
-  var name = (
-    String(booking['First Name'] || '') +
-    ' ' +
-    String(booking['Last Name'] || '')
-  ).trim();
-
-  var tracking = escapeTelegramHtml_(
-    booking['Tracking Code'] || ''
-  );
-
-  var service = escapeTelegramHtml_(
-    booking['Service Name'] || ''
-  );
-
-  var date = escapeTelegramHtml_(
-    normalizeJalaliDate_(booking['Appointment Date'] || '')
-  );
-
-  var time = escapeTelegramHtml_(
-    normalizeTime_(booking['Appointment Time'] || '')
-  );
-
-  var customer = escapeTelegramHtml_(
-    name || 'مشتری'
-  );
-
-  var price = escapeTelegramHtml_(
-    booking['Final Price'] || ''
-  );
+  var name = (String(booking['First Name'] || '') + ' ' + String(booking['Last Name'] || '')).trim();
+  var tracking = escapeTelegramHtml_(booking['Tracking Code'] || '');
+  var service = escapeTelegramHtml_(booking['Service Name'] || '');
+  var date = escapeTelegramHtml_(normalizeJalaliDate_(booking['Appointment Date'] || ''));
+  var time = escapeTelegramHtml_(normalizeTime_(booking['Appointment Time'] || ''));
+  var customer = escapeTelegramHtml_(name || 'مشتری');
+  var price = escapeTelegramHtml_(booking['Final Price'] || '');
+  var bookingId = escapeTelegramHtml_(booking['Booking ID'] || '');
+  var transactionNumber = escapeTelegramHtml_(booking['Transaction Number'] || 'ثبت نشده');
 
   if (eventType === 'request_received') {
-    return ('📩 <b>درخواست جدید نوبت کائنات‌چی</b>\n\n' +
-      '👤 ' + customer + '\n' + '✨ ' + service + '\n' +
-      '📅 ' + date + ' — ' + time + '\n' + '💳 مبلغ: ' + price + '\n' +
-      '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' + '⏳ مهلت بررسی اولیه: ۲ ساعت');
+    return '📩 <b>درخواست جدید نوبت کائنات‌چی</b>\n\n' +
+      '👤 ' + customer + '\n✨ ' + service + '\n📅 ' + date + ' — ' + time +
+      '\n💳 مبلغ: ' + price + '\n🎫 کد پیگیری: <code>' + tracking +
+      '</code>\n\n⏳ مهلت بررسی اولیه: ۱۲ ساعت';
   }
   if (eventType === 'request_approved') {
-    return ('✅ <b>درخواست نوبت تأیید اولیه شد</b>\n\n' +
-      '👤 ' + customer + '\n' + '✨ ' + service + '\n' +
-      '📅 ' + date + ' — ' + time + '\n' + '💳 مبلغ قابل پرداخت: ' + price + '\n' +
-      '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' +
-      'لطفاً از مینی‌اپ کائنات‌چی پرداخت را انجام بده و فیش را ارسال کن. مهلت پرداخت: ۳۰ دقیقه.');
+    return '✅ <b>درخواست نوبت تأیید اولیه شد</b>\n\n' +
+      '👤 ' + customer + '\n✨ ' + service + '\n📅 ' + date + ' — ' + time +
+      '\n💳 مبلغ قابل پرداخت: ' + price + '\n🎫 کد پیگیری: <code>' + tracking +
+      '</code>\n\nبرای پرداخت، در مینی‌اپ کائنات‌چی وارد بخش «پیگیری درخواست» شو و کد پیگیری و شماره موبایل ثبت‌شده را وارد کن؛ سپس تصویر فیش را بارگذاری کن. مهلت پرداخت: ۱۰ دقیقه.';
   }
   if (eventType === 'request_rejected') {
-    return ('❌ <b>درخواست نوبت پذیرفته نشد</b>\n\n' +
-      '👤 ' + customer + '\n' + '✨ ' + service + '\n' +
-      '📅 ' + date + ' — ' + time + '\n' + '🎫 کد پیگیری: <code>' + tracking + '</code>');
+    return '❌ <b>درخواست نوبت پذیرفته نشد</b>\n\n' +
+      '👤 ' + customer + '\n✨ ' + service + '\n📅 ' + date + ' — ' + time +
+      '\n🎫 کد پیگیری: <code>' + tracking + '</code>';
   }
   if (eventType === 'approved') {
-    return (
-      '✅ <b>نوبت کائنات‌چی تأیید شد</b>\n\n' +
-      '👤 ' + customer + '\n' +
-      '✨ ' + service + '\n' +
-      '📅 ' + date + ' — ' + time + '\n' +
-      '💳 مبلغ: ' + price + '\n' +
-      '🎫 کد پیگیری: <code>' + tracking + '</code>'
-    );
+    return '✅ <b>نوبت کائنات‌چی تأیید شد</b>\n\n' +
+      '👤 ' + customer + '\n✨ ' + service + '\n📅 ' + date + ' — ' + time +
+      '\n💳 مبلغ: ' + price + '\n🎫 کد پیگیری: <code>' + tracking + '</code>';
   }
-
   if (eventType === 'rejected') {
-    return (
-      '❌ <b>فیش پرداخت کائنات‌چی رد شد</b>\n\n' +
-      '👤 ' + customer + '\n' +
-      '✨ ' + service + '\n' +
-      '📅 ' + date + ' — ' + time + '\n' +
-      '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' +
-      '⛔ وضعیت: فیش پرداخت تأیید نشد'
-    );
+    return '❌ <b>فیش پرداخت کائنات‌چی رد شد</b>\n\n' +
+      '👤 ' + customer + '\n✨ ' + service + '\n📅 ' + date + ' — ' + time +
+      '\n🎫 کد پیگیری: <code>' + tracking + '</code>\n\n⛔ وضعیت: فیش پرداخت تأیید نشد';
+  }
+  return '🧾 <b>فیش پرداخت کائنات‌چی دریافت شد</b>\n\n' +
+    '👤 ' + customer + '\n✨ ' + service + '\n📅 ' + date + ' — ' + time +
+    '\n💳 مبلغ: ' + price + '\n🧾 شناسه نوبت: <code>' + bookingId +
+    '</code>\n🎫 کد پیگیری نوبت: <code>' + tracking +
+    '</code>\n🏦 کد پیگیری اعلام‌شده: <code>' + transactionNumber +
+    '</code>\n\n⏳ وضعیت: در انتظار بررسی ادمین';
+}
+function sendTelegramPhoto_(chatId, fileId, caption, replyMarkup) {
+  // Staging must never read real Drive files or contact Telegram.
+  if (CONFIG.STAGING_MODE) return {ok:false,skipped:true,reason:'STAGING_MODE'};
+  chatId = String(chatId || '').trim();
+  fileId = String(fileId || '').trim();
+  if (!chatId || !fileId || !caption) {
+    return {ok:false,error:'TELEGRAM_PHOTO_ARGUMENTS_MISSING'};
   }
 
-  return (
-    '🧾 <b>فیش پرداخت کائنات‌چی دریافت شد</b>\n\n' +
-    '👤 ' + customer + '\n' +
-    '✨ ' + service + '\n' +
-    '📅 ' + date + ' — ' + time + '\n' +
-    '🎫 کد پیگیری: ' + tracking + '\n\n' +
-    '⏳ وضعیت: در انتظار بررسی ادمین'
-  );
+  var config = getTelegramConfig_();
+  if (!config.botToken) {
+    return {ok:false,skipped:true,reason:'BOT_TOKEN_NOT_CONFIGURED'};
+  }
+
+  try {
+    var file = DriveApp.getFileById(fileId);
+    var payload = {
+      chat_id: chatId,
+      photo: file.getBlob(),
+      caption: caption,
+      parse_mode: 'HTML'
+    };
+    if (replyMarkup) payload.reply_markup = JSON.stringify(replyMarkup);
+
+    var response = UrlFetchApp.fetch(
+      'https://api.telegram.org/bot' + encodeURIComponent(config.botToken) + '/sendPhoto',
+      {method:'post',muteHttpExceptions:true,payload:payload}
+    );
+    var code = response.getResponseCode();
+    var body = response.getContentText();
+    var parsed = {};
+    try { parsed = JSON.parse(body); } catch(e) {}
+
+    if (code >= 200 && code < 300 && parsed.ok === true) {
+      return {ok:true,result:parsed.result || null};
+    }
+    console.warn('Telegram photo delivery failed: HTTP ' + code + ' ' + body);
+    return {ok:false,error:'TELEGRAM_PHOTO_SEND_FAILED',httpCode:code};
+  } catch(error) {
+    console.warn('Telegram photo delivery exception: ' + (error && error.message ? error.message : error));
+    return {ok:false,error:'TELEGRAM_PHOTO_EXCEPTION'};
+  }
 }
 
 function sendBookingTelegramNotifications_(booking, eventType) {
-  var config=getTelegramConfig_();
-  var text=buildBookingTelegramText_(booking,eventType);
-  var results=[];
-
-  /*
-   * Only payment_received needs admin action buttons.
-   * Approved/rejected messages are terminal and do not expose action buttons.
-   */
+  if (CONFIG.STAGING_MODE) return {ok:true,skipped:true,reason:'STAGING_MODE'};
+  var config = getTelegramConfig_();
+  var text = buildBookingTelegramText_(booking, eventType);
+  var results = [];
+  var adminResult = null;
   var replyMarkup = eventType === 'request_received'
     ? getBookingTelegramAdminKeyboard_(booking['Booking ID'], 'request')
     : eventType === 'payment_received'
-      ? getBookingTelegramAdminKeyboard_(booking['Booking ID'], 'payment') : null;
+      ? getBookingTelegramAdminKeyboard_(booking['Booking ID'], 'payment')
+      : null;
 
-  if(config.adminChatId){
-    results.push(
-      sendTelegramMessage_(
-        config.adminChatId,
-        text,
-        replyMarkup
-      )
-    );
+  // Admin delivery is the critical path. A customer message must not mask a failed admin notification.
+  if (config.adminChatId) {
+    if (eventType === 'payment_received') {
+      var receiptFileId = String(booking['Receipt File ID'] || '').trim();
+      adminResult = receiptFileId
+        ? sendTelegramPhoto_(config.adminChatId, receiptFileId, text, replyMarkup)
+        : {ok:false,error:'PAYMENT_RECEIPT_FILE_ID_MISSING'};
+    } else {
+      adminResult = sendTelegramMessage_(config.adminChatId, text, replyMarkup);
+    }
+    results.push({recipient:'admin',result:adminResult});
   } else {
-    results.push({
-      ok:false,
-      skipped:true,
-      reason:'ADMIN_CHAT_ID_NOT_CONFIGURED'
-    });
+    adminResult = {ok:false,skipped:true,reason:'ADMIN_CHAT_ID_NOT_CONFIGURED'};
+    results.push({recipient:'admin',result:adminResult});
   }
 
-  var customerChatId=String(booking['Telegram ID']||'').trim();
-  if(customerChatId && customerChatId!==config.adminChatId){
-    results.push(
-      sendTelegramMessage_(
-        customerChatId,
-        text
-      )
-    );
+  var customerChatId = String(booking['Telegram ID'] || '').trim();
+  if (customerChatId && customerChatId !== config.adminChatId) {
+    results.push({recipient:'customer',result:sendTelegramMessage_(customerChatId,text)});
   }
 
-  return {
-    ok: results.some(function(item){ return item && item.ok === true; }),
-    results: results
-  };
+  return {ok:!!(adminResult && adminResult.ok === true),results:results};
 }
-
-
-/**
- * Adds a Telegram notification to a short-lived queue and schedules a
- * background worker. No Telegram network call happens in the booking
- * request itself.
- */
 function queueBookingTelegramNotification_(booking, eventType) {
   if (CONFIG.STAGING_MODE) return {ok:true,queued:false,skipped:true,reason:'STAGING_MODE'};
   try {
@@ -5972,3 +5963,34 @@ function testAppointmentReminderDiagnostic() {
     return result;
   }
 }
+
+
+
+/* Pure contract test: message text only; no Sheet, Drive, or Telegram access. */
+function testBookingTelegramTextPure_() {
+  var booking = {
+    'Booking ID':'BK-STAGING-001',
+    'Tracking Code':'KC-STAGING-001',
+    'First Name':'آزمایشی',
+    'Last Name':'کائنات‌چی',
+    'Service Name':'خدمت آزمایشی',
+    'Appointment Date':'1405/07/22',
+    'Appointment Time':'11:00',
+    'Final Price':700000,
+    'Transaction Number':'BANK-TEST-123'
+  };
+  var requestText = buildBookingTelegramText_(booking, 'request_received');
+  var acceptedText = buildBookingTelegramText_(booking, 'request_approved');
+  var paymentText = buildBookingTelegramText_(booking, 'payment_received');
+  var checks = [
+    {name:'initial request says 12-hour review window',ok:requestText.indexOf('۱۲ ساعت') !== -1},
+    {name:'accepted request says 10-minute payment window',ok:acceptedText.indexOf('۱۰ دقیقه') !== -1},
+    {name:'payment caption includes customer name',ok:paymentText.indexOf('آزمایشی کائنات‌چی') !== -1},
+    {name:'payment caption includes amount',ok:paymentText.indexOf('700000') !== -1},
+    {name:'payment caption includes bank reference',ok:paymentText.indexOf('BANK-TEST-123') !== -1},
+    {name:'payment caption includes booking ID and tracking code',ok:paymentText.indexOf('BK-STAGING-001') !== -1 && paymentText.indexOf('KC-STAGING-001') !== -1}
+  ];
+  var failed = checks.filter(function(check){return !check.ok;});
+  return {ok:failed.length===0,test:'TELEGRAM MESSAGE CONTRACT PURE TEST',passed:checks.length-failed.length,total:checks.length,failed:failed,noSheetRead:true,noSheetWrite:true,noDriveAccess:true,noTelegramSent:true};
+}
+

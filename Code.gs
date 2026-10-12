@@ -3858,6 +3858,31 @@ function approveBooking_(request){
   });
 }
 
+function evaluatePaymentRejectionGuardPure_(booking, rows, received, approved, pending, confirmed) {
+  var paymentStatus=String(booking && booking['Payment Status']||'');
+  var appointmentStatus=String(booking && booking['Appointment Status']||'');
+  if(paymentStatus===approved || appointmentStatus===confirmed) return {ok:false,error:'BOOKING_ALREADY_FINAL'};
+  if(paymentStatus!==received || appointmentStatus!==pending) return {ok:false,error:'PAYMENT_NOT_AWAITING_REVIEW'};
+  var matches=(Array.isArray(rows)?rows:[]).filter(function(p){return String(p['Booking ID']||'')===String(booking['Booking ID']||'');});
+  if(matches.length!==1) return {ok:false,error:'PAYMENT_RECORD_MISMATCH'};
+  if(String(matches[0]['Payment Status']||'')!==received) return {ok:false,error:'PAYMENT_RECORD_NOT_READY'};
+  return {ok:true};
+}
+
+function testPaymentRejectionGuardPure_() {
+  var R='PAYMENT_RECEIVED', A='PAYMENT_APPROVED', P='BOOKING_PENDING', C='BOOKING_CONFIRMED';
+  var cases=[
+    {name:'valid received payment',b:{'Booking ID':'B1','Payment Status':R,'Appointment Status':P},rows:[{'Booking ID':'B1','Payment Status':R}],ok:true},
+    {name:'approved booking protected',b:{'Booking ID':'B1','Payment Status':A,'Appointment Status':C},rows:[{'Booking ID':'B1','Payment Status':A}],ok:false},
+    {name:'missing payment row blocked',b:{'Booking ID':'B1','Payment Status':R,'Appointment Status':P},rows:[],ok:false},
+    {name:'duplicate payment rows blocked',b:{'Booking ID':'B1','Payment Status':R,'Appointment Status':P},rows:[{'Booking ID':'B1','Payment Status':R},{'Booking ID':'B1','Payment Status':R}],ok:false},
+    {name:'wrong payment status blocked',b:{'Booking ID':'B1','Payment Status':R,'Appointment Status':P},rows:[{'Booking ID':'B1','Payment Status':A}],ok:false},
+    {name:'confirmed appointment protected',b:{'Booking ID':'B1','Payment Status':R,'Appointment Status':C},rows:[{'Booking ID':'B1','Payment Status':R}],ok:false}
+  ];
+  var failed=cases.filter(function(t){return evaluatePaymentRejectionGuardPure_(t.b,t.rows,R,A,P,C).ok!==t.ok;});
+  return {ok:failed.length===0,test:'PAYMENT_REJECTION_GUARD_PURE_TEST',passed:cases.length-failed.length,total:cases.length,failed:failed,noSheetRead:true,noSheetWrite:true,noTelegramSent:true};
+}
+
 function rejectBooking_(request){
   request=request||{};
   return withBookingLock_(function(){

@@ -62,6 +62,8 @@ const CONFIG = {
     BOOKING_CREATED: 'BOOKING_CREATED',
     SLOT_HELD: 'SLOT_HELD',
     PAYMENT_SUBMITTED: 'PAYMENT_SUBMITTED',
+    PAYMENT_REJECTED: 'PAYMENT_REJECTED',
+    PAYMENT_EXPIRED: 'PAYMENT_EXPIRED',
     ADMIN_APPROVED: 'ADMIN_APPROVED',
     ADMIN_REJECTED: 'ADMIN_REJECTED',
     SLOT_RELEASED: 'SLOT_RELEASED',
@@ -5690,7 +5692,8 @@ function testApprovalBlockedBeforePayment() {
   try{
     if(result.bookingId){
       var b=getBookingByIdObject_(result.bookingId);
-      if(b&&String(b['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING){
+      if(b&&(String(b['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING ||
+         String(b['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_AWAITING_PAYMENT)){
         releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);
         result.cleanedUp=true;
       }

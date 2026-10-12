@@ -1149,6 +1149,29 @@ function sendBookingTelegramNotifications_(booking, eventType) {
 
   return {ok:!!(adminResult && adminResult.ok === true),results:results};
 }
+function queueBookingTelegramNotificationWithAudit_(booking, eventType) {
+  var result = queueBookingTelegramNotification_(booking, eventType);
+  if (result && result.skipped === true && CONFIG.STAGING_MODE) return result;
+  if (!result || result.ok !== true || result.queued !== true) {
+    var bookingId = String(booking && booking['Booking ID'] || booking && booking.bookingId || '').trim();
+    var details = 'Telegram notification was not confirmed queued. Event=' +
+      String(eventType || '') + '; result=' + JSON.stringify(result || null);
+    console.error('TELEGRAM_NOTIFICATION_QUEUE_NOT_CONFIRMED: ' + bookingId + ' / ' + details);
+    try {
+      appendBookingLog_({
+        action:'TELEGRAM_NOTIFICATION_QUEUE_FAILED',
+        bookingId:bookingId,
+        slotKey:String(booking && booking['Slot Key'] || ''),
+        details:details
+      });
+    } catch (auditError) {
+      console.error('TELEGRAM_NOTIFICATION_QUEUE_FAILURE_AUDIT_FAILED: ' +
+        String(auditError && auditError.message ? auditError.message : auditError));
+    }
+  }
+  return result;
+}
+
 function queueBookingTelegramNotification_(booking, eventType) {
   if (CONFIG.STAGING_MODE) return {ok:true,queued:false,skipped:true,reason:'STAGING_MODE'};
 
@@ -3926,7 +3949,7 @@ function createBooking_(request){
     });
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.BOOKING_CREATED,bookingId:booking.bookingId,slotKey:slotKey,details:'Booking request created; awaiting initial admin review.'});
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_HELD,bookingId:booking.bookingId,slotKey:slotKey,details:'Slot held for initial review (12 hours).'});
-    queueBookingTelegramNotification_(getBookingByIdObject_(booking.bookingId), 'request_received');
+    queueBookingTelegramNotificationWithAudit_(getBookingByIdObject_(booking.bookingId), 'request_received');
     return {ok:true,booking:publicBooking_(booking),message:'درخواست نوبت ثبت شد و تا ۱۲ ساعت در انتظار بررسی اولیه است.'};
   });
 }
@@ -4010,7 +4033,7 @@ function submitPayment_(request){
     // Queue Telegram notification outside the booking request path.
     // The notification worker runs from a time-based Apps Script trigger,
     // so Telegram latency can never delay or break payment submission.
-    queueBookingTelegramNotification_(b, 'payment_received');
+    queueBookingTelegramNotificationWithAudit_(b, 'payment_received');
 
     return {ok:true,bookingId:b['Booking ID'],paymentStatus:CONFIG.STATUSES.PAYMENT_RECEIVED,message:'فیش دریافت شد و برای بررسی ارسال شد.'};
   });
@@ -4035,7 +4058,7 @@ function approveBookingRequest_(request) {
       'Initial Approved At':new Date(),'Initial Approved By':String(request.adminId||request.admin||'admin')
     });
     appendBookingLog_({action:'INITIAL_REQUEST_APPROVED',bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Initial request approved; 10-minute payment window started.'});
-    queueBookingTelegramNotification_(getBookingByIdObject_(b['Booking ID']), 'request_approved');
+    queueBookingTelegramNotificationWithAudit_(getBookingByIdObject_(b['Booking ID']), 'request_approved');
     return {ok:true,bookingId:b['Booking ID'],trackingCode:b['Tracking Code'],status:'AWAITING_PAYMENT'};
   });
 }
@@ -4054,7 +4077,7 @@ function rejectBookingRequest_(request) {
       'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),'Hold Until':''
     });
     appendBookingLog_({action:'INITIAL_REQUEST_REJECTED',bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.reason||'Initial request rejected.')});
-    queueBookingTelegramNotification_(getBookingByIdObject_(b['Booking ID']), 'request_rejected');
+    queueBookingTelegramNotificationWithAudit_(getBookingByIdObject_(b['Booking ID']), 'request_rejected');
     return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_REJECTED};
   });
 }
@@ -4137,7 +4160,7 @@ function approveBooking_(request){
     // Queue Telegram notification outside the booking request path.
     // The notification worker runs from a time-based Apps Script trigger,
     // so Telegram latency can never delay or break approval.
-    queueBookingTelegramNotification_(b, 'approved');
+    queueBookingTelegramNotificationWithAudit_(b, 'approved');
 
     return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_CONFIRMED,message:'نوبت تأیید شد.'};
   });
@@ -4203,7 +4226,7 @@ function rejectBooking_(request){
       'Admin Note':String(request.note||request.reason||''),'Hold Until':''
     });
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.note||request.reason||'')});
-    queueBookingTelegramNotification_(b, 'rejected');
+    queueBookingTelegramNotificationWithAudit_(b, 'rejected');
     return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_REJECTED};
   });
 }

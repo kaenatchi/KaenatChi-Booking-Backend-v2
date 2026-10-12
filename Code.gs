@@ -373,26 +373,30 @@ function getBookingStatusByRequestId_(request) {
     request.clientTrackingCode ||
     ''
   ).trim();
+  const suppliedMobile = normalizeMobileForMatch_(
+    request.mobile || request.phone || ''
+  );
 
-  if (!requestId) {
+  if (!requestId || !suppliedMobile) {
     return {
       ok: false,
       found: false,
-      error: 'REQUEST_ID_REQUIRED',
-      message: 'شناسه درخواست الزامی است.'
+      error: 'REQUEST_ID_AND_MOBILE_REQUIRED',
+      message: 'شناسه درخواست و شماره موبایل الزامی است.'
     };
   }
 
   /*
-   * bookingStatus is polled immediately after a mutation. Reading the whole
-   * Booking sheet on every poll becomes increasingly expensive as history
-   * grows. Find the Request ID directly, then read only that one row.
+   * The opaque POST transport uses this endpoint to confirm a mutation.
+   * Require the same mobile number entered with the booking, so knowing a
+   * request ID alone cannot reveal booking/payment state.
    */
   const sheet = getSheet_(CONFIG.SHEETS.BOOKINGS);
   const headers = getHeaders_(sheet);
   const requestColumn = headers.indexOf('Request ID');
+  const mobileColumn = headers.indexOf('Mobile');
 
-  if (requestColumn < 0 || sheet.getLastRow() < 2) {
+  if (requestColumn < 0 || mobileColumn < 0 || sheet.getLastRow() < 2) {
     return {
       ok: true,
       found: false,
@@ -418,6 +422,17 @@ function getBookingStatusByRequestId_(request) {
   const rowValues = sheet
     .getRange(rowNumber, 1, 1, headers.length)
     .getValues()[0];
+  const storedMobile = normalizeMobileForMatch_(
+    rowValues[mobileColumn] || ''
+  );
+
+  if (!storedMobile || storedMobile !== suppliedMobile) {
+    return {
+      ok: true,
+      found: false,
+      requestId: requestId
+    };
+  }
 
   const booking = {};
   headers.forEach(function(header, index) {

@@ -884,12 +884,17 @@ function editTelegramMessageReplyMarkup_(chatId, messageId, replyMarkup) {
 function getBookingTelegramAdminKeyboard_(bookingId, mode) {
   var id = String(bookingId || '').trim();
   var requestMode = mode === 'request';
+  if (requestMode) {
+    return {inline_keyboard:[[
+      {text:'✅ تأیید اولیه',callback_data:'kaenatchi:request_approve:'+id},
+      {text:'❌ رد درخواست',callback_data:'kaenatchi:request_reject:'+id}
+    ]]};
+  }
   return {inline_keyboard:[[
-    {text:requestMode?'✅ تأیید اولیه':'✅ تأیید پرداخت',callback_data:(requestMode?'kaenatchi:request_approve:':'kaenatchi:approve:')+id},
-    {text:requestMode?'❌ رد درخواست':'❌ رد فیش',callback_data:(requestMode?'kaenatchi:request_reject:':'kaenatchi:reject:')+id}
+    {text:'✅ تأیید پرداخت',callback_data:'kaenatchi:approve:'+id},
+    {text:'🕓 بررسی بانکی',callback_data:'kaenatchi:hold_review:'+id}
   ]]};
 }
-
 function getBookingTelegramResultKeyboard_(status) {
   if (status === 'approved') {
     return {
@@ -926,61 +931,35 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   var data = String(callbackQuery && callbackQuery.data || '').trim();
   var message = callbackQuery && callbackQuery.message;
 
-  if (!queryId || !message) {
-    return {ok:false,error:'TELEGRAM_CALLBACK_INVALID'};
-  }
+  if (!queryId || !message) return {ok:false,error:'TELEGRAM_CALLBACK_INVALID'};
 
-  var chatId = String(
-    message.chat && message.chat.id || ''
-  ).trim();
-
-  /*
-   * Only the configured admin chat may execute approval/rejection actions.
-   */
+  var chatId = String(message.chat && message.chat.id || '').trim();
   if (!config.adminChatId || chatId !== config.adminChatId) {
-    answerTelegramCallbackQuery_(
-      queryId,
-      'این عملیات فقط برای ادمین مجاز است.',
-      true
-    );
-
-    return {
-      ok:false,
-      error:'TELEGRAM_ADMIN_ONLY'
-    };
+    answerTelegramCallbackQuery_(queryId,'این عملیات فقط برای ادمین مجاز است.',true);
+    return {ok:false,error:'TELEGRAM_ADMIN_ONLY'};
   }
 
   if (data === 'kaenatchi:noop') {
-    answerTelegramCallbackQuery_(
-      queryId,
-      'این نوبت قبلاً تعیین تکلیف شده است.',
-      false
-    );
-
+    answerTelegramCallbackQuery_(queryId,'این نوبت قبلاً تعیین تکلیف شده است.',false);
     return {ok:true,noop:true};
   }
 
-  var match = data.match(
-    /^kaenatchi:(request_approve|request_reject|approve|reject):([^:]+)$/
-  );
-
+  var match = data.match(/^kaenatchi:(request_approve|request_reject|approve|reject|hold_review):([^:]+)$/);
   if (!match) {
-    answerTelegramCallbackQuery_(
-      queryId,
-      'عملیات نامعتبر است.',
-      true
-    );
-
-    return {
-      ok:false,
-      error:'TELEGRAM_CALLBACK_INVALID_ACTION'
-    };
+    answerTelegramCallbackQuery_(queryId,'عملیات نامعتبر است.',true);
+    return {ok:false,error:'TELEGRAM_CALLBACK_INVALID_ACTION'};
   }
 
   var action = match[1];
   var bookingId = String(match[2] || '').trim();
-  var result;
 
+  // This action is deliberately non-mutating: it leaves payment pending manual bank verification.
+  if (action === 'hold_review') {
+    answerTelegramCallbackQuery_(queryId,'فیش در انتظار بررسی بانکی باقی ماند؛ وضعیت نوبت تغییری نکرد.',false);
+    return {ok:true,action:action,bookingId:bookingId,unchanged:true};
+  }
+
+  var result;
   if (action === 'request_approve') {
     result = approveBookingRequest_({bookingId:bookingId,adminId:config.adminChatId});
   } else if (action === 'request_reject') {
@@ -992,46 +971,23 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   }
 
   if (!result || result.ok !== true) {
-    answerTelegramCallbackQuery_(
-      queryId,
-      String(
-        result && result.message ||
-        'عملیات انجام نشد.'
-      ),
-      true
-    );
-
-    return result || {
-      ok:false,
-      error:'TELEGRAM_CALLBACK_ACTION_FAILED'
-    };
+    answerTelegramCallbackQuery_(queryId,String(result && result.message || 'عملیات انجام نشد.'),true);
+    return result || {ok:false,error:'TELEGRAM_CALLBACK_ACTION_FAILED'};
   }
 
   var finalStatus = action === 'request_approve' ? 'request_approved' :
     action === 'request_reject' ? 'request_rejected' :
     action === 'approve' ? 'approved' : 'rejected';
 
-  editTelegramMessageReplyMarkup_(
-    chatId,
-    message.message_id,
-    getBookingTelegramResultKeyboard_(finalStatus)
-  );
-
-  answerTelegramCallbackQuery_(
-    queryId,
+  editTelegramMessageReplyMarkup_(chatId,message.message_id,getBookingTelegramResultKeyboard_(finalStatus));
+  answerTelegramCallbackQuery_(queryId,
     action === 'request_approve' ? 'درخواست تأیید شد؛ مشتری می‌تواند پرداخت کند.' :
     action === 'request_reject' ? 'درخواست نوبت رد شد.' :
     action === 'approve' ? 'پرداخت تأیید و نوبت نهایی شد.' : 'فیش پرداخت رد شد.',
     false
   );
-
-  return {
-    ok:true,
-    action:action,
-    bookingId:bookingId
-  };
+  return {ok:true,action:action,bookingId:bookingId};
 }
-
 function escapeTelegramHtml_(value) {
   return String(value==null?'':value)
     .replace(/&/g,'&amp;')
@@ -6013,4 +5969,19 @@ function testPaymentReceiptRequiredContractPure_() {
     return hasRequiredReceiptImage_(test.value) !== test.expected;
   });
   return {ok:failed.length===0,test:'PAYMENT RECEIPT REQUIRED PURE TEST',passed:cases.length-failed.length,total:cases.length,failed:failed,noSheetRead:true,noSheetWrite:true,noDriveAccess:true,noTelegramSent:true};
+}
+
+
+/* Pure contract test for Telegram review buttons; no Telegram/API/Sheet calls. */
+function testTelegramPaymentReviewButtonsPure_() {
+  var requestKeyboard = getBookingTelegramAdminKeyboard_('BK-TEST','request');
+  var paymentKeyboard = getBookingTelegramAdminKeyboard_('BK-TEST','payment');
+  var paymentButtons = paymentKeyboard.inline_keyboard[0].map(function(button){return button.callback_data;});
+  var checks = [
+    {name:'request keyboard keeps initial approve/reject',ok:requestKeyboard.inline_keyboard[0][0].callback_data==='kaenatchi:request_approve:BK-TEST' && requestKeyboard.inline_keyboard[0][1].callback_data==='kaenatchi:request_reject:BK-TEST'},
+    {name:'payment keyboard has approve and hold-for-review only',ok:paymentButtons.indexOf('kaenatchi:approve:BK-TEST')!==-1 && paymentButtons.indexOf('kaenatchi:hold_review:BK-TEST')!==-1 && paymentButtons.indexOf('kaenatchi:reject:BK-TEST')===-1},
+    {name:'callback parser accepts hold-for-review',ok:/^kaenatchi:(request_approve|request_reject|approve|reject|hold_review):([^:]+)$/.test('kaenatchi:hold_review:BK-TEST')}
+  ];
+  var failed=checks.filter(function(check){return !check.ok;});
+  return {ok:failed.length===0,test:'TELEGRAM PAYMENT REVIEW BUTTONS PURE TEST',passed:checks.length-failed.length,total:checks.length,failed:failed,noSheetRead:true,noSheetWrite:true,noTelegramSent:true};
 }

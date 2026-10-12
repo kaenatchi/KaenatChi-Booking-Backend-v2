@@ -1237,6 +1237,42 @@ function testTelegramQueueStorageLimitPure_() {
   return {ok:failed.length===0,test:'TELEGRAM QUEUE STORAGE LIMIT PURE TEST',passed:cases.length-failed.length,total:cases.length,failed:failed,noExternalCalls:true};
 }
 
+function mergeTelegramQueueItemsPure_(inflight, queued) {
+  var merged = [];
+  var seen = {};
+  (Array.isArray(inflight) ? inflight : []).concat(Array.isArray(queued) ? queued : []).forEach(function(item) {
+    if (!item || typeof item !== 'object') return;
+    var id = String(item.id || '').trim();
+    var key = id ? 'id:' + id : 'legacy:' + String(item.bookingId || '') + '|' + String(item.eventType || '');
+    if (seen[key]) return;
+    seen[key] = true;
+    merged.push(item);
+  });
+  return merged;
+}
+
+function testTelegramQueueRecoveryMergePure_() {
+  var inflight = [
+    {id:'same-1',bookingId:'BK-1',eventType:'payment_received',attempts:2,retryAt:'2026-10-13T00:01:00.000Z'},
+    {id:'inflight-only',bookingId:'BK-2',eventType:'request_created',attempts:1}
+  ];
+  var queued = [
+    {id:'same-1',bookingId:'BK-1',eventType:'payment_received',attempts:0},
+    {id:'queue-only',bookingId:'BK-3',eventType:'request_created',attempts:0}
+  ];
+  var merged = mergeTelegramQueueItemsPure_(inflight, queued);
+  var cases = [
+    {name:'duplicate claim is deduplicated',actual:merged.length,expected:3},
+    {name:'inflight copy wins and preserves attempts',actual:merged[0].attempts,expected:2},
+    {name:'inflight retryAt is preserved',actual:merged[0].retryAt,expected:'2026-10-13T00:01:00.000Z'},
+    {name:'inflight-only item retained',actual:merged.some(function(x){return x.id==='inflight-only';}),expected:true},
+    {name:'queue-only item retained',actual:merged.some(function(x){return x.id==='queue-only';}),expected:true},
+    {name:'malformed entries ignored safely',actual:mergeTelegramQueueItemsPure_([null,5],[]).length,expected:0}
+  ];
+  var failed=cases.filter(function(t){return t.actual!==t.expected;});
+  return {ok:failed.length===0,test:'TELEGRAM QUEUE RECOVERY MERGE PURE TEST',passed:cases.length-failed.length,total:cases.length,failed:failed,noExternalCalls:true};
+}
+
 function isTelegramQueueItemReadyPure_(item, nowMs) {
   if (!item || item.permanentFailure === true) return false;
   var retryAt = Date.parse(String(item.retryAt || ''));
@@ -1363,7 +1399,7 @@ function processBookingTelegramNotificationQueue_() {
 
     // Recover any items left in-flight by a terminated previous execution.
     // Keep in-flight items first and preserve new enqueues behind them.
-    var combined = inflight.concat(queue);
+    var combined = mergeTelegramQueueItemsPure_(inflight, queue);
     if (combined.length > 100) {
       // Do not truncate. Preserve everything and fail visibly for operator review.
       throw new Error('TELEGRAM_QUEUE_CAPACITY_EXCEEDED:' + combined.length);

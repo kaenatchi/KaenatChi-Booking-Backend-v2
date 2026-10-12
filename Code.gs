@@ -329,7 +329,7 @@ function normalizeMobileForMatch_(value) {
   var fa='۰۱۲۳۴۵۶۷۸۹', ar='٠١٢٣٤٥٦٧٨٩';
   s=s.replace(/[۰-۹]/g,function(c){return String(fa.indexOf(c));})
      .replace(/[٠-٩]/g,function(c){return String(ar.indexOf(c));})
-     .replace(/\\D/g,'');
+     .replace(/\D/g,'');
   if(s.indexOf('0098')===0)s=s.slice(4);
   else if(s.indexOf('98')===0&&s.length>10)s=s.slice(2);
   if(s.indexOf('0')===0&&s.length>10)s=s.slice(1);

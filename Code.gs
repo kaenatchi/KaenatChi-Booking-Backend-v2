@@ -983,7 +983,7 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   } else if (action === 'approve') {
     result = approveBooking_({bookingId:bookingId,adminId:config.adminChatId});
   } else {
-    result = rejectBooking_({bookingId:bookingId,adminId:config.adminChatId,reason:'رد فیش توسط ادمین از طریق تلگرام'});
+    result = rejectBooking_({bookingId:bookingId,adminId:config.adminChatId,reason:'رد فیش توسط ادمین از طریق تلگرام'},paymentReview:true});
   }
 
   if (!result || result.ok !== true) {
@@ -3859,19 +3859,41 @@ function approveBooking_(request){
 }
 
 function rejectBooking_(request){
+  request=request||{};
   return withBookingLock_(function(){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
     if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+    var bookingPaymentStatus=String(b['Payment Status']||'');
+    var appointmentStatus=String(b['Appointment Status']||'');
+    if(bookingPaymentStatus===CONFIG.STATUSES.PAYMENT_APPROVED ||
+       appointmentStatus===CONFIG.STATUSES.BOOKING_CONFIRMED)
+      return fail_('BOOKING_ALREADY_FINAL','نوبت نهایی‌شده قابل رد کردن نیست.');
+
+    if(request.paymentReview===true){
+      if(bookingPaymentStatus!==CONFIG.STATUSES.PAYMENT_RECEIVED)
+        return fail_('PAYMENT_NOT_AWAITING_REVIEW','این فیش در انتظار بررسی نیست.');
+      var matchingPayments=getSheetObjects_(CONFIG.SHEETS.PAYMENTS).filter(function(p){
+        return String(p['Booking ID']||'')===String(b['Booking ID']||'');
+      });
+      if(matchingPayments.length!==1)
+        return fail_('PAYMENT_RECORD_MISMATCH','رکورد پرداخت یکتای این نوبت پیدا نشد؛ وضعیت تغییری نکرد.');
+      var paymentRow=matchingPayments[0];
+      if(String(paymentRow['Payment Status']||'')!==CONFIG.STATUSES.PAYMENT_RECEIVED)
+        return fail_('PAYMENT_RECORD_NOT_READY','رکورد پرداخت در انتظار بررسی نیست؛ وضعیت تغییری نکرد.');
+      updateRowFields_(CONFIG.SHEETS.PAYMENTS,paymentRow._row,{
+        'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
+        'Rejected At':new Date(),
+        'Rejected By':String(request.adminId||request.admin||'admin')
+      });
+    }
+
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
       'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),
       'Admin Note':String(request.note||request.reason||''),'Hold Until':''
     });
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.note||request.reason||'')});
-
-    // Queue the rejection notification outside the booking request path.
     queueBookingTelegramNotification_(b, 'rejected');
-
     return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_REJECTED};
   });
 }

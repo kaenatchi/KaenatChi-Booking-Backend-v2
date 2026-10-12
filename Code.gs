@@ -1274,7 +1274,8 @@ function sendBookingTelegramNotifications_(booking, eventType) {
   }
 
   var customerChatId=String(booking['Telegram ID']||'').trim();
-  if(customerChatId && customerChatId!==config.adminChatId){
+  var customerRequired=!!customerChatId && customerChatId!==config.adminChatId;
+  if(customerRequired){
     results.push(
       sendTelegramMessage_(
         customerChatId,
@@ -1283,8 +1284,12 @@ function sendBookingTelegramNotifications_(booking, eventType) {
     );
   }
 
+  var adminSent=!!config.adminChatId && !!results[0] && results[0].ok===true;
+  var customerSent=!customerRequired || !!results[1] && results[1].ok===true;
   return {
-    ok: results.some(function(item){ return item && item.ok === true; }),
+    // A queue item is complete only when the admin received the action
+    // message and, when applicable, the customer received their own update.
+    ok: adminSent && customerSent,
     results: results
   };
 }

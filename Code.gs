@@ -11,8 +11,10 @@
  *******************************************************/
 
 const CONFIG = {
-  // Isolated staging branch: never connect to production CMS, VIP, or Telegram.
+  // Fail-closed staging boundary. Keep these values fixed on the experiment branch.
   STAGING_MODE: true,
+  STAGING_SPREADSHEET_ID: '1xGgeqdsUGFzHhD00NIVVD8QqwnutnDfKwsmssHzaklw',
+  STAGING_SPREADSHEET_NAME: 'KaenatChi CMS - STAGING',
   SPREADSHEET_ID: '1xGgeqdsUGFzHhD00NIVVD8QqwnutnDfKwsmssHzaklw',
 
   SHEETS: {
@@ -27,7 +29,8 @@ const CONFIG = {
   },
 
   VIP: {
-    SPREADSHEET_ID: '1xGgeqdsUGFzHhD00NIVVD8QqwnutnDfKwsmssHzaklw',
+    // Deliberately blank in staging: no VIP spreadsheet can be opened.
+    SPREADSHEET_ID: '',
     CUSTOMERS_SHEET: 'مشتریان',
     TOKENS_SHEET: 'توکن ها',
     ACTIVE_STATUS: 'فعال',
@@ -143,6 +146,22 @@ function doGet(e) {
 
 function doPost(e) {
   try {
+    /*
+     * Telegram callbacks are never accepted by an isolated staging deployment,
+     * even if a webhook secret or bot credentials are accidentally configured.
+     */
+    if (CONFIG.STAGING_MODE && e && e.postData && e.postData.contents) {
+      try {
+        var stagingUpdate = JSON.parse(String(e.postData.contents || '').trim());
+        if (stagingUpdate && stagingUpdate.callback_query) {
+          return jsonResponse_({
+            ok:false,
+            error:'STAGING_TELEGRAM_CALLBACK_DISABLED'
+          });
+        }
+      } catch (stagingParseError) {}
+    }
+
     /*
      * Telegram callback updates are delivered as raw JSON and must be
      * handled before the normal booking request parser.
@@ -474,14 +493,37 @@ function healthCheck_() {
    4. SPREADSHEET ACCESS
    ===================================================== */
 
-function getSpreadsheet_() {
+function assertStagingIsolation_() {
+  if (CONFIG.STAGING_MODE) {
+    if (
+      CONFIG.SPREADSHEET_ID !== CONFIG.STAGING_SPREADSHEET_ID ||
+      !CONFIG.STAGING_SPREADSHEET_ID ||
+      CONFIG.VIP.SPREADSHEET_ID
+    ) {
+      throw new Error('STAGING_ISOLATION_BLOCKED: staging IDs are not safely configured.');
+    }
+  } else if (CONFIG.SPREADSHEET_ID === CONFIG.STAGING_SPREADSHEET_ID) {
+    throw new Error('STAGING_ISOLATION_BLOCKED: a production-mode config cannot use the staging spreadsheet.');
+  }
+  return true;
+}
 
-  const spreadsheet = SpreadsheetApp.openById(
-    CONFIG.SPREADSHEET_ID
-  );
+function getSpreadsheet_() {
+  assertStagingIsolation_();
+
+  const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
 
   if (!spreadsheet) {
     throw new Error('اتصال به KaenatChi CMS برقرار نشد.');
+  }
+
+  if (CONFIG.STAGING_MODE) {
+    if (
+      spreadsheet.getId() !== CONFIG.STAGING_SPREADSHEET_ID ||
+      spreadsheet.getName() !== CONFIG.STAGING_SPREADSHEET_NAME
+    ) {
+      throw new Error('STAGING_ISOLATION_BLOCKED: opened spreadsheet does not match the approved staging identity.');
+    }
   }
 
   return spreadsheet;
@@ -1224,6 +1266,9 @@ function queueBookingTelegramNotification_(booking, eventType) {
  * The worker is deliberately outside the customer booking/payment request.
  */
 function setupBookingTelegramQueueTrigger_() {
+  if (CONFIG.STAGING_MODE) {
+    return {ok:false,skipped:true,reason:'STAGING_MODE: trigger creation disabled.'};
+  }
   var functionName = 'processBookingTelegramNotificationQueue_';
   var triggers = ScriptApp.getProjectTriggers();
   var existing = triggers.filter(function(trigger) {
@@ -1246,6 +1291,9 @@ function setupBookingTelegramQueueTrigger_() {
 
 
 function processBookingTelegramNotificationQueue_() {
+  if (CONFIG.STAGING_MODE) {
+    return {ok:true,skipped:true,reason:'STAGING_MODE: Telegram worker disabled.'};
+  }
   var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
   var triggerKey = 'KAENATCHI_TELEGRAM_TRIGGER_SCHEDULED';
   var items = [];
@@ -1396,6 +1444,9 @@ function processBookingTelegramNotificationQueue_() {
  * - no REMINDER_SENT log exists for this booking
  */
 function processAppointmentReminders_() {
+  if (CONFIG.STAGING_MODE) {
+    return {ok:true,skipped:true,reason:'STAGING_MODE: reminders disabled.'};
+  }
   var rows = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
   var nowMs = Date.now();
   var sent = 0;

@@ -4058,6 +4058,11 @@ function approveBooking_(request){
     if(status===CONFIG.SLOT_STATUS.CONFIRMED)return fail_('SLOT_ALREADY_CONFIRMED','این زمان قبلاً تأیید شده است.');
     if(status===CONFIG.SLOT_STATUS.BLOCKED)return fail_('SLOT_BLOCKED','این زمان مسدود شده است.');
     if(status!==CONFIG.SLOT_STATUS.FREE)return fail_('SLOT_UNAVAILABLE','این زمان توسط نوبت دیگری نگه داشته شده است.');
+    var approvalService=findServiceRecord_(String(b['Service ID']||''),String(b['Service Name']||''));
+    var approvalDuration=Math.max(1,Number(approvalService&&approvalService.duration)||toNumber_(getSetting_('Default Slot Duration',30))||30);
+    if(isAppointmentTimeConflicting_(date,time,approvalDuration,getSheetObjects_(CONFIG.SHEETS.BOOKINGS),String(b['Booking ID']||''))) {
+      return fail_('SLOT_OVERLAP','این درخواست با بازهٔ زمانی نوبت دیگری تداخل دارد و قابل تأیید نیست.');
+    }
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Payment Status':CONFIG.STATUSES.PAYMENT_PENDING,
       'Appointment Status':CONFIG.STATUSES.BOOKING_AWAITING_PAYMENT,

@@ -4204,29 +4204,76 @@ function approveReceipt_(request) {
     if(isAppointmentTimeConflicting_(appointmentDate,appointmentTime,duration,currentBookings,String(b['Booking ID']||''))) {
       return fail_('SLOT_OVERLAP','این نوبت با بازهٔ زمانی نوبت دیگری تداخل دارد؛ قطعی‌سازی متوقف شد.');
     }
-    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
-      'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,
-      'Appointment Status':CONFIG.STATUSES.BOOKING_CONFIRMED,
-      'Payment Approved At':new Date(),
-      'Payment Approved By':String(request.adminId||request.admin||'admin'),
-      'Approved At':new Date(),
-      'Approved By':String(request.adminId||request.admin||'admin'),
-      'Hold Until':''
-    });
-    getSheetObjects_(CONFIG.SHEETS.PAYMENTS).forEach(function(p) {
-      if(String(p['Booking ID']||'')===String(b['Booking ID']||'') &&
-         String(p['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED) {
-        updateRowFields_(CONFIG.SHEETS.PAYMENTS,p._row,{
-          'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,
-          'Approved At':new Date(),
-          'Approved By':String(request.adminId||request.admin||'admin')
-        });
+
+    var discountCode=String(b['Discount Code']||'').trim();
+    if(discountCode){
+      var vipValidation=validateDiscount_({
+        price:toNumber_(b['Original Price']),
+        code:discountCode,
+        customerId:String(b['Customer ID']||''),
+        telegramId:String(b['Telegram ID']||'')
+      });
+      if(!vipValidation||!vipValidation.valid){
+        return fail_('VIP_TOKEN_INVALID',vipValidation&&vipValidation.message||'توکن VIP دیگر معتبر نیست؛ نوبت قطعی نشد.');
       }
-    });
-    consumeDiscountToken_(String(b['Discount Code']||''),String(b['Customer ID']||''),String(b['Telegram ID']||''),String(b['Tracking Code']||''));
-    appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_APPROVED,bookingId:b['Booking ID'],slotKey:slotKey,details:'Receipt manually approved; booking confirmed.'});
-    queueBookingTelegramNotification_(b,'approved');
-    return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_CONFIRMED,message:'فیش تأیید شد و نوبت قطعی شد.'};
+    }
+
+    var adminId=String(request.adminId||request.admin||'admin');
+    var approvedAt=new Date();
+    try {
+      updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+        'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,
+        'Appointment Status':CONFIG.STATUSES.BOOKING_CONFIRMED,
+        'Payment Approved At':approvedAt,
+        'Payment Approved By':adminId,
+        'Hold Until':''
+      });
+      getSheetObjects_(CONFIG.SHEETS.PAYMENTS).forEach(function(p) {
+        if(String(p['Booking ID']||'')===String(b['Booking ID']||'') &&
+           String(p['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED) {
+          updateRowFields_(CONFIG.SHEETS.PAYMENTS,p._row,{
+            'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,
+            'Approved At':approvedAt,
+            'Approved By':adminId
+          });
+        }
+      });
+      consumeDiscountToken_(discountCode,String(b['Customer ID']||''),String(b['Telegram ID']||''),String(b['Tracking Code']||''));
+      appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_APPROVED,bookingId:b['Booking ID'],slotKey:slotKey,details:'Receipt manually approved; booking confirmed.'});
+      queueBookingTelegramNotification_(b,'approved');
+      return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_CONFIRMED,message:'فیش تأیید شد و نوبت قطعی شد.'};
+    } catch(finalizeError) {
+      try {
+        restoreDiscountTokenIfOwned_(discountCode,String(b['Tracking Code']||''));
+      } catch(vipRollbackError) {
+        console.error('VIP token compensation failed: '+String(vipRollbackError));
+      }
+      try {
+        updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+          'Payment Status':CONFIG.STATUSES.PAYMENT_RECEIVED,
+          'Appointment Status':CONFIG.STATUSES.BOOKING_AWAITING_PAYMENT,
+          'Payment Approved At':'',
+          'Payment Approved By':'',
+          'Hold Until':hold
+        });
+        getSheetObjects_(CONFIG.SHEETS.PAYMENTS).forEach(function(p) {
+          if(String(p['Booking ID']||'')===String(b['Booking ID']||'') &&
+             String(p['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_APPROVED) {
+            updateRowFields_(CONFIG.SHEETS.PAYMENTS,p._row,{
+              'Payment Status':CONFIG.STATUSES.PAYMENT_RECEIVED,
+              'Approved At':'',
+              'Approved By':''
+            });
+          }
+        });
+      } catch(rollbackError) {
+        console.error('Receipt approval compensation failed: '+String(rollbackError));
+      }
+      try {
+        appendBookingLog_({action:CONFIG.LOG_ACTIONS.PAYMENT_FINALIZATION_FAILED,bookingId:b['Booking ID'],slotKey:slotKey,details:'Receipt approval finalization failed; compensation attempted: '+String(finalizeError&&finalizeError.message||finalizeError)});
+      } catch(logError) {}
+      return fail_('PAYMENT_FINALIZATION_FAILED','قطعی‌سازی کامل نشد؛ رسید در وضعیت بررسی باقی ماند. لطفاً دوباره وضعیت را بررسی کنید.');
+    }
   });
 }
 
@@ -4699,6 +4746,21 @@ function toNumber_(value){
 function generateId_(prefix){return prefix+'-'+Utilities.getUuid().replace(/-/g,'').substring(0,12).toUpperCase();}
 function generateTrackingCode_(){return String(Math.floor(100000+Math.random()*900000));}
 function fail_(error,message){return {ok:false,error:error,message:message};}
+
+function restoreDiscountTokenIfOwned_(code,trackingCode){
+  if(!String(code||'').trim())return;
+  var found=findVIPDiscountToken_(String(code).trim().toUpperCase());
+  if(!found||!found.used)return;
+  if(String(found.row[7]||'').trim()!==String(trackingCode||'').trim())return;
+  if(found.expiryMs&&found.expiryMs<=Date.now()){
+    markVIPTokenExpired_(found);
+    return;
+  }
+  found.sheet.getRange(found.rowNumber,6).setValue(CONFIG.VIP.ACTIVE_STATUS);
+  found.sheet.getRange(found.rowNumber,7).clearContent();
+  found.sheet.getRange(found.rowNumber,8).clearContent();
+  SpreadsheetApp.flush();
+}
 
 function testVIPDiscountValidation(){
   var tokenSheet=getVIPSheet_(CONFIG.VIP.TOKENS_SHEET);

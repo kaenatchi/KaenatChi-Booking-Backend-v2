@@ -3715,7 +3715,15 @@ function createBooking_(request){
 }
 
 function hasRequiredReceiptImage_(receipt) {
-  return String(receipt || '').trim().length > 0;
+  var value=String(receipt||'').trim();
+  if(!value)return false;
+  var match=value.match(/^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/]+=*)$/i);
+  if(!match)return false;
+  var encoded=match[2];
+  // 8 MiB decoded, allowing only the small base64 expansion overhead.
+  if(encoded.length>Math.ceil((8*1024*1024)/3)*4)return false;
+  if(encoded.length%4!==0)return false;
+  return true;
 }
 
 function submitPayment_(request){
@@ -3734,7 +3742,7 @@ function submitPayment_(request){
     if(!hold||hold.getTime()<=Date.now()){releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);return fail_('HOLD_EXPIRED','مهلت این نوبت تمام شده است.');}
     var transaction=String(request.transactionNumber||request.paymentTrackingCode||request.paymentCode||'').trim();
     var receipt=String(request.receiptData||request.receiptBase64||'').trim();
-    if(!hasRequiredReceiptImage_(receipt))return fail_('PAYMENT_RECEIPT_REQUIRED','بارگذاری تصویر فیش پرداخت الزامی است.');
+    if(!hasRequiredReceiptImage_(receipt))return fail_('PAYMENT_RECEIPT_INVALID','تصویر فیش باید یک فایل تصویری معتبر با حجم حداکثر ۸ مگابایت باشد.');
     var saved={id:'',url:'',name:''};
     if(receipt)saved=saveReceiptToDrive_(receipt,request.receiptFileName,request.receiptMimeType,b);
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
@@ -6117,15 +6125,20 @@ function testBookingTelegramTextPure_() {
 /* Pure source-contract test: confirms a receipt image is required before submission. */
 function testPaymentReceiptRequiredContractPure_() {
   var cases = [
-    {name:'valid receipt data is accepted', value:'data:image/jpeg;base64,TEST', expected:true},
-    {name:'empty receipt is rejected', value:'', expected:false},
-    {name:'whitespace-only receipt is rejected', value:'   ', expected:false},
-    {name:'null receipt is rejected', value:null, expected:false}
+    {name:'valid image data URL accepted', value:'data:image/jpeg;base64,aGVsbG8=', expected:true},
+    {name:'empty receipt rejected', value:'', expected:false},
+    {name:'whitespace-only receipt rejected', value:'   ', expected:false},
+    {name:'null receipt rejected', value:null, expected:false},
+    {name:'non-image data URL rejected', value:'data:text/plain;base64,aGVsbG8=', expected:false},
+    {name:'raw text rejected', value:'receipt-proof', expected:false},
+    {name:'malformed base64 rejected', value:'data:image/png;base64,%%%=', expected:false},
+    {name:'missing base64 marker rejected', value:'data:image/png,AAAA', expected:false},
+    {name:'oversized payload rejected', value:'data:image/jpeg;base64,'+new Array(Math.ceil((8*1024*1024)/3)*4+5).join('A'), expected:false}
   ];
   var failed = cases.filter(function(test) {
     return hasRequiredReceiptImage_(test.value) !== test.expected;
   });
-  return {ok:failed.length===0,test:'PAYMENT RECEIPT REQUIRED PURE TEST',passed:cases.length-failed.length,total:cases.length,failed:failed,noSheetRead:true,noSheetWrite:true,noDriveAccess:true,noTelegramSent:true};
+  return {ok:failed.length===0,test:'PAYMENT RECEIPT IMAGE VALIDATION PURE TEST',passed:cases.length-failed.length,total:cases.length,failed:failed,noSheetRead:true,noSheetWrite:true,noDriveAccess:true,noTelegramSent:true};
 }
 
 

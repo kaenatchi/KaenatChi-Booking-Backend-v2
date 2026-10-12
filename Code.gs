@@ -4896,9 +4896,12 @@ function testPaymentFlowSubmitOnly() {
 
     var before=getBookingByIdObject_(result.bookingId);
     if(!before) throw new Error('Booking تست در Sheet پیدا نشد.');
+    var initialApproval=approveBookingRequest_({bookingId:result.bookingId,adminId:'PAYMENT-FLOW-TEST'});
+    if(!initialApproval||!initialApproval.ok)throw new Error('Initial approval failed: '+JSON.stringify(initialApproval));
 
     var submit=submitPayment_({
       bookingId:result.bookingId,
+      mobile:String(before['Mobile']||''),
       transactionNumber:'MOCK-PAY-'+unique,
       receiptData:'data:text/plain;base64,UEFZTUVOVCBURVNU',
       receiptFileName:'payment-test-'+unique+'.txt',
@@ -4980,10 +4983,12 @@ function testPaymentFlowRejectWithoutProof() {
     });
     if(!create.ok)throw new Error('Create failed: '+JSON.stringify(create));
     result.bookingId=String(create.booking.bookingId||'').trim();
-
-    var submit=submitPayment_({bookingId:result.bookingId});
-    result.rejectedWithoutProof=!!submit && submit.ok===false && submit.error==='PAYMENT_PROOF_REQUIRED';
-    if(!result.rejectedWithoutProof)throw new Error('سیستم بدون Proof پرداخت را رد نکرد.');
+    var beforeNoProof=getBookingByIdObject_(result.bookingId);
+    var initialApprovalNoProof=approveBookingRequest_({bookingId:result.bookingId,adminId:'PAYMENT-FLOW-TEST'});
+    if(!initialApprovalNoProof||!initialApprovalNoProof.ok)throw new Error('Initial approval failed: '+JSON.stringify(initialApprovalNoProof));
+    var submit=submitPayment_({bookingId:result.bookingId,mobile:String(beforeNoProof['Mobile']||'')});
+    result.rejectedWithoutProof=!!submit && submit.ok===false && submit.error==='PAYMENT_RECEIPT_REQUIRED';
+    if(!result.rejectedWithoutProof)throw new Error('سیستم بدون تصویر فیش پرداخت را رد نکرد.');
 
     result.ok=true;
   } catch(e){ result.error=String(e&&e.message?e.message:e); }
@@ -5070,9 +5075,13 @@ function testPaymentApprovalFlow() {
     result.bookingCreated=true;
     result.bookingId=String(create.booking.bookingId||'').trim();
     if(!result.bookingId)throw new Error('Booking ID برای تست برگشت داده نشد.');
+    var beforeApproval=getBookingByIdObject_(result.bookingId);
+    var initialApproval=approveBookingRequest_({bookingId:result.bookingId,adminId:'PAYMENT-FLOW-TEST'});
+    if(!initialApproval||!initialApproval.ok)throw new Error('Initial approval failed: '+JSON.stringify(initialApproval));
 
     var submit=submitPayment_({
       bookingId:result.bookingId,
+      mobile:String(beforeApproval['Mobile']||''),
       transactionNumber:'MOCK-APPROVAL-'+unique,
       receiptData:'data:text/plain;base64,UEFZTUVOVCBFVkFMLUFQUFJPVkFM',
       receiptFileName:'payment-approval-test-'+unique+'.txt',
@@ -5201,9 +5210,13 @@ function testPaymentFlowDuplicate() {
     result.bookingCreated=true;
     result.bookingId=String(create.booking.bookingId||'').trim();
     if(!result.bookingId)throw new Error('Booking ID برای تست برگشت داده نشد.');
+    var beforeDuplicate=getBookingByIdObject_(result.bookingId);
+    var initialApproval=approveBookingRequest_({bookingId:result.bookingId,adminId:'PAYMENT-FLOW-TEST'});
+    if(!initialApproval||!initialApproval.ok)throw new Error('Initial approval failed: '+JSON.stringify(initialApproval));
 
     var first=submitPayment_({
       bookingId:result.bookingId,
+      mobile:String(beforeDuplicate['Mobile']||''),
       transactionNumber:'MOCK-DUP-1-'+unique,
       receiptData:'data:text/plain;base64,UEFZTUVOVCBEVVAtMQ==',
       receiptFileName:'payment-duplicate-test-1-'+unique+'.txt',
@@ -5547,8 +5560,12 @@ function testVIPDiscountPaymentFlow() {
       throw new Error('Token قبل از Approval مصرف شده است.');
     }
 
+    var beforeVIPPayment=getBookingByIdObject_(result.bookingId);
+    var initialVIPApproval=approveBookingRequest_({bookingId:result.bookingId,adminId:'VIP-REGRESSION-TEST'});
+    if(!initialVIPApproval||!initialVIPApproval.ok)throw new Error('Initial approval failed: '+JSON.stringify(initialVIPApproval));
     var submit = submitPayment_({
       bookingId: result.bookingId,
+      mobile: String(beforeVIPPayment['Mobile']||''),
       transactionNumber: 'MOCK-VIP-REG-' + unique,
       receiptData: 'data:text/plain;base64,VklQIFJFU0JFUlZBVElPTiBURVNU',
       receiptFileName: 'vip-regression-test-' + unique + '.txt',

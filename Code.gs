@@ -308,8 +308,15 @@ function getBookedSlots_() {
 
     if (!date || !time) return;
 
+    const paymentStatus = String(row['Payment Status'] || '');
+    const holdUntil = parseDateValue_(row['Hold Until']);
+    const pendingStillReservesSlot = status === CONFIG.STATUSES.BOOKING_PENDING && (
+      paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
+      (holdUntil && holdUntil.getTime() > Date.now())
+    );
+
     if (
-      status === CONFIG.STATUSES.BOOKING_PENDING ||
+      pendingStillReservesSlot ||
       status === CONFIG.STATUSES.BOOKING_CONFIRMED
     ) {
       bookedSlots.push({

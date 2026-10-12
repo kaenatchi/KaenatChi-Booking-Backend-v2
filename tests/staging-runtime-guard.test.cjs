@@ -1,25 +1,69 @@
 const vm = require("node:vm");
 const assert = require("node:assert/strict");
-const source = "function assertStagingSpreadsheetIsolation_() {\n  const bookingSpreadsheetId = String(CONFIG.SPREADSHEET_ID || '').trim();\n  const vipSpreadsheetId = String(\n    CONFIG.VIP && CONFIG.VIP.SPREADSHEET_ID || ''\n  ).trim();\n\n  if (\n    CONFIG.STAGING_MODE === true &&\n    bookingSpreadsheetId &&\n    vipSpreadsheetId &&\n    bookingSpreadsheetId === vipSpreadsheetId\n  ) {\n    throw new Error(\n      'STAGING SAFETY BLOCK: Booking staging points to the CMS/VIP spreadsheet. ' +\n      'Configure a dedicated staging spreadsheet before any sheet access.'\n    );\n  }\n\n  return true;\n}\n\n\nfunction getSpreadsheet_() {\n\n  // This must run before openById so a misconfigured staging branch fails closed.\n  assertStagingSpreadsheetIsolation_();\n\n  const spreadsheet = SpreadsheetApp.openById(\n    CONFIG.SPREADSHEET_ID\n  );\n\n  if (!spreadsheet) {\n    throw new Error('اتصال به KaenatChi CMS برقرار نشد.');\n  }\n\n  return spreadsheet;\n}\n\n\n";
+
+const source = `function assertStagingSpreadsheetIsolation_() {
+  const bookingSpreadsheetId = String(CONFIG.SPREADSHEET_ID || '').trim();
+  const vipSpreadsheetId = String(
+    CONFIG.VIP && CONFIG.VIP.SPREADSHEET_ID || ''
+  ).trim();
+
+  if (
+    CONFIG.STAGING_MODE === true &&
+    bookingSpreadsheetId &&
+    vipSpreadsheetId &&
+    bookingSpreadsheetId === vipSpreadsheetId
+  ) {
+    throw new Error(
+      'STAGING SAFETY BLOCK: Booking staging points to the CMS/VIP spreadsheet. ' +
+      'Configure a dedicated staging spreadsheet before any sheet access.'
+    );
+  }
+
+  return true;
+}
+
+function getSpreadsheet_() {
+  assertStagingSpreadsheetIsolation_();
+  const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  if (!spreadsheet) throw new Error('No spreadsheet');
+  return spreadsheet;
+}
+`;
+
+let openByIdCalls = 0;
 const sandbox = {
   CONFIG: {
     STAGING_MODE: true,
     SPREADSHEET_ID: "shared-id",
     VIP: { SPREADSHEET_ID: "shared-id" }
+  },
+  SpreadsheetApp: {
+    openById(id) {
+      openByIdCalls += 1;
+      return { id };
+    }
   }
 };
 vm.runInNewContext(source, sandbox, {timeout:1000});
+
 assert.throws(
-  () => sandbox.assertStagingSpreadsheetIsolation_(),
+  () => sandbox.getSpreadsheet_(),
   /STAGING SAFETY BLOCK/,
-  "shared CMS/VIP spreadsheet must be blocked before access"
+  "shared CMS/VIP spreadsheet must be blocked"
 );
+assert.equal(openByIdCalls, 0, "openById must never run when IDs are shared");
+
 sandbox.CONFIG.SPREADSHEET_ID = "staging-id";
-assert.equal(sandbox.assertStagingSpreadsheetIsolation_(), true);
+const opened = sandbox.getSpreadsheet_();
+assert.equal(opened.id, "staging-id");
+assert.equal(openByIdCalls, 1, "separate staging ID may be opened");
+
 sandbox.CONFIG.STAGING_MODE = false;
 sandbox.CONFIG.SPREADSHEET_ID = "shared-id";
-assert.equal(sandbox.assertStagingSpreadsheetIsolation_(), true);
-console.log("PASS shared staging/CMS/VIP ID is blocked");
+assert.equal(sandbox.getSpreadsheet_().id, "shared-id");
+assert.equal(openByIdCalls, 2, "non-staging behavior remains unchanged");
+
+console.log("PASS shared staging/CMS/VIP ID is blocked before openById");
 console.log("PASS separate staging ID is allowed");
-console.log("PASS guard does not alter non-staging configuration");
+console.log("PASS non-staging configuration remains unchanged");
 console.log("PASS total: 3/3");

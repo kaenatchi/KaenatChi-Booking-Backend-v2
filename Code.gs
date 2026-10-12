@@ -1244,6 +1244,14 @@ function sendBookingTelegramNotifications_(booking, eventType) {
   var config=getTelegramConfig_();
   var adminText=buildBookingTelegramText_(booking,eventType);
   var customerText=buildCustomerBookingTelegramText_(booking,eventType);
+  if(eventType==='payment_received'){
+    var receiptLink=String(booking['Receipt URL']||booking['Receipt Link']||'').trim();
+    var transactionNumber=String(booking['Transaction Number']||'').trim();
+    var amount=escapeTelegramHtml_(booking['Final Price']||'');
+    adminText+='\n\n💳 مبلغ ثبت‌شده: '+amount;
+    if(transactionNumber)adminText+='\n🔎 کد پیگیری تراکنش: <code>'+escapeTelegramHtml_(transactionNumber)+'</code>';
+    adminText+='\n📎 رسید: '+(receiptLink?escapeTelegramHtml_(receiptLink):'لینک رسید در دسترس نیست؛ کد تراکنش را بررسی کنید.');
+  }
   var results=[];
 
   /*

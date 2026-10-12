@@ -1164,12 +1164,15 @@ function sendBookingTelegramNotifications_(booking, eventType) {
  * request itself.
  */
 function queueBookingTelegramNotification_(booking, eventType) {
+  var lock = LockService.getScriptLock();
   try {
     /*
-     * CUSTOMER REQUEST PATH:
-     * Only persist the notification item. No trigger creation, no Telegram
-     * network call, and no extra ScriptApp work is allowed here.
+     * Serialize queue writes with the worker's read/clear and requeue steps.
+     * Without this lock, a simultaneous enqueue can be overwritten when the
+     * worker clears the queue, silently losing an admin notification.
+     * No trigger creation or Telegram network call occurs in this request.
      */
+    lock.waitLock(5000);
     var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
     var props = PropertiesService.getScriptProperties();
     var raw = String(props.getProperty(queueKey) || '[]');
@@ -1194,7 +1197,6 @@ function queueBookingTelegramNotification_(booking, eventType) {
     }
 
     props.setProperty(queueKey, JSON.stringify(queue));
-
     return {ok:true,queued:true};
 
   } catch (error) {
@@ -1206,8 +1208,11 @@ function queueBookingTelegramNotification_(booking, eventType) {
       'Telegram notification queue failed: ' +
       String(error && error.message ? error.message : error)
     );
-
     return {ok:false,queued:false};
+  } finally {
+    try {
+      lock.releaseLock();
+    } catch (ignored) {}
   }
 }
 

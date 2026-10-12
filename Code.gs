@@ -275,10 +275,20 @@ function routeRequest_(action, request) {
     case 'validateDiscount': return validateDiscount_(request);
     case 'createBooking': return createBooking_(request);
     case 'submitPayment': return submitPayment_(request);
-    case 'approveBooking': return approveBooking_(request);
-    case 'rejectBooking': return rejectBooking_(request);
-    case 'cancelBooking': return cancelBooking_(request);
-    case 'releaseExpiredHolds': return releaseExpiredHolds_(request);
+    /*
+     * Manager-only mutations must never be exposed through the public Mini App
+     * API router. The Telegram callback handler calls the internal approve/reject
+     * functions only after checking the configured admin chat ID.
+     */
+    case 'approveBooking':
+    case 'rejectBooking':
+    case 'cancelBooking':
+    case 'releaseExpiredHolds':
+      return {
+        ok:false,
+        error:'ADMIN_ACTION_REQUIRES_TELEGRAM',
+        message:'این عملیات مدیریتی فقط از مسیر امن تلگرام مجاز است.'
+      };
 
     default:
       return {

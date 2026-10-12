@@ -1147,9 +1147,32 @@ function buildBookingTelegramText_(booking, eventType) {
     booking['Final Price'] || ''
   );
 
+  if (eventType === 'payment_instructions') {
+    return (
+      '✅ <b>درخواست نوبت تأیید شد</b>\n\n' +
+      '👤 ' + customer + '\n' +
+      '✨ ' + service + '\n' +
+      '📅 ' + date + ' — ' + time + '\n' +
+      '💳 مبلغ قابل پرداخت: ' + price + '\n' +
+      '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' +
+      'لطفاً اطلاعات پرداخت را در مینی‌اپ مشاهده کنید و سپس رسید یا کد پیگیری تراکنش را ثبت کنید. تا بررسی دستی فیش، نوبت نهایی نیست.'
+    );
+  }
+
+  if (eventType === 'booking_rejected') {
+    return (
+      '❌ <b>درخواست نوبت پذیرفته نشد</b>\n\n' +
+      '👤 ' + customer + '\n' +
+      '✨ ' + service + '\n' +
+      '📅 ' + date + ' — ' + time + '\n' +
+      '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' +
+      'این درخواست رد شده و زمان رزرو آزاد شده است.'
+    );
+  }
+
   if (eventType === 'approved') {
     return (
-      '✅ <b>نوبت کائنات‌چی تأیید شد</b>\n\n' +
+      '✅ <b>پرداخت تأیید شد و نوبت قطعی است</b>\n\n' +
       '👤 ' + customer + '\n' +
       '✨ ' + service + '\n' +
       '📅 ' + date + ' — ' + time + '\n' +
@@ -1189,10 +1212,8 @@ function sendBookingTelegramNotifications_(booking, eventType) {
    * Approved/rejected messages are terminal and do not expose action buttons.
    */
   var replyMarkup =
-    eventType === 'payment_received'
-      ? getBookingTelegramAdminKeyboard_(
-          booking['Booking ID']
-        )
+    eventType === 'booking_request' || eventType === 'payment_received'
+      ? getBookingTelegramAdminKeyboard_(booking['Booking ID'])
       : null;
 
   if(config.adminChatId){
@@ -3948,7 +3969,18 @@ function createBooking_(request){
       'Appointment Status':booking.appointmentStatus,'Tracking Code':booking.trackingCode,'Hold Until':booking.holdUntil
     });
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.BOOKING_CREATED,bookingId:booking.bookingId,slotKey:slotKey,details:'Booking created.'});
-    appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_HELD,bookingId:booking.bookingId,slotKey:slotKey,details:'Slot held.'});
+    appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_HELD,bookingId:booking.bookingId,slotKey:slotKey,details:'Slot held for manager approval.'});
+    queueBookingTelegramNotification_({
+      'Booking ID':booking.bookingId,
+      'Tracking Code':booking.trackingCode,
+      'First Name':booking.firstName,
+      'Last Name':booking.lastName,
+      'Service Name':booking.serviceName,
+      'Appointment Date':booking.appointmentDate,
+      'Appointment Time':booking.appointmentTime,
+      'Final Price':booking.finalPrice,
+      'Telegram ID':booking.telegramId
+    }, 'booking_request');
     return {ok:true,booking:publicBooking_(booking),message:'درخواست نوبت ثبت شد و تا ۱۲ ساعت برای بررسی مدیر نگه داشته می‌شود. پس از تأیید مدیر، اطلاعات پرداخت ارسال خواهد شد.',nextStep:'WAITING_FOR_MANAGER_APPROVAL'};
   });
 }
@@ -4068,9 +4100,18 @@ function rejectBooking_(request){
     appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.note||request.reason||'')});
 
     // Queue the rejection notification outside the booking request path.
-    queueBookingTelegramNotification_(b, 'rejected');
+    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+      'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,
+      'Payment Status':CONFIG.STATUSES.PAYMENT_NOT_REQUESTED,
+      'Rejected At':new Date(),
+      'Rejected By':String(request.adminId||request.admin||'admin'),
+      'Admin Note':String(request.note||request.reason||''),
+      'Hold Until':''
+    });
+    appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Initial booking request rejected.'});
+    queueBookingTelegramNotification_(b, 'booking_rejected');
 
-    return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_REJECTED};
+    return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_REJECTED,message:'درخواست نوبت رد شد و زمان آزاد شد.'};
   });
 }
 

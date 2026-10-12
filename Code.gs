@@ -981,13 +981,13 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   var result;
 
   if (action === 'request_approve') {
-    result = approveBookingRequest_({bookingId:bookingId,adminId:config.adminChatId});
+    result = approveBookingRequest_({bookingId:bookingId,adminId:actorId});
   } else if (action === 'request_reject') {
-    result = rejectBookingRequest_({bookingId:bookingId,adminId:config.adminChatId,reason:'رد درخواست نوبت توسط ادمین از طریق تلگرام'});
+    result = rejectBookingRequest_({bookingId:bookingId,adminId:actorId,reason:'رد درخواست نوبت توسط ادمین از طریق تلگرام'});
   } else if (action === 'approve') {
-    result = approveBooking_({bookingId:bookingId,adminId:config.adminChatId});
+    result = approveBooking_({bookingId:bookingId,adminId:actorId});
   } else {
-    result = rejectBooking_({bookingId:bookingId,adminId:config.adminChatId,reason:'رد فیش توسط ادمین از طریق تلگرام'});
+    result = rejectBooking_({bookingId:bookingId,adminId:actorId,reason:'رد فیش توسط ادمین از طریق تلگرام'});
   }
 
   if (!result || result.ok !== true) {

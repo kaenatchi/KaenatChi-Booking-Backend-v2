@@ -3774,6 +3774,33 @@ function rejectBookingRequest_(request) {
   });
 }
 
+function validatePaymentRecordForApprovalPure_(rows, bookingId, receivedStatus, approvedStatus) {
+  var matches=(Array.isArray(rows)?rows:[]).filter(function(row){
+    return String(row && row['Booking ID'] || '')===String(bookingId || '');
+  });
+  if(matches.length!==1) return {ok:false,error:'PAYMENT_RECORD_MISMATCH'};
+  var status=String(matches[0]['Payment Status']||'');
+  if(status!==receivedStatus && status!==approvedStatus) return {ok:false,error:'PAYMENT_RECORD_NOT_READY'};
+  return {ok:true,row:matches[0]};
+}
+
+function testPaymentRecordApprovalGuardPure_() {
+  var received='PAYMENT_RECEIVED';
+  var approved='PAYMENT_APPROVED';
+  var cases=[
+    {name:'one received payment row is eligible',rows:[{'Booking ID':'B1','Payment Status':received}],id:'B1',expected:true},
+    {name:'one already approved row is eligible for recovery',rows:[{'Booking ID':'B1','Payment Status':approved}],id:'B1',expected:true},
+    {name:'missing payment row blocks final approval',rows:[],id:'B1',expected:false},
+    {name:'duplicate payment rows block final approval',rows:[{'Booking ID':'B1','Payment Status':received},{'Booking ID':'B1','Payment Status':received}],id:'B1',expected:false},
+    {name:'wrong payment state blocks final approval',rows:[{'Booking ID':'B1','Payment Status':'PAYMENT_REJECTED'}],id:'B1',expected:false},
+    {name:'other booking payment row does not match',rows:[{'Booking ID':'B2','Payment Status':received}],id:'B1',expected:false}
+  ];
+  var failed=cases.filter(function(test){
+    return validatePaymentRecordForApprovalPure_(test.rows,test.id,received,approved).ok!==test.expected;
+  });
+  return {ok:failed.length===0,test:'PAYMENT RECORD APPROVAL GUARD PURE TEST',passed:cases.length-failed.length,total:cases.length,failed:failed,noSheetRead:true,noSheetWrite:true,noTelegramSent:true};
+}
+
 function approveBooking_(request){
   return withBookingLock_(function(){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
@@ -3785,23 +3812,33 @@ function approveBooking_(request){
     var status=getSlotStatus_(slotKey,date,time);
     if(status===CONFIG.SLOT_STATUS.CONFIRMED)return fail_('SLOT_ALREADY_CONFIRMED','این زمان قبلاً تأیید شده است.');
     if(status===CONFIG.SLOT_STATUS.BLOCKED)return fail_('SLOT_BLOCKED','این زمان مسدود شده است.');
-    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
-      'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,'Appointment Status':CONFIG.STATUSES.BOOKING_CONFIRMED,
-      'Approved At':new Date(),'Approved By':String(request.adminId||request.admin||'admin'),'Hold Until':''
+    // Validate the financial record BEFORE confirming the appointment.
+    // A booking must never become final if its matching payment row is missing,
+    // duplicated, or in a state other than received/already-approved.
+    var paymentRowsForBooking=getSheetObjects_(CONFIG.SHEETS.PAYMENTS).filter(function(p){
+      return String(p['Booking ID']||'')===String(b['Booking ID']||'');
+    });
+    if(paymentRowsForBooking.length!==1){
+      return fail_('PAYMENT_RECORD_MISMATCH','رکورد پرداخت یکتای این نوبت پیدا نشد؛ نوبت نهایی نشد.');
+    }
+    var paymentRow=paymentRowsForBooking[0];
+    var paymentRowStatus=String(paymentRow['Payment Status']||'');
+    if(paymentRowStatus!==CONFIG.STATUSES.PAYMENT_RECEIVED &&
+       paymentRowStatus!==CONFIG.STATUSES.PAYMENT_APPROVED){
+      return fail_('PAYMENT_RECORD_NOT_READY','وضعیت رکورد پرداخت آمادهٔ تأیید نهایی نیست؛ نوبت نهایی نشد.');
+    }
+
+    var approvedAt=new Date();
+    var approvedBy=String(request.adminId||request.admin||'admin');
+    updateRowFields_(CONFIG.SHEETS.PAYMENTS,paymentRow._row,{
+      'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,
+      'Approved At':approvedAt,
+      'Approved By':approvedBy
     });
 
-    // Keep the financial record synchronized with the Booking record.
-    // Approval must update the matching Payments row to PAYMENT_APPROVED.
-    var paymentRows=getSheetObjects_(CONFIG.SHEETS.PAYMENTS);
-    paymentRows.forEach(function(p){
-      if(String(p['Booking ID']||'')===String(b['Booking ID']||'') &&
-         String(p['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED){
-        updateRowFields_(CONFIG.SHEETS.PAYMENTS,p._row,{
-          'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,
-          'Approved At':new Date(),
-          'Approved By':String(request.adminId||request.admin||'admin')
-        });
-      }
+    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+      'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,'Appointment Status':CONFIG.STATUSES.BOOKING_CONFIRMED,
+      'Approved At':approvedAt,'Approved By':approvedBy,'Hold Until':''
     });
 
     consumeDiscountToken_(

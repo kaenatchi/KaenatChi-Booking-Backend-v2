@@ -1212,7 +1212,7 @@ function sendBookingTelegramNotifications_(booking, eventType) {
    * Approved/rejected messages are terminal and do not expose action buttons.
    */
   var replyMarkup =
-    eventType === 'booking_request' || eventType === 'payment_received'
+    eventType === 'booking_request'
       ? getBookingTelegramAdminKeyboard_(booking['Booking ID'])
       : null;
 

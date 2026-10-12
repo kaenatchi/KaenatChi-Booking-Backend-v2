@@ -13,6 +13,8 @@
 const CONFIG = {
   // Fail-closed staging boundary. Keep these values fixed on the experiment branch.
   STAGING_MODE: true,
+  // Permanent branch-level lock; do not remove or flip while this is an experiment.
+  STAGING_LOCKED: true,
   STAGING_SPREADSHEET_ID: '1xGgeqdsUGFzHhD00NIVVD8QqwnutnDfKwsmssHzaklw',
   STAGING_SPREADSHEET_NAME: 'KaenatChi CMS - STAGING',
   SPREADSHEET_ID: '1xGgeqdsUGFzHhD00NIVVD8QqwnutnDfKwsmssHzaklw',
@@ -150,7 +152,7 @@ function doPost(e) {
      * Telegram callbacks are never accepted by an isolated staging deployment,
      * even if a webhook secret or bot credentials are accidentally configured.
      */
-    if (CONFIG.STAGING_MODE && e && e.postData && e.postData.contents) {
+    if ((CONFIG.STAGING_MODE || CONFIG.STAGING_LOCKED) && e && e.postData && e.postData.contents) {
       try {
         var stagingUpdate = JSON.parse(String(e.postData.contents || '').trim());
         if (stagingUpdate && stagingUpdate.callback_query) {
@@ -494,6 +496,9 @@ function healthCheck_() {
    ===================================================== */
 
 function assertStagingIsolation_() {
+  if (CONFIG.STAGING_LOCKED && CONFIG.STAGING_MODE !== true) {
+    throw new Error('STAGING_ISOLATION_BLOCKED: this experiment branch is permanently locked to staging.');
+  }
   if (CONFIG.STAGING_MODE) {
     if (
       CONFIG.SPREADSHEET_ID !== CONFIG.STAGING_SPREADSHEET_ID ||
@@ -724,7 +729,7 @@ function getTelegramConfig_() {
 }
 
 function setupTelegramWebhook() {
-  if (CONFIG.STAGING_MODE) throw new Error('STAGING_MODE: Telegram webhook setup is disabled.');
+  if (CONFIG.STAGING_MODE || CONFIG.STAGING_LOCKED) throw new Error('STAGING_MODE: Telegram webhook setup is disabled.');
   var props = PropertiesService.getScriptProperties();
   var config = getTelegramConfig_();
 
@@ -781,7 +786,7 @@ function setupTelegramWebhook() {
 }
 
 function sendTelegramMessage_(chatId, text, replyMarkup) {
-  if (CONFIG.STAGING_MODE) return {ok:false,skipped:true,reason:'STAGING_MODE'};
+  if (CONFIG.STAGING_MODE || CONFIG.STAGING_LOCKED) return {ok:false,skipped:true,reason:'STAGING_MODE'};
   chatId = String(chatId || '').trim();
   if (!chatId || !text) return {ok:false,skipped:true};
 
@@ -831,7 +836,7 @@ function sendTelegramMessage_(chatId, text, replyMarkup) {
 }
 
 function telegramApiRequest_(method, payload) {
-  if (CONFIG.STAGING_MODE) return {ok:false,skipped:true,error:'STAGING_MODE'};
+  if (CONFIG.STAGING_MODE || CONFIG.STAGING_LOCKED) return {ok:false,skipped:true,error:'STAGING_MODE'};
   var config = getTelegramConfig_();
 
   if (!config.botToken) {
@@ -1266,7 +1271,7 @@ function queueBookingTelegramNotification_(booking, eventType) {
  * The worker is deliberately outside the customer booking/payment request.
  */
 function setupBookingTelegramQueueTrigger_() {
-  if (CONFIG.STAGING_MODE) {
+  if (CONFIG.STAGING_MODE || CONFIG.STAGING_LOCKED) {
     return {ok:false,skipped:true,reason:'STAGING_MODE: trigger creation disabled.'};
   }
   var functionName = 'processBookingTelegramNotificationQueue_';
@@ -1291,7 +1296,7 @@ function setupBookingTelegramQueueTrigger_() {
 
 
 function processBookingTelegramNotificationQueue_() {
-  if (CONFIG.STAGING_MODE) {
+  if (CONFIG.STAGING_MODE || CONFIG.STAGING_LOCKED) {
     return {ok:true,skipped:true,reason:'STAGING_MODE: Telegram worker disabled.'};
   }
   var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
@@ -1444,7 +1449,7 @@ function processBookingTelegramNotificationQueue_() {
  * - no REMINDER_SENT log exists for this booking
  */
 function processAppointmentReminders_() {
-  if (CONFIG.STAGING_MODE) {
+  if (CONFIG.STAGING_MODE || CONFIG.STAGING_LOCKED) {
     return {ok:true,skipped:true,reason:'STAGING_MODE: reminders disabled.'};
   }
   var rows = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
@@ -4225,7 +4230,7 @@ function publicBooking_(b){
 }
 
 function saveReceiptToDrive_(data,fileName,mimeType,booking){
-  if (CONFIG.STAGING_MODE) return {id:'STAGING-RECEIPT-'+String(booking['Booking ID']||'TEST'),url:'',name:String(fileName||'staging-receipt')};
+  if (CONFIG.STAGING_MODE || CONFIG.STAGING_LOCKED) return {id:'STAGING-RECEIPT-'+String(booking['Booking ID']||'TEST'),url:'',name:String(fileName||'staging-receipt')};
   var raw=String(data||''),mime=String(mimeType||'image/jpeg');
   if(raw.indexOf('data:')===0){var comma=raw.indexOf(',');if(comma<0)throw new Error('تصویر فیش نامعتبر است.');var meta=raw.substring(5,comma);raw=raw.substring(comma+1);var m=meta.match(/^([^;]+)/);if(m)mime=m[1];}
   var bytes=Utilities.base64Decode(raw);
@@ -4237,7 +4242,7 @@ function saveReceiptToDrive_(data,fileName,mimeType,booking){
 }
 
 function getVIPSpreadsheet_(){
-  if (CONFIG.STAGING_MODE) throw new Error('STAGING_MODE: VIP access is disabled.');
+  if (CONFIG.STAGING_MODE || CONFIG.STAGING_LOCKED) throw new Error('STAGING_MODE: VIP access is disabled.');
   return SpreadsheetApp.openById(
     CONFIG.VIP.SPREADSHEET_ID
   );

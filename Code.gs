@@ -1164,15 +1164,17 @@ function sendBookingTelegramNotifications_(booking, eventType) {
  * request itself.
  */
 function queueBookingTelegramNotification_(booking, eventType) {
-  var lock = LockService.getScriptLock();
   try {
     /*
-     * Serialize queue writes with the worker's read/clear and requeue steps.
-     * Without this lock, a simultaneous enqueue can be overwritten when the
-     * worker clears the queue, silently losing an admin notification.
+     * All current callers run inside withBookingLock_, which already owns
+     * the ScriptLock. Do NOT acquire that lock again here: Apps Script locks
+     * are not re-entrant, so a nested waitLock can time out and drop the
+     * notification. The worker uses the same ScriptLock while reading,
+     * clearing, and re-queuing this property, so the outer caller lock
+     * serializes these writes safely.
+     *
      * No trigger creation or Telegram network call occurs in this request.
      */
-    lock.waitLock(5000);
     var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
     var props = PropertiesService.getScriptProperties();
     var raw = String(props.getProperty(queueKey) || '[]');
@@ -1209,10 +1211,6 @@ function queueBookingTelegramNotification_(booking, eventType) {
       String(error && error.message ? error.message : error)
     );
     return {ok:false,queued:false};
-  } finally {
-    try {
-      lock.releaseLock();
-    } catch (ignored) {}
   }
 }
 

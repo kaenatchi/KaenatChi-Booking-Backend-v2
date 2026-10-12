@@ -258,10 +258,9 @@ function routeRequest_(action, request) {
     case 'validateDiscount': return validateDiscount_(request);
     case 'createBooking': return createBooking_(request);
     case 'submitPayment': return submitPayment_(request);
-    case 'approveBookingRequest': return approveBookingRequest_(request);
-    case 'rejectBookingRequest': return rejectBookingRequest_(request);
-    case 'approveBooking': return approveBooking_(request);
-    case 'rejectBooking': return rejectBooking_(request);
+    // Administrative approval/rejection is intentionally not exposed through
+    // the public JSON/JSONP action router. These operations are invoked only
+    // from the authenticated Telegram callback handler.
     case 'cancelBooking': return cancelBooking_(request);
     case 'releaseExpiredHolds': return releaseExpiredHolds_(request);
 

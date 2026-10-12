@@ -4923,7 +4923,7 @@ function testPaymentFlowSubmitOnly() {
       mobile:String(before['Mobile']||''),
       transactionNumber:'MOCK-PAY-'+unique,
       receiptData:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pQAAAABJRU5ErkJggg==',
-      receiptFileName:'payment-test-'+unique+'.txt',
+      receiptFileName:'payment-test-'+unique+'.png',
       receiptMimeType:'image/png'
     });
     if(!submit || !submit.ok) throw new Error('Submit Payment failed: '+JSON.stringify(submit));
@@ -5103,7 +5103,7 @@ function testPaymentApprovalFlow() {
       mobile:String(beforeApproval['Mobile']||''),
       transactionNumber:'MOCK-APPROVAL-'+unique,
       receiptData:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pQAAAABJRU5ErkJggg==',
-      receiptFileName:'payment-approval-test-'+unique+'.txt',
+      receiptFileName:'payment-approval-test-'+unique+'.png',
       receiptMimeType:'image/png'
     });
     if(!submit||!submit.ok)throw new Error('Submit Payment failed: '+JSON.stringify(submit));
@@ -5238,7 +5238,7 @@ function testPaymentFlowDuplicate() {
       mobile:String(beforeDuplicate['Mobile']||''),
       transactionNumber:'MOCK-DUP-1-'+unique,
       receiptData:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pQAAAABJRU5ErkJggg==',
-      receiptFileName:'payment-duplicate-test-1-'+unique+'.txt',
+      receiptFileName:'payment-duplicate-test-1-'+unique+'.png',
       receiptMimeType:'image/png'
     });
     if(!first||!first.ok)throw new Error('First payment submit failed: '+JSON.stringify(first));
@@ -5249,7 +5249,7 @@ function testPaymentFlowDuplicate() {
       mobile:String(beforeDuplicate['Mobile']||''),
       transactionNumber:'MOCK-DUP-2-'+unique,
       receiptData:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pQAAAABJRU5ErkJggg==',
-      receiptFileName:'payment-duplicate-test-2-'+unique+'.txt',
+      receiptFileName:'payment-duplicate-test-2-'+unique+'.png',
       receiptMimeType:'image/png'
     });
     result.secondPaymentRejected=!!second&&second.ok===false;
@@ -5588,7 +5588,7 @@ function testVIPDiscountPaymentFlow() {
       mobile: String(beforeVIPPayment['Mobile']||''),
       transactionNumber: 'MOCK-VIP-REG-' + unique,
       receiptData: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pQAAAABJRU5ErkJggg==',
-      receiptFileName: 'vip-regression-test-' + unique + '.txt',
+      receiptFileName: 'vip-regression-test-' + unique + '.png',
       receiptMimeType:'image/png'
     });
 

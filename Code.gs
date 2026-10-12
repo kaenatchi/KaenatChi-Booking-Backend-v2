@@ -5227,6 +5227,7 @@ function testPaymentFlowDuplicate() {
 
     var second=submitPayment_({
       bookingId:result.bookingId,
+      mobile:String(beforeDuplicate['Mobile']||''),
       transactionNumber:'MOCK-DUP-2-'+unique,
       receiptData:'data:text/plain;base64,UEFZTUVOVCBEVVAtMg==',
       receiptFileName:'payment-duplicate-test-2-'+unique+'.txt',

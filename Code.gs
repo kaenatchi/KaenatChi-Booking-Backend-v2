@@ -1226,6 +1226,19 @@ function setupBookingTelegramQueueTrigger_() {
 }
 
 
+function testTelegramRetryPolicyPure_() {
+  var cases=[
+    {attempts:0,expected:true},
+    {attempts:1,expected:true},
+    {attempts:4,expected:true},
+    {attempts:5,expected:false},
+    {attempts:6,expected:false}
+  ];
+  var failed=cases.filter(function(t){return shouldRetryTelegramNotification_(t.attempts)!==t.expected;});
+  return {ok:failed.length===0,test:'TELEGRAM_RETRY_POLICY_PURE_TEST',passed:cases.length-failed.length,total:cases.length,failed:noRetryPolicyFailures_(failed),maxAttempts:5,noExternalCalls:true};
+}
+function noRetryPolicyFailures_(failed) { return failed; }
+
 function shouldRetryTelegramNotification_(attempts) {
   return Number(attempts || 0) < 5;
 }
@@ -1327,7 +1340,7 @@ function processBookingTelegramNotificationQueue_() {
        * Keep retrying a small number of times so temporary Telegram/Google
        * failures do not silently lose the admin notification.
        */
-      if (shouldRetryTelegramNotification_(attempts - 1)) {
+      if (shouldRetryTelegramNotification_(attempts)) {
         item.attempts = attempts;
         item.lastError = String(
           error && error.message

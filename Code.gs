@@ -4184,17 +4184,7 @@ function buildPaymentConsistencyDiagnosticReportPure_(bookings, paymentRows) {
   };
 }
 
-/*
- * Operator-only diagnostic entry point: run manually from the Apps Script editor.
- * Deliberately not registered in the public doGet/doPost action router.
- */
-function diagnosePaymentConsistencyCasesReadOnly_() {
-  var bookings = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
-  var payments = getSheetObjects_(CONFIG.SHEETS.PAYMENTS);
-  var report = buildPaymentConsistencyDiagnosticReportPure_(bookings, payments);
-  Logger.log(JSON.stringify(report, null, 2));
-  return report;
-}
+/* Live-sheet report entry point intentionally omitted until a separate staging spreadsheet is configured. */
 
 function testPaymentConsistencyDiagnosticReportPure_() {
   var tests = [

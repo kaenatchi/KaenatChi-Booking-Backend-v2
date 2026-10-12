@@ -308,8 +308,15 @@ function getBookedSlots_() {
 
     if (!date || !time) return;
 
+    const paymentStatus = String(row['Payment Status'] || '');
+    const holdUntil = parseDateValue_(row['Hold Until']);
+    const pendingStillReservesSlot = status === CONFIG.STATUSES.BOOKING_PENDING && (
+      paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
+      (holdUntil && holdUntil.getTime() > Date.now())
+    );
+
     if (
-      status === CONFIG.STATUSES.BOOKING_PENDING ||
+      pendingStillReservesSlot ||
       status === CONFIG.STATUSES.BOOKING_CONFIRMED
     ) {
       bookedSlots.push({
@@ -2353,6 +2360,13 @@ function getSlotStatus_(
     if (
       status === CONFIG.STATUSES.BOOKING_PENDING
     ) {
+      // A submitted payment must keep the slot reserved until an admin
+      // makes the final decision. The payment-review timer is not a license
+      // to release a slot for which proof/payment details were submitted.
+      const paymentStatus = String(booking['Payment Status'] || '');
+      if (paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED) {
+        return CONFIG.SLOT_STATUS.HELD;
+      }
 
       if (
         holdUntil &&
@@ -3840,7 +3854,12 @@ function releaseExpiredHolds_(request){
     var rows=getSheetObjects_(CONFIG.SHEETS.BOOKINGS),released=0,now=Date.now();
     rows.forEach(function(r){
       var hold=parseDateValue_(r['Hold Until']);
-      if(String(r['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING&&hold&&hold.getTime()<=now){
+      // Only expire unpaid holds. Once payment proof/tracking details have
+      // been submitted, keep the appointment pending and the slot reserved
+      // until the final admin approve/reject action.
+      if(String(r['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING&&
+         String(r['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_PENDING&&
+         hold&&hold.getTime()<=now){
         updateRowFields_(CONFIG.SHEETS.BOOKINGS,r._row,{'Appointment Status':CONFIG.STATUSES.BOOKING_CANCELLED,'Hold Until':'','Admin Note':'Expired hold released.'});
         appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_RELEASED,bookingId:r['Booking ID'],slotKey:r['Slot Key'],details:'Expired hold released.'});
         released++;

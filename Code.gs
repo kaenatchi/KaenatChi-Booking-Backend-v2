@@ -3670,7 +3670,7 @@ function createBooking_(request){
       originalPrice:basePrice,discountCode:discountCode,discountType:discountCode?'VIP':'',
       discountPercent:discount.discountPercent,discountAmount:discount.discountAmount,finalPrice:discount.finalPrice,
       paymentStatus:CONFIG.STATUSES.PAYMENT_PENDING,appointmentStatus:CONFIG.STATUSES.BOOKING_PENDING,
-      trackingCode:generateTrackingCode_(),holdUntil:new Date(Date.now()+Math.max(5,toNumber_(getSetting_('Initial Request Hold Minutes',120)))*60000)
+      trackingCode:generateTrackingCode_(),holdUntil:new Date(Date.now()+12*60*60000)
     };
     if(discountCode&&discount.valid&&discount.vipCustomerId&&!booking.customerId){
       booking.customerId=discount.vipCustomerId;
@@ -3745,11 +3745,11 @@ function approveBookingRequest_(request) {
     var hold=parseDateValue_(b['Hold Until']);
     if(!hold||hold.getTime()<=Date.now()){
       releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);
-      return fail_('REQUEST_EXPIRED','مهلت دو ساعته درخواست پایان یافته است.');
+      return fail_('REQUEST_EXPIRED','مهلت ۱۲ ساعته درخواست پایان یافته است.');
     }
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Admin Note':'INITIAL_REQUEST_APPROVED',
-      'Hold Until':new Date(Date.now()+Math.max(1,toNumber_(getSetting_('Payment Hold Minutes',10))||10)*60000),
+      'Hold Until':new Date(Date.now()+10*60000),
       'Initial Approved At':new Date(),'Initial Approved By':String(request.adminId||request.admin||'admin')
     });
     appendBookingLog_({action:'INITIAL_REQUEST_APPROVED',bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Initial request approved; 10-minute payment window started.'});

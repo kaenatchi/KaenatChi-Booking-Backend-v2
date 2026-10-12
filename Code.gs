@@ -252,6 +252,8 @@ function routeRequest_(action, request) {
     case 'validateDiscount': return validateDiscount_(request);
     case 'createBooking': return createBooking_(request);
     case 'submitPayment': return submitPayment_(request);
+    case 'approveBookingRequest': return approveBookingRequest_(request);
+    case 'rejectBookingRequest': return rejectBookingRequest_(request);
     case 'approveBooking': return approveBooking_(request);
     case 'rejectBooking': return rejectBooking_(request);
     case 'cancelBooking': return cancelBooking_(request);
@@ -835,23 +837,13 @@ function editTelegramMessageReplyMarkup_(chatId, messageId, replyMarkup) {
   );
 }
 
-function getBookingTelegramAdminKeyboard_(bookingId) {
+function getBookingTelegramAdminKeyboard_(bookingId, mode) {
   var id = String(bookingId || '').trim();
-
-  return {
-    inline_keyboard: [
-      [
-        {
-          text:'✅ تأیید نوبت',
-          callback_data:'kaenatchi:approve:' + id
-        },
-        {
-          text:'❌ رد فیش',
-          callback_data:'kaenatchi:reject:' + id
-        }
-      ]
-    ]
-  };
+  var requestMode = mode === 'request';
+  return {inline_keyboard:[[
+    {text:requestMode?'✅ تأیید اولیه':'✅ تأیید پرداخت',callback_data:(requestMode?'kaenatchi:request_approve:':'kaenatchi:approve:')+id},
+    {text:requestMode?'❌ رد درخواست':'❌ رد فیش',callback_data:(requestMode?'kaenatchi:request_reject:':'kaenatchi:reject:')+id}
+  ]]};
 }
 
 function getBookingTelegramResultKeyboard_(status) {
@@ -925,7 +917,7 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   }
 
   var match = data.match(
-    /^kaenatchi:(approve|reject):([^:]+)$/
+    /^kaenatchi:(request_approve|request_reject|approve|reject):([^:]+)$/
   );
 
   if (!match) {
@@ -945,17 +937,14 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   var bookingId = String(match[2] || '').trim();
   var result;
 
-  if (action === 'approve') {
-    result = approveBooking_({
-      bookingId:bookingId,
-      adminId:config.adminChatId
-    });
+  if (action === 'request_approve') {
+    result = approveBookingRequest_({bookingId:bookingId,adminId:config.adminChatId});
+  } else if (action === 'request_reject') {
+    result = rejectBookingRequest_({bookingId:bookingId,adminId:config.adminChatId,reason:'رد درخواست نوبت توسط ادمین از طریق تلگرام'});
+  } else if (action === 'approve') {
+    result = approveBooking_({bookingId:bookingId,adminId:config.adminChatId});
   } else {
-    result = rejectBooking_({
-      bookingId:bookingId,
-      adminId:config.adminChatId,
-      reason:'رد فیش توسط ادمین از طریق تلگرام'
-    });
+    result = rejectBooking_({bookingId:bookingId,adminId:config.adminChatId,reason:'رد فیش توسط ادمین از طریق تلگرام'});
   }
 
   if (!result || result.ok !== true) {
@@ -974,10 +963,9 @@ function handleTelegramCallbackQuery_(callbackQuery) {
     };
   }
 
-  var finalStatus =
-    action === 'approve'
-      ? 'approved'
-      : 'rejected';
+  var finalStatus = action === 'request_approve' ? 'request_approved' :
+    action === 'request_reject' ? 'request_rejected' :
+    action === 'approve' ? 'approved' : 'rejected';
 
   editTelegramMessageReplyMarkup_(
     chatId,
@@ -987,9 +975,9 @@ function handleTelegramCallbackQuery_(callbackQuery) {
 
   answerTelegramCallbackQuery_(
     queryId,
-    action === 'approve'
-      ? 'نوبت با موفقیت تأیید شد.'
-      : 'فیش با موفقیت رد شد.',
+    action === 'request_approve' ? 'درخواست تأیید شد؛ مشتری می‌تواند پرداخت کند.' :
+    action === 'request_reject' ? 'درخواست نوبت رد شد.' :
+    action === 'approve' ? 'پرداخت تأیید و نوبت نهایی شد.' : 'فیش پرداخت رد شد.',
     false
   );
 
@@ -1038,6 +1026,24 @@ function buildBookingTelegramText_(booking, eventType) {
     booking['Final Price'] || ''
   );
 
+  if (eventType === 'request_received') {
+    return ('📩 <b>درخواست جدید نوبت کائنات‌چی</b>\n\n' +
+      '👤 ' + customer + '\n' + '✨ ' + service + '\n' +
+      '📅 ' + date + ' — ' + time + '\n' + '💳 مبلغ: ' + price + '\n' +
+      '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' + '⏳ مهلت بررسی اولیه: ۲ ساعت');
+  }
+  if (eventType === 'request_approved') {
+    return ('✅ <b>درخواست نوبت تأیید اولیه شد</b>\n\n' +
+      '👤 ' + customer + '\n' + '✨ ' + service + '\n' +
+      '📅 ' + date + ' — ' + time + '\n' + '💳 مبلغ قابل پرداخت: ' + price + '\n' +
+      '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' +
+      'لطفاً از مینی‌اپ کائنات‌چی پرداخت را انجام بده و فیش را ارسال کن. مهلت پرداخت: ۳۰ دقیقه.');
+  }
+  if (eventType === 'request_rejected') {
+    return ('❌ <b>درخواست نوبت پذیرفته نشد</b>\n\n' +
+      '👤 ' + customer + '\n' + '✨ ' + service + '\n' +
+      '📅 ' + date + ' — ' + time + '\n' + '🎫 کد پیگیری: <code>' + tracking + '</code>');
+  }
   if (eventType === 'approved') {
     return (
       '✅ <b>نوبت کائنات‌چی تأیید شد</b>\n\n' +
@@ -1079,12 +1085,10 @@ function sendBookingTelegramNotifications_(booking, eventType) {
    * Only payment_received needs admin action buttons.
    * Approved/rejected messages are terminal and do not expose action buttons.
    */
-  var replyMarkup =
-    eventType === 'payment_received'
-      ? getBookingTelegramAdminKeyboard_(
-          booking['Booking ID']
-        )
-      : null;
+  var replyMarkup = eventType === 'request_received'
+    ? getBookingTelegramAdminKeyboard_(booking['Booking ID'], 'request')
+    : eventType === 'payment_received'
+      ? getBookingTelegramAdminKeyboard_(booking['Booking ID'], 'payment') : null;
 
   if(config.adminChatId){
     results.push(
@@ -3612,7 +3616,7 @@ function createBooking_(request){
       originalPrice:basePrice,discountCode:discountCode,discountType:discountCode?'VIP':'',
       discountPercent:discount.discountPercent,discountAmount:discount.discountAmount,finalPrice:discount.finalPrice,
       paymentStatus:CONFIG.STATUSES.PAYMENT_PENDING,appointmentStatus:CONFIG.STATUSES.BOOKING_PENDING,
-      trackingCode:generateTrackingCode_(),holdUntil:new Date(Date.now()+Math.max(5,toNumber_(getSetting_('Hold Minutes',15)))*60000)
+      trackingCode:generateTrackingCode_(),holdUntil:new Date(Date.now()+Math.max(5,toNumber_(getSetting_('Initial Request Hold Minutes',120)))*60000)
     };
     if(discountCode&&discount.valid&&discount.vipCustomerId&&!booking.customerId){
       booking.customerId=discount.vipCustomerId;
@@ -3629,9 +3633,10 @@ function createBooking_(request){
       'Discount Amount':booking.discountAmount,'Final Price':booking.finalPrice,'Payment Status':booking.paymentStatus,
       'Appointment Status':booking.appointmentStatus,'Tracking Code':booking.trackingCode,'Hold Until':booking.holdUntil
     });
-    appendBookingLog_({action:CONFIG.LOG_ACTIONS.BOOKING_CREATED,bookingId:booking.bookingId,slotKey:slotKey,details:'Booking created.'});
-    appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_HELD,bookingId:booking.bookingId,slotKey:slotKey,details:'Slot held.'});
-    return {ok:true,booking:publicBooking_(booking),message:'نوبت موقتاً نگه داشته شد. پرداخت را ثبت کنید.'};
+    appendBookingLog_({action:CONFIG.LOG_ACTIONS.BOOKING_CREATED,bookingId:booking.bookingId,slotKey:slotKey,details:'Booking request created; awaiting initial admin review.'});
+    appendBookingLog_({action:CONFIG.LOG_ACTIONS.SLOT_HELD,bookingId:booking.bookingId,slotKey:slotKey,details:'Slot held for initial review (120 minutes).'});
+    queueBookingTelegramNotification_(booking, 'request_received');
+    return {ok:true,booking:publicBooking_(booking),message:'درخواست نوبت ثبت شد و تا ۲ ساعت در انتظار بررسی اولیه است.'};
   });
 }
 
@@ -3640,6 +3645,7 @@ function submitPayment_(request){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
     if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
     if(String(b['Appointment Status']||'')!==CONFIG.STATUSES.BOOKING_PENDING)return fail_('BOOKING_NOT_PENDING','این نوبت در وضعیت قابل پرداخت نیست.');
+    if(String(b['Admin Note']||'').indexOf('INITIAL_REQUEST_APPROVED')===-1)return fail_('INITIAL_APPROVAL_REQUIRED','ابتدا باید درخواست نوبت توسط ادمین تأیید اولیه شود.');
     if(String(b['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_RECEIVED||String(b['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_APPROVED){
       return fail_('PAYMENT_ALREADY_SUBMITTED','برای این نوبت قبلاً پرداخت ارسال شده است.');
     }
@@ -3668,6 +3674,49 @@ function submitPayment_(request){
     queueBookingTelegramNotification_(b, 'payment_received');
 
     return {ok:true,bookingId:b['Booking ID'],paymentStatus:CONFIG.STATUSES.PAYMENT_RECEIVED,message:'فیش دریافت شد و برای بررسی ارسال شد.'};
+  });
+}
+
+function approveBookingRequest_(request) {
+  return withBookingLock_(function() {
+    var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
+    if(!b)return fail_('BOOKING_NOT_FOUND','درخواست نوبت پیدا نشد.');
+    if(String(b['Appointment Status']||'')!==CONFIG.STATUSES.BOOKING_PENDING)
+      return fail_('BOOKING_NOT_PENDING','این درخواست دیگر در انتظار بررسی اولیه نیست.');
+    if(String(b['Payment Status']||'')!==CONFIG.STATUSES.PAYMENT_PENDING)
+      return fail_('REQUEST_ALREADY_PAID','برای این درخواست قبلاً پرداخت ثبت شده است.');
+    var hold=parseDateValue_(b['Hold Until']);
+    if(!hold||hold.getTime()<=Date.now()){
+      releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);
+      return fail_('REQUEST_EXPIRED','مهلت دو ساعته درخواست پایان یافته است.');
+    }
+    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+      'Admin Note':'INITIAL_REQUEST_APPROVED',
+      'Hold Until':new Date(Date.now()+Math.max(15,toNumber_(getSetting_('Payment Hold Minutes',30)))*60000),
+      'Initial Approved At':new Date(),'Initial Approved By':String(request.adminId||request.admin||'admin')
+    });
+    appendBookingLog_({action:'INITIAL_REQUEST_APPROVED',bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Initial request approved; 30-minute payment window started.'});
+    queueBookingTelegramNotification_(b,'request_approved');
+    return {ok:true,bookingId:b['Booking ID'],trackingCode:b['Tracking Code'],status:'AWAITING_PAYMENT'};
+  });
+}
+
+function rejectBookingRequest_(request) {
+  return withBookingLock_(function() {
+    var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
+    if(!b)return fail_('BOOKING_NOT_FOUND','درخواست نوبت پیدا نشد.');
+    if(String(b['Appointment Status']||'')!==CONFIG.STATUSES.BOOKING_PENDING)
+      return fail_('BOOKING_NOT_PENDING','این درخواست دیگر در انتظار بررسی اولیه نیست.');
+    if(String(b['Payment Status']||'')!==CONFIG.STATUSES.PAYMENT_PENDING)
+      return fail_('REQUEST_ALREADY_PAID','برای این درخواست قبلاً پرداخت ثبت شده است.');
+    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+      'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,
+      'Admin Note':String(request.reason||'INITIAL_REQUEST_REJECTED'),
+      'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),'Hold Until':''
+    });
+    appendBookingLog_({action:'INITIAL_REQUEST_REJECTED',bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.reason||'Initial request rejected.')});
+    queueBookingTelegramNotification_(b,'request_rejected');
+    return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_REJECTED};
   });
 }
 

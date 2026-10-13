@@ -3716,10 +3716,12 @@ function createBooking_(request){
         return String(row['Request ID'] || '') === incomingRequestId;
       });
       if (existingRequest) {
+        var requestNotice = queueBookingTelegramNotification_(existingRequest, 'request_received');
         return {
           ok: true,
           booking: publicBooking_(existingRequest),
           duplicate: true,
+          notificationQueued: !!(requestNotice && requestNotice.ok === true),
           message: 'این درخواست قبلاً ثبت شده است.'
         };
       }
@@ -3798,7 +3800,18 @@ function acceptBooking_(request) {
       return fail_('BOOKING_NOT_PENDING', 'این درخواست در وضعیت قابل پذیرش نیست.');
     }
     if (paymentStatus === CONFIG.STATUSES.PAYMENT_PENDING) {
-      return {ok:true, bookingId:b['Booking ID'], alreadyAccepted:true, message:'این درخواست قبلاً پذیرفته شده است.'};
+      // Do not reset the original deadline on retries; only recover a missing notice.
+      var retryNotice = queueBookingTelegramNotification_(b, 'accepted');
+      return {
+        ok:true,
+        bookingId:b['Booking ID'],
+        alreadyAccepted:true,
+        notificationQueued:!!(retryNotice && retryNotice.ok === true),
+        notificationError:retryNotice && retryNotice.ok === true ? '' : 'TELEGRAM_QUEUE_SAVE_FAILED',
+        message:retryNotice && retryNotice.ok === true
+          ? 'این درخواست قبلاً پذیرفته شده است؛ مهلت پرداخت تغییر نکرد.'
+          : 'درخواست قبلاً پذیرفته شده، اما اعلان ذخیره نشد؛ دوباره تلاش کنید.'
+      };
     }
     if (paymentStatus !== CONFIG.STATUSES.PAYMENT_AWAITING_ACCEPTANCE) {
       return fail_('BOOKING_NOT_AWAITING_ACCEPTANCE', 'این درخواست قبلاً تعیین تکلیف شده است.');

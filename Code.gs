@@ -1009,9 +1009,17 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   var action = match[1];
   var bookingId = String(match[2] || '').trim();
 
-  // Never report a successful hold-review action unless the audit entry was persisted.
-  // Booking/payment status remains untouched in either outcome.
+  // Idempotency: repeated clicks must not create duplicate audit entries.
+  // This is a read-only check; booking/payment status is never modified here.
   if (action === 'hold_review') {
+    var priorHoldLogs = getSheetObjects_(CONFIG.SHEETS.BOOKING_LOGS).filter(function(row) {
+      return String(row['Booking ID'] || '') === bookingId &&
+        String(row.Action || '') === String(CONFIG.LOG_ACTIONS.PAYMENT_REVIEW_HOLD || 'PAYMENT_REVIEW_HOLD');
+    });
+    if (priorHoldLogs.length > 0) {
+      answerTelegramCallbackQuery_(queryId,'این مورد قبلاً برای بررسی بانکی ثبت شده است؛ وضعیت نوبت تغییری نکرد.',false);
+      return {ok:true,action:action,bookingId:bookingId,unchanged:true,audited:true,duplicate:true};
+    }
     try {
       appendBookingLog_({
         action:CONFIG.LOG_ACTIONS.PAYMENT_REVIEW_HOLD,

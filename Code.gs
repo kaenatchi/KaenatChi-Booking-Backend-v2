@@ -9,6 +9,7 @@ const CORE = Object.freeze({
   STAGING_PROP: 'KAENATCHI_BOOKING_STAGING_SHEET_ID',
   ADMIN_SECRET_PROP: 'KAENATCHI_BOOKING_ADMIN_SECRET',
   BOT_TOKEN_PROP: 'KAENATCHI_TELEGRAM_BOT_TOKEN',
+  WEBHOOK_SECRET_PROP: 'KAENATCHI_TELEGRAM_WEBHOOK_SECRET',
   ADMIN_CHAT_PROP: 'KAENATCHI_TELEGRAM_ADMIN_CHAT_ID',
   TABS: {
     BOOKINGS: 'Bookings',
@@ -54,6 +55,7 @@ function doPost(e) {
   try {
     const raw = e && e.postData && e.postData.contents;
     const body = raw ? JSON.parse(raw) : {};
+    if (body && body.callback_query) return out_(handleTelegramCallback_(body.callback_query, e && e.parameter));
     const action = String(body.action || '').trim();
     if (action === 'createRequest') return out_(createRequest_(body));
     if (action === 'submitReceipt') return out_(submitReceipt_(body));
@@ -346,6 +348,23 @@ function telegram_(method,payload) {
 function telegramPhoto_(token,chat,blob,caption,id) {
   const payload={chat_id:chat,photo:blob,caption,reply_markup:JSON.stringify({inline_keyboard:[[{text:'تأیید پس از بررسی بانکی',callback_data:'approvePayment:'+id},{text:'نگه‌دار برای بررسی',callback_data:'holdForReview:'+id}],[{text:'رد فیش',callback_data:'rejectPayment:'+id}]]})};
   UrlFetchApp.fetch('https://api.telegram.org/bot'+token+'/sendPhoto',{method:'post',payload,muteHttpExceptions:true});
+}
+function handleTelegramCallback_(q, params) {
+  const supplied=String((params||{}).telegram_webhook||'');
+  const expected=prop_(CORE.WEBHOOK_SECRET_PROP);
+  if(!expected || supplied!==expected) return {ok:false,error:'UNAUTHORIZED',message:'Telegram callback secret mismatch.'};
+  const parts=String(q.data||'').split(':');
+  const decision=parts[0], requestId=parts.slice(1).join(':');
+  const allowed=['accept','reject','approvePayment','rejectPayment','holdForReview','approveReschedule','rejectReschedule'];
+  if(!allowed.includes(decision)||!requestId) return {ok:false,error:'INVALID_CALLBACK'};
+  try {
+    const result=adminDecision_({requestId,decision,actor:'telegram-admin',adminSecret:prop_(CORE.ADMIN_SECRET_PROP)});
+    telegram_('answerCallbackQuery',{callback_query_id:q.id,text:'ثبت شد'});
+    return result;
+  } catch(err) {
+    telegram_('answerCallbackQuery',{callback_query_id:q.id,text:err.publicMessage||'انجام نشد'});
+    throw err;
+  }
 }
 function requireAdmin_(secret){if(!secret||secret!==prop_(CORE.ADMIN_SECRET_PROP))fail_('UNAUTHORIZED','دسترسی مدیریتی مجاز نیست.');}
 function findBooking_(tracking,phone){return objectsWithRows_(tab_(CORE.TABS.BOOKINGS)).find(x=>String(x.obj['Tracking Code'])===tracking&&String(x.obj.Phone)===phone)||null;}

@@ -45,3 +45,5 @@ jobs:
         run: node tests/telegram-hold-review-lock-integration.test.cjs
       - name: Test booking state without payment row
         run: node tests/payment-booking-without-row.test.cjs
+      - name: Test expired hold release runtime behavior
+        run: node tests/expired-hold-runtime.test.cjs

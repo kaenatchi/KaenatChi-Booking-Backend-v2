@@ -83,7 +83,13 @@ vm.runInNewContext(extractFunction("submitPayment_"),paymentSandbox,{timeout:100
 const paymentResult=paymentSandbox.submitPayment_({bookingId:unaccepted["Booking ID"],transactionNumber:"123"});
 assert.equal(paymentResult.ok,false);
 assert.equal(paymentResult.error,"BOOKING_NOT_ACCEPTED");
-console.log("PASS request acceptance starts one 10-minute deadline; repeat acceptance is idempotent; payment before acceptance is blocked");
+
+const receiptAlreadyReceived = {...booking,"Payment Status":S.PAYMENT_RECEIVED};
+paymentSandbox.getBookingByIdObject_=()=>receiptAlreadyReceived;
+const duplicateReceiptResult=paymentSandbox.submitPayment_({bookingId:receiptAlreadyReceived["Booking ID"],transactionNumber:"123"});
+assert.equal(duplicateReceiptResult.ok,false);
+assert.equal(duplicateReceiptResult.error,"PAYMENT_ALREADY_SUBMITTED");
+console.log("PASS acceptance starts one 10-minute deadline; retry is idempotent; pre-acceptance payment and duplicate receipt are blocked");
 
 const receiptBooking = {
   "Slot Key":"1405/07/22|11:00",

@@ -134,9 +134,9 @@ function createRequest_(b) {
     const date = String(b.date || '');
     const time = normalizeTime_(b.time);
     if (date !== tomorrowJalali_()) fail_('DATE_NOT_ALLOWED','فقط برای فردا می‌توان درخواست ثبت کرد.');
+    const ids = Array.isArray(b.serviceIds) ? [...new Set(b.serviceIds.map(String))] : [];
     const slot = getSlots_(date, ids).slots.find(s => s.time === time);
     if (!slot || slot.status !== 'AVAILABLE') fail_('SLOT_UNAVAILABLE','این زمان دیگر در دسترس نیست؛ زمان دیگری انتخاب کن.');
-    const ids = Array.isArray(b.serviceIds) ? [...new Set(b.serviceIds.map(String))] : [];
     if (!ids.length) fail_('SERVICE_REQUIRED','حداقل یک خدمت انتخاب کن.');
     const catalog = getPublicConfig_().services;
     const chosen = ids.map(id => catalog.find(s => s.id === id));

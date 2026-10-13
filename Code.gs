@@ -1009,14 +1009,29 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   var action = match[1];
   var bookingId = String(match[2] || '').trim();
 
-  // This action leaves booking/payment status unchanged, but records the admin decision.
+  // Never report a successful hold-review action unless the audit entry was persisted.
+  // Booking/payment status remains untouched in either outcome.
   if (action === 'hold_review') {
-    appendBookingLog_({
-      action:CONFIG.LOG_ACTIONS.PAYMENT_REVIEW_HOLD,
-      bookingId:bookingId,
-      slotKey:'',
-      details:'ادمین فیش را برای بررسی بانکی نگه داشت؛ وضعیت رزرو و پرداخت تغییر نکرد.'
-    });
+    try {
+      appendBookingLog_({
+        action:CONFIG.LOG_ACTIONS.PAYMENT_REVIEW_HOLD,
+        bookingId:bookingId,
+        slotKey:'',
+        details:'ادمین فیش را برای بررسی بانکی نگه داشت؛ وضعیت رزرو و پرداخت تغییر نکرد.'
+      });
+    } catch (auditError) {
+      answerTelegramCallbackQuery_(
+        queryId,
+        'ثبت تاریخچه انجام نشد؛ هیچ تغییری در رزرو یا پرداخت اعمال نشده است. بعداً دوباره بررسی کن.',
+        true
+      );
+      return {
+        ok:false,
+        error:'PAYMENT_REVIEW_AUDIT_FAILED',
+        bookingId:bookingId,
+        unchanged:true
+      };
+    }
     answerTelegramCallbackQuery_(queryId,'فیش برای بررسی بانکی نگه داشته شد؛ وضعیت نوبت تغییری نکرد.',false);
     return {ok:true,action:action,bookingId:bookingId,unchanged:true,audited:true};
   }

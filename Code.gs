@@ -1023,7 +1023,21 @@ function handleTelegramCallbackQuery_(callbackQuery) {
     });
     if (!diagnostic.caseCount) lines.push('مغایرتی در داده‌های بررسی‌شده پیدا نشد.');
     if (diagnostic.caseCount > 15) lines.push('برای کوتاه ماندن پیام، فقط ۱۵ مورد اول نمایش داده شد.');
-    var sent = sendTelegramMessage_(chatId,lines.join('\n'));
+    // Telegram message text is limited; trim whole lines so the report never
+    // exceeds a conservative budget and never cuts through escaped HTML fields.
+    var reportText = lines.join('\n');
+    while (reportText.length > 3500 && lines.length > 3) {
+      lines.pop();
+      reportText = lines.join('\n');
+    }
+    if (reportText.length > 3400) {
+      reportText = reportText.slice(0,3400);
+    }
+    if (diagnostic.caseCount > 0 && reportText.indexOf('پیام کوتاه شد') === -1 &&
+        (diagnostic.cases || []).length > 0 && reportText.length >= 3400) {
+      reportText += '\nادامهٔ گزارش به‌دلیل محدودیت طول پیام نمایش داده نشد.';
+    }
+    var sent = sendTelegramMessage_(chatId,reportText);
     answerTelegramCallbackQuery_(queryId,sent && sent.ok ? 'گزارش فقط‌خواندنی ارسال شد.' : 'گزارش آماده شد اما ارسال آن تأیید نشد.',!(sent && sent.ok));
     return {ok:!!(sent && sent.ok),report:'PAYMENT_CONSISTENCY_READ_ONLY',caseCount:diagnostic.caseCount,noWrites:true,noAutoRepair:true};
   }

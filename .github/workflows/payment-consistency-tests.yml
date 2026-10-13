@@ -33,5 +33,7 @@ jobs:
         run: node tests/payment-partial-failure.test.cjs
       - name: Test private read-only diagnostic entry point
         run: node tests/payment-diagnostic-entrypoint.test.cjs
+      - name: Test Telegram hold-review audit logging
+        run: node tests/telegram-hold-review-audit.test.cjs
       - name: Test booking state without payment row
         run: node tests/payment-booking-without-row.test.cjs

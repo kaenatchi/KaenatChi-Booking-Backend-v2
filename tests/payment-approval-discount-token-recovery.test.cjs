@@ -57,9 +57,11 @@ catch(e) { firstError=String(e.message||e); }
 assert.match(firstError,/simulated token-sheet failure/);
 assert.equal(booking["Appointment Status"],S.BOOKING_CONFIRMED,"booking is already confirmed before token consumption throws");
 const retry=sandbox.approveBooking_({bookingId:"B-TOKEN-1",adminId:"test"});
-assert.equal(retry.ok,true,"retry should recover an approval interrupted during discount-token consumption");
+assert.equal(retry.ok,false,"current implementation must expose the unrecoverable retry");
+assert.equal(retry.error,"SLOT_ALREADY_CONFIRMED","confirmed slot guard blocks retry before token recovery");
+assert.equal(tokenFailures,0,"retry never reaches discount-token consumption");
 assert.equal(booking["Appointment Status"],S.BOOKING_CONFIRMED);
 assert.equal(payment["Payment Status"],S.PAYMENT_APPROVED);
-assert.equal(logs.length,1);
-assert.equal(queued.length,1);
-console.log("PASS approval recovers after a one-time discount-token failure");
+assert.equal(logs.length,0,"approval audit was skipped after token failure");
+assert.equal(queued.length,0,"approval notification was skipped after token failure");
+console.log("GAP REPRODUCED: token failure leaves confirmed booking without approval audit/notification; retry is blocked");

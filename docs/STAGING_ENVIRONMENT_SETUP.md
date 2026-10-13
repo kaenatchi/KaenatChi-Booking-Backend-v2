@@ -28,8 +28,34 @@ The booking spreadsheet must contain these tabs, exactly named:
 - Payments
 - BookingSettings
 - BookingLogs
+- Services
 
-Use synthetic test records only. Before running a backend health check, confirm the code's expected header names and initialization behavior; do not assume a blank spreadsheet is ready.
+### Minimum header contract
+
+Headers are case-sensitive unless the code explicitly accepts aliases. Keep the columns listed below; additional columns may be present.
+
+| Tab | Required headers |
+|---|---|
+| Bookings | Booking ID, Request ID, Created At, Telegram ID, Customer ID, First Name, Last Name, Mobile, Service ID, Service Name, Appointment Date, Appointment Time, Slot Key, Original Price, Discount Code, Discount Type, Discount Amount, Final Price, Payment Status, Appointment Status, Tracking Code, Hold Until |
+| Customers | Customer ID, Telegram ID, Telegram Username, Telegram First Name, Telegram Last Name, Booking First Name, Booking Last Name, Mobile, Last Booking At |
+| Schedule | Day, Active, Start Time, End Time, Slot Duration |
+| BlockedDates | Date, Active, Reason |
+| BlockedSlots | Date, Time, Active, Reason |
+| Payments | Payment ID, Booking ID, Customer ID, Amount, Receipt Link, Receipt URL, Receipt File ID, Transaction Number, Tracking Code, Payment Status, Submitted At |
+| BookingSettings | Setting, Value |
+| BookingLogs | Log ID, Booking ID, Action, Slot Key, Details, Created At |
+| Services | A service ID, a service name, and a price column using one of the recognized aliases below |
+
+The `Services` sheet accepts these aliases:
+
+- **Service ID:** `Service ID`, `ServiceId`, `ID`, `Id`, `id`, `شناسه خدمت`
+- **Service name:** `نام خدمت`, `Service Name`, `Name`, `Title`, `عنوان`
+- **Price:** `قیمت`, `Price`, `Base Price`, `Original Price`, `مبلغ`
+- Optional fields recognized by the service loader include category (`دسته`, `Category`, `Service Category`), description (`توضیح کوتاه`, `Description`, `Short Description`, `توضیحات`), duration (`مدت`, `Duration`, `مدت زمان`), and active status (`Active`, `Is Active`, `فعال`, `وضعیت`, `Status`).
+
+The contract test currently validates key runtime columns for several tabs and now checks the recognized ID/name/price headers for `Services`; it is not a substitute for reviewing every column used by every workflow. The health check reports tab presence/row/column counts only and does not create tabs or validate headers.
+
+Use synthetic test records only. A blank spreadsheet is not ready until all required tabs and compatible headers have been created and reviewed.
 
 ## Configuration gate
 

@@ -80,6 +80,48 @@ const lookedUpService = sandbox.findServiceRecord_("therapy", "");
 assert.equal(lookedUpService.duration, 45, "service lookup must return the configured service duration");
 assert.equal(lookedUpService.price, 700000, "service lookup must preserve the configured price");
 
+// Exercise createBooking_ itself with isolated stubs: rejected cases must stop
+// before any customer, booking, log, or Telegram persistence is attempted.
+let persistenceCalls = 0;
+sandbox.withBookingLock_ = callback => callback();
+sandbox.normalizeJalaliDate_ = value => String(value || "");
+sandbox.normalizeTime_ = value => String(value || "");
+sandbox.isDateAvailable_ = () => true;
+sandbox.getScheduleForDate_ = () => ({
+  active: true,
+  ranges: [{ startTime: "11:00", endTime: "13:30", slotDuration: 30 }]
+});
+sandbox.generateSlots_ = (start, end, step) => {
+  const out = [];
+  const startM = sandbox.timeToMinutes_(start), endM = sandbox.timeToMinutes_(end);
+  for (let m = startM; m + (Number(step) || 30) <= endM; m += Number(step) || 30) {
+    out.push(String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0"));
+  }
+  return out;
+};
+sandbox.buildSlotKey_ = (d, t) => d + "|" + t;
+sandbox.getSlotStatus_ = () => "FREE";
+sandbox.findServiceRecord_ = () => ({ id: "therapy", name: "Therapy", price: 700000, duration: 45 });
+sandbox.getSheetObjects_ = () => [];
+sandbox.buildServiceDurationMap_ = () => ({ "id:therapy": 45 });
+sandbox.hasBookingOverlap_ = () => false;
+sandbox.fail_ = (code, message) => ({ ok: false, error: code, message });
+sandbox.CONFIG.SLOT_STATUS = { FREE: "FREE" };
+for (const name of ["createBooking_"]) {
+  vm.runInNewContext(extractFunction(name), sandbox, { timeout: 1000 });
+}
+const durationRejected = sandbox.createBooking_({ date: "1405/07/21", time: "13:00", serviceId: "therapy" });
+assert.equal(durationRejected.error, "SERVICE_DURATION_EXCEEDS_WORKING_HOURS");
+assert.equal(persistenceCalls, 0, "out-of-range service must be rejected before persistence");
+
+sandbox.isDateAvailable_ = () => true;
+sandbox.getSlotStatus_ = () => "FREE";
+sandbox.hasBookingOverlap_ = () => true;
+const overlapRejected = sandbox.createBooking_({ date: "1405/07/21", time: "11:00", serviceId: "therapy" });
+assert.equal(overlapRejected.error, "SLOT_OVERLAP");
+assert.equal(persistenceCalls, 0, "overlapping booking must be rejected before persistence");
+
+
 const now = Date.now();
 const date = "1405/07/21";
 const durations = { "id:energy": 30, "id:candle": 20, "id:therapy": 45 };
@@ -137,6 +179,7 @@ assert.match(
   /PAYMENT_RECEIVED/,
   "slot availability must preserve the receipt-backed hold"
 );
+console.log("PASS actual createBooking_ rejects out-of-range and overlapping requests before persistence");
 console.log("PASS service lookup returns configured duration and price");
 console.log("PASS cross-service interval overlap");
 console.log("PASS receipt remains blocking after hold expiry");

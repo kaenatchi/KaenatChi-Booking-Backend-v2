@@ -1129,9 +1129,7 @@ function sendBookingTelegramNotifications_(booking, eventType, queueItem) {
   var customerDelivered =
     !customerRequired ||
     !!(queueItem && queueItem.customerDelivered === true) ||
-    results.some(function(item, index) {
-      return index >= 0 && item && item.ok === true;
-    });
+    !!(typeof customerResult !== 'undefined' && customerResult && customerResult.ok === true);
 
   /*
    * The queue item is complete only when every configured recipient has

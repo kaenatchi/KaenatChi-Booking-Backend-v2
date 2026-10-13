@@ -6,6 +6,7 @@
 const CORE = Object.freeze({
   TZ: 'Asia/Tehran',
   CMS_ID: '1cf6SFL80xJ8YrBPlr_Fp9TYhkKGkhu2U45D2WTSyNz0',
+  VIP_ID: '1TpljGwyRpHcxyyR6Zm1mbT2CPJBvFeHCvD3QH34BuGs',
   STAGING_PROP: 'KAENATCHI_BOOKING_STAGING_SHEET_ID',
   ADMIN_SECRET_PROP: 'KAENATCHI_BOOKING_ADMIN_SECRET',
   BOT_TOKEN_PROP: 'KAENATCHI_TELEGRAM_BOT_TOKEN',
@@ -128,7 +129,7 @@ function createRequest_(b) {
     const firstName = String(b.firstName || '').trim();
     const lastName = String(b.lastName || '').trim();
     const phone = String(b.phone || '');
-    if (!/^[\u0600-\u06FF\u200c\s]+$/.test(firstName) || !/^[\u0600-\u06FF\u200c\s]+$/.test(lastName)) fail_('INVALID_NAME','نام و نام خانوادگی را فقط با حروف فارسی وارد کن.');
+    if (!/^[\u0621-\u063A\u0641-\u064A\u067E\u0686\u0698\u06A9\u06AF\u06CC\u200c\s]+$/.test(firstName) || !/^[\u0621-\u063A\u0641-\u064A\u067E\u0686\u0698\u06A9\u06AF\u06CC\u200c\s]+$/.test(lastName)) fail_('INVALID_NAME','نام و نام خانوادگی را فقط با حروف فارسی وارد کن.');
     if (!/^09[0-9]{9}$/.test(phone)) fail_('INVALID_PHONE','شماره همراه باید دقیقاً ۱۱ رقم انگلیسی و با 09 شروع شود.');
     const date = String(b.date || '');
     const time = normalizeTime_(b.time);
@@ -278,9 +279,24 @@ function getStatus_(trackingCode,phone) {
 
 function validateDiscountReadOnly_(code,subtotal) {
   if(!code) return {code:'',amount:0};
-  // Discount tokens are intentionally not mutated here. Until the read-only VIP schema
-  // is wired and tested, an unverified code cannot silently change the server total.
-  return {code,amount:0};
+  const clean=String(code).trim().toUpperCase();
+  const vip=SpreadsheetApp.openById(CORE.VIP_ID);
+  const ts=vip.getSheetByName('توکن ها');
+  const cs=vip.getSheetByName('مشتریان');
+  if(!ts||!cs) fail_('DISCOUNT_UNAVAILABLE','امکان بررسی کد تخفیف در حال حاضر وجود ندارد.');
+  const tokens=ts.getLastRow()>1?ts.getRange(2,1,ts.getLastRow()-1,Math.max(10,ts.getLastColumn())).getValues():[];
+  const customers=cs.getLastRow()>1?cs.getRange(2,1,cs.getLastRow()-1,8).getValues():[];
+  const token=tokens.find(r=>String(r[0]||'').trim().toUpperCase()===clean);
+  if(!token) fail_('INVALID_DISCOUNT','کد تخفیف معتبر نیست.');
+  const customer=customers.find(r=>String(r[0]||'').trim()===String(token[1]||'').trim());
+  const status=String(token[5]||'').trim();
+  const expiry=Number(token[9]||0);
+  if(status==='مصرف‌شده') fail_('DISCOUNT_USED','کد تخفیف قبلاً استفاده شده است.');
+  if(status!=='فعال') fail_('DISCOUNT_INACTIVE','کد تخفیف فعال نیست.');
+  if(expiry&&expiry<=Date.now()) fail_('DISCOUNT_EXPIRED','کد تخفیف منقضی شده است.');
+  if(!customer||String(customer[7]||'').trim()!=='فعال') fail_('DISCOUNT_MEMBER_INACTIVE','عضویت مربوط به این کد تخفیف فعال نیست.');
+  const percent=Math.max(0,Math.min(100,num_(token[2])));
+  return {code:clean,percent,amount:Math.round(subtotal*percent/100)};
 }
 
 function scheduleForDay_(day) {
@@ -294,7 +310,6 @@ function scheduleForDay_(day) {
 function readClosureSet_() {
   const dates=new Set(),slots=new Set();
   const ss=cms_();
-  [['BlockedDates',['Date','تاریخ']].forEach(()=>{})];
   readObjects_(ss,['BlockedDates','blockedDates']).forEach(r=>{
     if(active_(first_(r,['Active','فعال','Status']))) {
       const d=normalizeDate_(first_(r,['Date','تاریخ','Blocked Date']));

@@ -4949,7 +4949,8 @@ function findServiceRecord_(serviceId,serviceName){
     if(found)return {
       id:String(firstField_(found,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||requestedId||''),
       name:String(firstField_(found,['نام خدمت','Service Name','Name','Title','عنوان'])||requestedName||''),
-      price:toNumber_(firstField_(found,['قیمت','Price','Base Price','Original Price','مبلغ']))
+      price:toNumber_(firstField_(found,['قیمت','Price','Base Price','Original Price','مبلغ'])),
+      duration:toNumber_(firstField_(found,['مدت','Duration','مدت زمان']))
     };
   }
   return null;

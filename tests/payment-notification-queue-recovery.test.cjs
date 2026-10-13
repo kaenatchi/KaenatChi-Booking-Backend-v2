@@ -41,8 +41,19 @@ function makeSandbox(action) {
   };
   const payment = {"Booking ID": booking["Booking ID"], "Payment Status": S.PAYMENT_RECEIVED, _row: 3};
   const logs = [];
-  const queued = [];
+  const properties = {};
   let queueStorageFails = true;
+  const scriptProperties = {
+    getProperty: key => Object.prototype.hasOwnProperty.call(properties,key) ? properties[key] : null,
+    setProperty: (key,value) => {
+      if (key === "KAENATCHI_TELEGRAM_QUEUE" && queueStorageFails) {
+        queueStorageFails = false;
+        throw new Error("simulated ScriptProperties storage failure");
+      }
+      properties[key] = value;
+    },
+    deleteProperty: key => { delete properties[key]; }
+  };
   const sandbox = {
     CONFIG: {
       STATUSES: S,
@@ -64,18 +75,17 @@ function makeSandbox(action) {
       logs.push({...entry});
       return true;
     },
-    queueBookingTelegramNotification_: (b, eventType) => {
-      if (queueStorageFails) { queueStorageFails = false; return {ok:false, queued:false}; }
-      if (!queued.some(x => x.bookingId === b["Booking ID"] && x.eventType === eventType)) {
-        queued.push({bookingId:b["Booking ID"], eventType});
-      }
-      return {ok:true, queued:true};
-    },
-    fail_: (error, message) => ({ok:false, error, message}),
-    Date, String
+    PropertiesService: {getScriptProperties: () => scriptProperties},
+    console: {warn: () => {}},
+    JSON, Date, String,
+    fail_: (error, message) => ({ok:false, error, message})
   };
+  vm.runInNewContext(extractFunction("queueBookingTelegramNotification_"), sandbox, {timeout:1000});
   vm.runInNewContext(extractFunction(action), sandbox, {timeout:1000});
-  return {sandbox, booking, payment, logs, queued};
+  return {
+    sandbox, booking, payment, logs,
+    queued: () => JSON.parse(properties["KAENATCHI_TELEGRAM_QUEUE"] || "[]")
+  };
 }
 
 {
@@ -92,7 +102,7 @@ function makeSandbox(action) {
   assert.equal(retry.ok, true);
   assert.equal(retry.notificationQueued, true, "retry must recover the missing approval notice");
   assert.equal(x.logs.filter(l => l.action === "ADMIN_APPROVED").length, 1, "admin audit must not duplicate on retry");
-  assert.equal(x.queued.length, 1, "approval notification must be queued exactly once");
+  assert.equal(x.queued().length, 1, "approval notification must be queued exactly once");
 }
 
 {
@@ -109,7 +119,7 @@ function makeSandbox(action) {
   assert.equal(retry.ok, true);
   assert.equal(retry.notificationQueued, true, "retry must recover the missing rejection notice");
   assert.equal(x.logs.filter(l => l.action === "ADMIN_REJECTED").length, 1, "rejection audit must not duplicate on retry");
-  assert.equal(x.queued.length, 1, "rejection notification must be queued exactly once");
+  assert.equal(x.queued().length, 1, "rejection notification must be queued exactly once");
 }
 
 

@@ -38,6 +38,26 @@ assert.throws(
 );
 assert.equal(openByIdCalls, 0, "openById must not run for a shared ID");
 
+// Missing IDs must fail closed too; never reach openById.
+sandbox.CONFIG.SPREADSHEET_ID = "";
+assert.throws(
+  () => sandbox.getSpreadsheet_(),
+  /STAGING SAFETY BLOCK/,
+  "missing booking spreadsheet ID must be blocked"
+);
+assert.equal(openByIdCalls, 0, "openById must not run when booking ID is missing");
+
+sandbox.CONFIG.SPREADSHEET_ID = "staging-id";
+sandbox.CONFIG.VIP.SPREADSHEET_ID = "";
+assert.throws(
+  () => sandbox.getSpreadsheet_(),
+  /STAGING SAFETY BLOCK/,
+  "missing CMS/VIP spreadsheet ID must be blocked"
+);
+assert.equal(openByIdCalls, 0, "openById must not run when comparison ID is missing");
+
+sandbox.CONFIG.VIP.SPREADSHEET_ID = "shared-id";
+
 sandbox.CONFIG.SPREADSHEET_ID = "staging-id";
 assert.equal(sandbox.getSpreadsheet_().id, "staging-id");
 assert.equal(openByIdCalls, 1, "separate staging ID should pass");
@@ -50,4 +70,5 @@ assert.equal(openByIdCalls, 2, "non-staging mode remains unchanged");
 console.log("PASS actual Code.gs accessor blocks shared ID before openById");
 console.log("PASS separate staging ID is allowed");
 console.log("PASS non-staging configuration remains unchanged");
-console.log("PASS total: 3/3");
+console.log("PASS missing IDs are blocked before openById");
+console.log("PASS total: 4/4");

@@ -10,6 +10,7 @@ on:
       - "tests/telegram-approval-queue-audit-recovery.test.cjs"
       - "tests/payment-notification-queue-recovery.test.cjs"
       - "tests/discount-token-idempotency.test.cjs"
+      - "tests/telegram-callback-queue-retry.test.cjs"
       - ".github/workflows/payment-consistency-tests.yml"
 
 jobs:

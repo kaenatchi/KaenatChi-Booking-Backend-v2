@@ -37,7 +37,7 @@ const sandbox = {
   getBookingByIdObject_: () => { throw new Error("hold-review must not fetch or mutate booking"); }
 };
 vm.runInNewContext(
-  extractFunction("withBookingLock_") + "\\n" + extractFunction("handleTelegramCallbackQuery_"),
+  extractFunction("withBookingLock_") + "\n" + extractFunction("handleTelegramCallbackQuery_"),
   sandbox,
   {timeout:1000}
 );

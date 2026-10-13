@@ -3704,6 +3704,20 @@ function validateDiscount_(request){
 
 function createBooking_(request){
   return withBookingLock_(function(){
+    var incomingRequestId = String(request.requestId || '').trim();
+    if (incomingRequestId) {
+      var existingRequest = getSheetObjects_(CONFIG.SHEETS.BOOKINGS).find(function(row) {
+        return String(row['Request ID'] || '') === incomingRequestId;
+      });
+      if (existingRequest) {
+        return {
+          ok: true,
+          booking: publicBooking_(existingRequest),
+          duplicate: true,
+          message: 'این درخواست قبلاً ثبت شده است.'
+        };
+      }
+    }
     var date=normalizeJalaliDate_(request.date||request.appointmentDate);
     var time=normalizeTime_(request.time||request.appointmentTime);
     if(!date||!time)return fail_('DATE_TIME_REQUIRED','تاریخ و ساعت الزامی است.');

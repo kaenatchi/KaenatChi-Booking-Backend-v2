@@ -112,4 +112,22 @@ function makeSandbox(action) {
   assert.equal(x.queued.length, 1, "rejection notification must be queued exactly once");
 }
 
+
+{
+  const sendSource = extractFunction("sendBookingTelegramNotifications_");
+  const sandbox = {
+    getTelegramConfig_: () => ({adminChatId:"ADMIN",}),
+    buildBookingTelegramText_: () => "payment status",
+    getBookingTelegramAdminKeyboard_: () => ({}),
+    sendTelegramMessage_: chatId => ({ok:chatId !== "ADMIN"}),
+    String
+  };
+  vm.runInNewContext(sendSource, sandbox, {timeout:1000});
+  const result = sandbox.sendBookingTelegramNotifications_({"Booking ID":"B-SEND-1","Telegram ID":"CUSTOMER"}, "approved");
+  assert.equal(result.results.length, 2);
+  assert.equal(result.results[0].ok, false, "admin delivery intentionally fails");
+  assert.equal(result.results[1].ok, true, "customer delivery intentionally succeeds");
+  assert.equal(result.ok, false, "customer success must not mask admin notification failure");
+}
+
 console.log("PASS approval/rejection queue-save failure is visible; payment state and admin audit persist; retry recovers one notification without duplicate audit/queue entries");

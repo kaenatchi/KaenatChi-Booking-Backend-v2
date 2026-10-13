@@ -35,3 +35,5 @@ jobs:
         run: node tests/discount-token-idempotency.test.cjs
       - name: Test Telegram callback retry after queue-save failure
         run: node tests/telegram-callback-queue-retry.test.cjs
+      - name: Test stale rejection callback against confirmed booking
+        run: node tests/reject-already-confirmed-booking.test.cjs

@@ -98,17 +98,17 @@ assert.equal(
 );
 assert.match(
   source.slice(source.indexOf("function createBooking_(request){"), source.indexOf("function hasRequiredReceiptImage_")),
-  /return withBookingLock_\\(function\\(\\)/,
+  /return withBookingLock_\(function\(\)/,
   "booking overlap validation must remain inside the shared booking lock"
 );
 assert.match(
   source.slice(source.indexOf("function createBooking_(request){"), source.indexOf("function hasRequiredReceiptImage_")),
-  /hasBookingOverlap_\\(activeBookings,date,time,serviceDuration/,
+  /hasBookingOverlap_\(activeBookings,date,time,serviceDuration/,
   "booking creation must enforce the overlap guard"
 );
 assert.match(
   source.slice(source.indexOf("function getAvailableSlots_(request)"), source.indexOf("function buildServiceDurationMap_")),
-  /hasBookingOverlap_\\(bookingRows, date, time, serviceDuration/,
+  /hasBookingOverlap_\(bookingRows, date, time, serviceDuration/,
   "availability must hide slots that overlap existing appointments"
 );
 assert.match(

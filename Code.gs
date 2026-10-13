@@ -1068,24 +1068,24 @@ function buildBookingTelegramText_(booking, eventType) {
 
   if (eventType === 'request_received') {
     return (
-      '📩 <b>درخواست جدید نوبت کائنات‌چی</b>\\n\\n' +
-      '👤 ' + customer + '\\n' +
-      '✨ ' + service + '\\n' +
-      '📅 ' + date + ' — ' + time + '\\n' +
-      '💳 مبلغ: ' + price + '\\n' +
-      '🎫 کد پیگیری: <code>' + tracking + '</code>\\n\\n' +
+      '📩 <b>درخواست جدید نوبت کائنات‌چی</b>\n\n' +
+      '👤 ' + customer + '\n' +
+      '✨ ' + service + '\n' +
+      '📅 ' + date + ' — ' + time + '\n' +
+      '💳 مبلغ: ' + price + '\n' +
+      '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' +
       '⏳ وضعیت: در انتظار بررسی مایا؛ تا پیش از پذیرش، پرداختی درخواست نشده است.'
     );
   }
 
   if (eventType === 'accepted') {
     return (
-      '✅ <b>درخواست نوبت پذیرفته شد</b>\\n\\n' +
-      '👤 ' + customer + '\\n' +
-      '✨ ' + service + '\\n' +
-      '📅 ' + date + ' — ' + time + '\\n' +
-      '💳 مبلغ: ' + price + '\\n' +
-      '🎫 کد پیگیری: <code>' + tracking + '</code>\\n\\n' +
+      '✅ <b>درخواست نوبت پذیرفته شد</b>\n\n' +
+      '👤 ' + customer + '\n' +
+      '✨ ' + service + '\n' +
+      '📅 ' + date + ' — ' + time + '\n' +
+      '💳 مبلغ: ' + price + '\n' +
+      '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' +
       '⏱️ مهلت پرداخت: ۱۰ دقیقه از زمان پذیرش'
     );
   }

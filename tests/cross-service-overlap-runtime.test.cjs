@@ -104,6 +104,7 @@ sandbox.getSlotStatus_ = () => "FREE";
 sandbox.findServiceRecord_ = () => ({ id: "therapy", name: "Therapy", price: 700000, duration: 45 });
 sandbox.getSheetObjects_ = () => [];
 sandbox.buildServiceDurationMap_ = () => ({ "id:therapy": 45 });
+const actualHasBookingOverlap = sandbox.hasBookingOverlap_;
 sandbox.hasBookingOverlap_ = () => false;
 sandbox.fail_ = (code, message) => ({ ok: false, error: code, message });
 sandbox.CONFIG.SHEETS = { BOOKINGS: "Bookings" };
@@ -121,6 +122,8 @@ sandbox.hasBookingOverlap_ = () => true;
 const overlapRejected = sandbox.createBooking_({ date: "1405/07/21", time: "11:00", serviceId: "therapy" });
 assert.equal(overlapRejected.error, "SLOT_OVERLAP");
 assert.equal(persistenceCalls, 0, "overlapping booking must be rejected before persistence");
+// Restore the actual overlap helper before testing interval fixtures below.
+sandbox.hasBookingOverlap_ = actualHasBookingOverlap;
 
 
 const now = Date.now();

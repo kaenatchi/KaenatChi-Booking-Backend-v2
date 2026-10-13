@@ -1121,13 +1121,25 @@ function sendBookingTelegramNotifications_(booking, eventType, queueItem) {
     }
   }
 
+  var adminDelivered =
+    !!(adminResult && adminResult.ok === true) ||
+    !!(queueItem && queueItem.adminDelivered === true);
+  var customerRequired =
+    !!customerChatId && customerChatId !== config.adminChatId;
+  var customerDelivered =
+    !customerRequired ||
+    !!(queueItem && queueItem.customerDelivered === true) ||
+    results.some(function(item, index) {
+      return index >= 0 && item && item.ok === true;
+    });
+
+  /*
+   * The queue item is complete only when every configured recipient has
+   * received the message. Per-recipient flags let retries target only the
+   * failed recipient without duplicating a successful delivery.
+   */
   return {
-    /*
-     * Queue completion depends on delivery to the admin, who must act on
-     * payment notifications. A successful customer delivery cannot hide an
-     * admin delivery failure or missing admin-chat configuration.
-     */
-    ok: !!((adminResult && adminResult.ok === true) || (queueItem && queueItem.adminDelivered === true)),
+    ok: adminDelivered && customerDelivered,
     results: results
   };
 }

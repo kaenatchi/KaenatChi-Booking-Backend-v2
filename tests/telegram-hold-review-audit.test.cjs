@@ -21,11 +21,11 @@ function extractFunction(name) {
 }
 let logs = [], answers = [], bookingWrites = 0, paymentWrites = 0, failAudit = false;
 let priorLogs = [];
-let lockAcquires = 0, lockReleases = 0;
+let lockAcquires = 0, lockReleases = 0, failLock = false;
 const sandbox = {
   CONFIG: {SHEETS:{BOOKING_LOGS:"BookingLogs"},LOG_ACTIONS:{PAYMENT_REVIEW_HOLD:"PAYMENT_REVIEW_HOLD"}},
   LockService: {getScriptLock: () => ({
-    waitLock: ms => { assert.equal(ms,30000); lockAcquires++; },
+    waitLock: ms => { assert.equal(ms,30000); lockAcquires++; if (failLock) throw new Error('simulated lock timeout'); },
     releaseLock: () => { lockReleases++; }
   })},
   getTelegramConfig_: () => ({adminChatId:"admin-1"}),
@@ -83,9 +83,23 @@ assert.equal(paymentWrites, 0);
 assert.equal(lockAcquires, 3, "audit failure path also acquires lock");
 assert.equal(lockReleases, 3, "lock releases when audit append throws");
 
+priorLogs = [];
+failAudit = false;
+failLock = true;
+answers = [];
+const lockFailed = sandbox.handleTelegramCallbackQuery_(callback("admin-1"));
+assert.equal(lockFailed.ok, false);
+assert.equal(lockFailed.error, "PAYMENT_REVIEW_AUDIT_FAILED");
+assert.equal(lockFailed.unchanged, true);
+assert.equal(logs.length, 1, "lock timeout must not append audit record");
+assert.equal(answers.length, 1);
+assert.equal(answers[0][2], true);
+assert.equal(lockReleases, 3, "lock that was never acquired must not be released");
+
 console.log("PASS actual withBookingLock_ acquires and releases script lock");
 console.log("PASS first hold-review writes one audit record only");
 console.log("PASS repeated click is idempotent and creates no duplicate log");
 console.log("PASS unauthorized callback cannot create audit record");
 console.log("PASS audit failure is reported without claiming success");
-console.log("PASS total: 4/4 scenarios");
+console.log("PASS lock acquisition timeout fails closed without logging");
+console.log("PASS total: 5/5 scenarios");

@@ -74,6 +74,7 @@ const acceptedAgain=sandbox.acceptBooking_({bookingId:booking["Booking ID"],admi
 assert.equal(acceptedAgain.ok,true);
 assert.equal(acceptedAgain.alreadyAccepted,true);
 assert.equal(new Date(booking["Hold Until"]).getTime(),deadline,"retry must not reset the deadline");
+assert.equal(queued.filter(event=>event==="accepted").length,2,"retry must recover the idempotent acceptance notice");
 
 const unaccepted = {...booking,"Payment Status":S.PAYMENT_AWAITING_ACCEPTANCE,"Hold Until":""};
 sandbox.getBookingByIdObject_=()=>unaccepted;

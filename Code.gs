@@ -1169,6 +1169,10 @@ function queueBookingTelegramNotification_(booking, eventType) {
 
     var bookingId=String(booking['Booking ID'] || '');
     var normalizedEventType=String(eventType || '');
+    var sentKey='KAENATCHI_TELEGRAM_SENT:'+encodeURIComponent(bookingId)+':'+encodeURIComponent(normalizedEventType);
+    if(String(props.getProperty(sentKey)||'')==='1'){
+      return {ok:true,queued:false,duplicate:true,alreadySent:true};
+    }
     var alreadyQueued=queue.some(function(item){
       return String(item&&item.bookingId||'')===bookingId &&
         String(item&&item.eventType||'')===normalizedEventType;
@@ -1295,6 +1299,17 @@ function processBookingTelegramNotificationQueue_() {
        */
       if (result && result.ok === false) {
         throw new Error('Telegram delivery failed.');
+      }
+
+      /*
+       * Persist a completion marker so an idempotent approval/rejection retry
+       * cannot enqueue the same event again after the worker has drained it.
+       */
+      if(result && result.ok === true){
+        var sentKey='KAENATCHI_TELEGRAM_SENT:'+
+          encodeURIComponent(String(item.bookingId||''))+':'+
+          encodeURIComponent(String(item.eventType||''));
+        PropertiesService.getScriptProperties().setProperty(sentKey,'1');
       }
 
     } catch (error) {

@@ -1251,7 +1251,7 @@ function buildBookingTelegramText_(booking, eventType) {
     return '✅ <b>درخواست نوبت تأیید اولیه شد</b>\n\n' +
       '👤 ' + customer + '\n✨ ' + service + '\n📅 ' + date + ' — ' + time +
       '\n💳 مبلغ قابل پرداخت: ' + price + '\n🎫 کد پیگیری: <code>' + tracking +
-      '</code>\n\nبرای پرداخت، در مینی‌اپ کائنات‌چی وارد بخش «پیگیری درخواست» شو و کد پیگیری و شماره موبایل ثبت‌شده را وارد کن؛ سپس تصویر فیش را بارگذاری کن. مهلت پرداخت: ۱۰ دقیقه.';
+      '</code>\n\nبرای پرداخت، در مینی‌اپ کائنات‌چی وارد بخش «پیگیری درخواست» شو و کد پیگیری و شماره موبایل ثبت‌شده را وارد کن؛ سپس تصویر فیش را بارگذاری کن. مهلت پرداخت: ۳۰ دقیقه.';
   }
   if (eventType === 'request_rejected') {
     return '❌ <b>درخواست نوبت پذیرفته نشد</b>\n\n' +
@@ -4572,10 +4572,10 @@ function approveBookingRequest_(request) {
     }
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Admin Note':'INITIAL_REQUEST_APPROVED',
-      'Hold Until':new Date(Date.now()+10*60000),
+      'Hold Until':new Date(Date.now()+30*60000),
       'Initial Approved At':new Date(),'Initial Approved By':String(request.adminId||request.admin||'admin')
     });
-    appendBookingLog_({action:'INITIAL_REQUEST_APPROVED',bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Initial request approved; 10-minute payment window started.'});
+    appendBookingLog_({action:'INITIAL_REQUEST_APPROVED',bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Initial request approved; 30-minute payment window started.'});
     queueBookingTelegramNotificationWithAudit_(getBookingByIdObject_(b['Booking ID']), 'request_approved');
     return {ok:true,bookingId:b['Booking ID'],trackingCode:b['Tracking Code'],status:'AWAITING_PAYMENT'};
   });
@@ -6900,7 +6900,7 @@ function testBookingTelegramTextPure_() {
   var paymentText = buildBookingTelegramText_(booking, 'payment_received');
   var checks = [
     {name:'initial request says 12-hour review window',ok:requestText.indexOf('۱۲ ساعت') !== -1},
-    {name:'accepted request says 10-minute payment window',ok:acceptedText.indexOf('۱۰ دقیقه') !== -1},
+    {name:'accepted request says 30-minute payment window',ok:acceptedText.indexOf('۳۰ دقیقه') !== -1},
     {name:'payment caption includes customer name',ok:paymentText.indexOf('آزمایشی کائنات‌چی') !== -1},
     {name:'payment caption includes amount',ok:paymentText.indexOf('700000') !== -1},
     {name:'payment caption includes bank reference',ok:paymentText.indexOf('BANK-TEST-123') !== -1},

@@ -35,6 +35,7 @@ const sandbox={
  getSheetObjects_:()=>[{...payment}],
  updateRowFields_:(sheet,row,fields)=>Object.assign(sheet==="Payments"?payment:booking,fields),
  appendBookingLog_:entry=>{if(failAuditOnce){failAuditOnce=false;throw new Error("simulated booking audit write failure");}logs.push(entry);},
+ ensureBookingLogOnce_:entry=>{if(!logs.some(x=>x.bookingId===entry.bookingId&&x.action===entry.action)){sandbox.appendBookingLog_(entry);}},
  queueBookingTelegramNotification_:(...args)=>queued.push(args),
  fail_:(error,message)=>({ok:false,error,message}),Date,String
 };

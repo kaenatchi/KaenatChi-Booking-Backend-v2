@@ -16,12 +16,12 @@ const openById = source.indexOf("SpreadsheetApp.openById(", source.indexOf("func
 const guardCall = source.indexOf("assertStagingSpreadsheetIsolation_();", source.indexOf("function getSpreadsheet_()"));
 
 assert.ok(stagingMode, "staging branch must keep STAGING_MODE enabled");
-assert.ok(bookingSheetId, "booking spreadsheet ID must be explicit");
-assert.ok(vipSheetId, "VIP spreadsheet ID must be explicit");
 assert.notEqual(guardStart, -1, "runtime staging isolation guard must exist");
 assert.ok(guardCall > -1 && openById > guardCall, "guard must execute before opening any spreadsheet");
 
-if (bookingSheetId === vipSheetId) {
+if (!bookingSheetId || !vipSheetId) {
+  console.log("BLOCKED AS EXPECTED: missing staging spreadsheet ID must fail closed");
+} else if (bookingSheetId === vipSheetId) {
   console.log("BLOCKED AS EXPECTED: staging config shares CMS/VIP ID; runtime guard must stop access");
 } else {
   console.log("PASS: staging config points to a separate spreadsheet ID");

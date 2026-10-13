@@ -3813,6 +3813,10 @@ function rejectBooking_(request){
   return withBookingLock_(function(){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
     if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+    // A stale Telegram rejection button must never reverse an already-confirmed booking.
+    if(String(b['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_CONFIRMED){
+      return fail_('BOOKING_ALREADY_CONFIRMED','این نوبت قبلاً تأیید شده است و از مسیر رد پرداخت قابل تغییر نیست.');
+    }
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
       'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),

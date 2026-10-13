@@ -6166,6 +6166,87 @@ function testPaymentFlowDuplicate() {
 }
 
 
+function testPaymentBlockedUntilInitialRequestAccepted_() {
+  var result = {
+    ok:false,
+    bookingCreated:false,
+    paymentBlockedBeforeInitialAcceptance:false,
+    requestStillPending:false,
+    cleanedUp:false,
+    bookingId:'',
+    error:''
+  };
+  try {
+    var services=getSheetObjects_('Services');
+    var service=services.find(function(row){
+      var active=row['فعال']===undefined?true:isTruthy_(row['فعال']);
+      var name=String(firstField_(row,['نام خدمت','Service Name','Name','Title','عنوان'])||'').trim();
+      var price=toNumber_(firstField_(row,['قیمت','Price','Base Price','Original Price','مبلغ']));
+      return active&&name&&price>0;
+    });
+    if(!service) throw new Error('No active priced service found in staging Services tab.');
+
+    var dates=getAvailableDates_({});
+    if(!dates.ok||!dates.dates||!dates.dates.length) throw new Error('No bookable date found in staging.');
+    var date=normalizeJalaliDate_(dates.dates[0].date);
+    var slots=getAvailableSlots_({date:date});
+    var free=slots.slots&&slots.slots.find(function(slot){
+      return slot.available===true&&String(slot.status)===CONFIG.SLOT_STATUS.FREE;
+    });
+    if(!free) throw new Error('No free slot found in staging.');
+    var unique=String(Date.now());
+    var mobile='STG-GATE-'+unique;
+    var created=createBooking_({
+      requestId:'STG-GATE-REQ-'+unique,
+      telegramId:'STG-GATE-TG-'+unique,
+      customerId:'STG-GATE-CUS-'+unique,
+      firstName:'STAGING',
+      lastName:'PAYMENT-GATE',
+      mobile:mobile,
+      serviceId:String(firstField_(service,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||''),
+      serviceName:String(firstField_(service,['نام خدمت','Service Name','Name','Title','عنوان'])||''),
+      appointmentDate:date,
+      appointmentTime:normalizeTime_(free.time),
+      discountCode:''
+    });
+    if(!created||!created.ok) throw new Error('Staging create failed: '+JSON.stringify(created));
+    result.bookingCreated=true;
+    result.bookingId=String(created.booking.bookingId||'').trim();
+    var blocked=submitPayment_({
+      bookingId:result.bookingId,
+      mobile:mobile,
+      transactionNumber:'STG-NOT-PAID-'+unique,
+      receiptData:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+      receiptFileName:'staging-gate-test.png',
+      receiptMimeType:'image/png'
+    });
+    result.paymentBlockedBeforeInitialAcceptance=!!blocked&&blocked.ok===false&&blocked.error==='INITIAL_APPROVAL_REQUIRED';
+    var after=getBookingByIdObject_(result.bookingId);
+    result.requestStillPending=!!after&&
+      String(after['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING&&
+      String(after['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_PENDING;
+    if(!result.paymentBlockedBeforeInitialAcceptance) throw new Error('Payment was not blocked before initial admin acceptance: '+JSON.stringify(blocked));
+    if(!result.requestStillPending) throw new Error('Request/payment status changed after blocked payment attempt.');
+    result.ok=true;
+  } catch(e) {
+    result.error=String(e&&e.message?e.message:e);
+  }
+  try {
+    if(result.bookingId){
+      var b=getBookingByIdObject_(result.bookingId);
+      if(b&&String(b['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_PENDING){
+        releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);
+        result.cleanedUp=true;
+      }
+    }
+  } catch(cleanup) {
+    result.error+=(result.error?' | ':'')+'Cleanup failed: '+String(cleanup&&cleanup.message?cleanup.message:cleanup);
+  }
+  Logger.log('STAGING INITIAL-ACCEPTANCE PAYMENT GATE');
+  Logger.log(JSON.stringify(result,null,2));
+  return result;
+}
+
 function testApprovalBlockedBeforePayment() {
   var result={
     ok:false,

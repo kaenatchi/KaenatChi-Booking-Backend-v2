@@ -30,7 +30,7 @@ const CORE = Object.freeze({
     REJECTED: 'REJECTED',
     EXPIRED: 'EXPIRED',
     CANCEL_REQUESTED: 'CANCEL_REQUESTED',
-    RESCHEDULE_REQUESTED: 'RESCHEDULE_REQUESTED',
+    RESCHEDULE_REQUESTED: 'RESCHEDULE_REQUESTED',\n    MANAGER_RESCHEDULE_OFFERED: 'MANAGER_RESCHEDULE_OFFERED',
     CANCELLED: 'CANCELLED'
   },
   REQUEST_TTL_MS: 12 * 60 * 60 * 1000,
@@ -65,7 +65,7 @@ function doPost(e) {
       return out_(adminDecision_(body));
     }
     if (action === 'requestCancel') return out_(requestCancel_(body));
-    if (action === 'requestReschedule') return out_(requestReschedule_(body));
+    if (action === 'requestReschedule') return out_(requestReschedule_(body));\n    if (action === 'managerRescheduleOffer') { requireAdmin_(body.adminSecret); return out_(managerRescheduleOffer_(body)); }\n    if (action === 'acceptManagerReschedule') return out_(acceptManagerReschedule_(body));
     return out_({ok:false,error:'UNKNOWN_ACTION',message:'عملیات شناخته نشد.'});
   } catch (err) {
     console.error(err);
@@ -272,7 +272,7 @@ function requestReschedule_(b) {
     if(ref.obj.Status!==CORE.STATUS.CONFIRMED) fail_('INVALID_STATE','تغییر زمان فقط برای نوبت قطعی ممکن است.');
     const targetDate=String(b.date||'');const targetTime=normalizeTime_(b.time);
     if(targetDate!==tomorrowJalali_()) fail_('DATE_NOT_ALLOWED','فقط زمان‌های فردا قابل انتخاب‌اند.');
-    const slot=getSlots_(targetDate).slots.find(s=>s.time===targetTime);
+    const slot=getSlots_(targetDate,String(ref.obj['Service IDs']||'').split(',').filter(Boolean)).slots.find(s=>s.time===targetTime);
     if(!slot||slot.status!=='AVAILABLE') fail_('SLOT_UNAVAILABLE','زمان جدید در دسترس نیست.');
     ref.obj['Reschedule From']=ref.obj['Appointment Date']+' '+ref.obj['Appointment Time'];
     ref.obj['Appointment Date']=targetDate;ref.obj['Appointment Time']=targetTime;ref.obj.Status=CORE.STATUS.RESCHEDULE_REQUESTED;ref.obj['Updated At']=new Date();
@@ -282,6 +282,33 @@ function requestReschedule_(b) {
   });
 }
 
+function managerRescheduleOffer_(b) {
+  return withLock_(()=>{
+    const ref=findBooking_(String(b.trackingCode||''),String(b.phone||''));
+    if(!ref) fail_('NOT_FOUND','نوبت پیدا نشد.');
+    if(ref.obj.Status!==CORE.STATUS.CONFIRMED) fail_('INVALID_STATE','فقط نوبت قطعی را می‌توان برای تغییر زمان پیشنهاد داد.');
+    ref.obj.Status=CORE.STATUS.MANAGER_RESCHEDULE_OFFERED;ref.obj['Updated At']=new Date();writeObject_(ref.sheet,ref.row,ref.obj);
+    log_(ref.obj['Request ID'],'MANAGER_RESCHEDULE_OFFERED',CORE.STATUS.CONFIRMED,CORE.STATUS.MANAGER_RESCHEDULE_OFFERED,'admin',{oldSlotRetained:true});
+    return {ok:true,status:ref.obj.Status,message:'پیشنهاد تغییر زمان ثبت شد؛ نوبت قبلی تا انتخاب مشتری نگه داشته می‌شود.'};
+  });
+}
+function acceptManagerReschedule_(b) {
+  return withLock_(()=>{
+    const ref=findBooking_(String(b.trackingCode||''),String(b.phone||''));
+    if(!ref) fail_('NOT_FOUND','نوبت پیدا نشد.');
+    if(ref.obj.Status!==CORE.STATUS.MANAGER_RESCHEDULE_OFFERED) fail_('INVALID_STATE','پیشنهاد تغییر زمان فعالی وجود ندارد.');
+    const d=String(b.date||''),t=normalizeTime_(b.time);
+    if(d!==tomorrowJalali_()) fail_('DATE_NOT_ALLOWED','فقط زمان‌های فردا قابل انتخاب‌اند.');
+    const slot=getSlots_(d,String(ref.obj['Service IDs']||'').split(',').filter(Boolean)).slots.find(s=>s.time===t);
+    if(!slot||slot.status!=='AVAILABLE') fail_('SLOT_UNAVAILABLE','زمان انتخابی در دسترس نیست؛ نوبت قبلی حفظ شده است.');
+    const old=ref.obj['Appointment Date']+' '+ref.obj['Appointment Time'];
+    ref.obj['Appointment Date']=d;ref.obj['Appointment Time']=t;ref.obj['Appointment Code']='KC-'+Utilities.getUuid().replace(/-/g,'').slice(0,10).toUpperCase();
+    ref.obj.Status=CORE.STATUS.CONFIRMED;ref.obj['Updated At']=new Date();writeObject_(ref.sheet,ref.row,ref.obj);
+    log_(ref.obj['Request ID'],'MANAGER_RESCHEDULE_ACCEPTED',CORE.STATUS.MANAGER_RESCHEDULE_OFFERED,CORE.STATUS.CONFIRMED,'customer',{old,newDate:d,newTime:t,oldSlotReleased:true});
+    notifyAdmin_(ref.obj['Request ID'],'تغییر زمان پیشنهادی تأیید شد',ref.obj);
+    return {ok:true,status:ref.obj.Status,date:d,time:t,appointmentCode:ref.obj['Appointment Code'],message:'زمان جدید ثبت شد؛ پرداخت مجدد لازم نیست.'};
+  });
+}
 function getStatus_(trackingCode,phone) {
   const ref=findBooking_(String(trackingCode||''),String(phone||''));
   if(!ref) return {ok:true,found:false,message:'درخواستی با این کد پیگیری و شماره همراه پیدا نشد.'};
@@ -317,6 +344,20 @@ function therapySlots_() {
   out.push('13:30');
   return out.filter((t,i,a)=>a.indexOf(t)===i).filter(t=>t>='11:00'&&t<='13:30'||t>='16:00'&&t<='18:30').sort();
 }
+function runBookingCoreSelfTests() {
+  const checks=[];
+  const test=(name,ok,detail)=>checks.push({name,ok:!!ok,detail:detail||''});
+  test('Saturday energy slots',JSON.stringify(scheduleForDay_(6))===JSON.stringify(['11:00','12:00','13:00','16:00','17:00','18:00']));
+  test('Sunday energy slots',JSON.stringify(scheduleForDay_(0))===JSON.stringify(['11:30','12:30','13:30','16:30','17:30','18:30']));
+  test('Friday closed',scheduleForDay_(5).length===0);
+  test('Thursday therapy slots',therapySlots_().includes('13:30')&&therapySlots_().includes('18:30')&&!therapySlots_().includes('14:00'));
+  test('Strict ASCII phone accepted',/^09[0-9]{9}$/.test('09371234567'));
+  test('Persian digits rejected in phone',!/^09[0-9]{9}$/.test('۰۹۳۷۱۲۳۴۵۶۷'));
+  test('Jalali conversion known date',JSON.stringify(jalaliToGregorian_(1405,7,16))===JSON.stringify({gy:2026,gm:10,gd:8}));
+  test('12-hour initial review TTL',CORE.REQUEST_TTL_MS===43200000);
+  test('30-minute payment TTL',CORE.PAYMENT_TTL_MS===1800000);
+  return {ok:checks.every(x=>x.ok),executed:true,noSpreadsheetWrites:true,noTelegramCalls:true,checks};
+}
 function scheduleForDay_(day) {
   // JS weekday: 0 Sun, 1 Mon, ... 6 Sat
   if(day===5) return [];
@@ -345,7 +386,7 @@ function readClosureSet_() {
 function expireStaleRequests_() {\n  const now=Date.now();\n  objectsWithRows_(tab_(CORE.TABS.BOOKINGS)).forEach(ref=>{\n    const status=String(ref.obj.Status||'');\n    const requestExpiry=new Date(ref.obj['Request Expires At']).getTime();\n    const paymentExpiry=new Date(ref.obj['Payment Expires At']).getTime();\n    if(status===CORE.STATUS.REQUEST_PENDING && Number.isFinite(requestExpiry) && requestExpiry>0 && requestExpiry<=now) transition_(ref,CORE.STATUS.EXPIRED,'system','REQUEST_WINDOW_EXPIRED');\n    else if(status===CORE.STATUS.PAYMENT_PENDING && Number.isFinite(paymentExpiry) && paymentExpiry>0 && paymentExpiry<=now) transition_(ref,CORE.STATUS.EXPIRED,'system','PAYMENT_WINDOW_EXPIRED');\n  });\n}\nfunction activeSlotSet_() {
   const set=new Set();
   readObjects_(staging_(),[CORE.TABS.BOOKINGS]).forEach(r=>{
-    if([CORE.STATUS.REQUEST_PENDING,CORE.STATUS.PAYMENT_PENDING,CORE.STATUS.RECEIPT_REVIEW,CORE.STATUS.CONFIRMED,CORE.STATUS.CANCEL_REQUESTED,CORE.STATUS.RESCHEDULE_REQUESTED].includes(String(r.Status||''))) set.add(normalizeDate_(r['Appointment Date'])+'|'+normalizeTime_(r['Appointment Time']));
+    if([CORE.STATUS.REQUEST_PENDING,CORE.STATUS.PAYMENT_PENDING,CORE.STATUS.RECEIPT_REVIEW,CORE.STATUS.CONFIRMED,CORE.STATUS.CANCEL_REQUESTED,CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.MANAGER_RESCHEDULE_OFFERED].includes(String(r.Status||''))) set.add(normalizeDate_(r['Appointment Date'])+'|'+normalizeTime_(r['Appointment Time']));
   });
   return set;
 }

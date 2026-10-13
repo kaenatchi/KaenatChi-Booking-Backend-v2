@@ -407,7 +407,7 @@ function expireStaleRequests_() {\n  const now=Date.now();\n  objectsWithRows_(t
 function activeSlotSet_() {
   const set=new Set();
   readObjects_(staging_(),[CORE.TABS.BOOKINGS]).forEach(r=>{
-    if([CORE.STATUS.REQUEST_PENDING,CORE.STATUS.PAYMENT_PENDING,CORE.STATUS.RECEIPT_REVIEW,CORE.STATUS.CONFIRMED,CORE.STATUS.CANCEL_REQUESTED,CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.MANAGER_RESCHEDULE_OFFERED].includes(String(r.Status||''))) set.add(normalizeDate_(r['Appointment Date'])+'|'+normalizeTime_(r['Appointment Time']));
+    if([CORE.STATUS.REQUEST_PENDING,CORE.STATUS.PAYMENT_PENDING,CORE.STATUS.RECEIPT_REVIEW,CORE.STATUS.CONFIRMED,CORE.STATUS.CANCEL_REQUESTED,CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.MANAGER_RESCHEDULE_OFFERED].includes(String(r.Status||''))) set.add(normalizeDate_(r['Appointment Date'])+'|'+normalizeTime_(r['Appointment Time']));\n    if(String(r.Status||'')===CORE.STATUS.RESCHEDULE_REQUESTED && r['Requested Reschedule Date'] && r['Requested Reschedule Time']) set.add(normalizeDate_(r['Requested Reschedule Date'])+'|'+normalizeTime_(r['Requested Reschedule Time']));
   });
   return set;
 }

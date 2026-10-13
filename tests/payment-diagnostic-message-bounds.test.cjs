@@ -30,14 +30,14 @@ const cases = Array.from({length:40}, (_,i) => ({
 }));
 let sentMessage = "";
 const sandbox = {
-  getTelegramConfig_: () => ({adminChatId:"ADMIN"}),
+  getTelegramConfig_: () => ({adminChatId:"ADMIN",adminUserId:"7"}),
   answerTelegramCallbackQuery_: () => ({ok:true}),
   getPaymentConsistencyDiagnosticReport_: () => ({caseCount:cases.length,cases}),
   sendTelegramMessage_: (chatId,message) => { assert.equal(chatId,"ADMIN"); sentMessage=message; return {ok:true}; }
 };
 vm.runInNewContext(extract("handleTelegramCallbackQuery_"),sandbox,{timeout:1000});
 const result=sandbox.handleTelegramCallbackQuery_({
-  id:"Q",data:"kaenatchi:payment_diagnostics",message:{chat:{id:"ADMIN"},message_id:1}
+  id:"Q",data:"kaenatchi:payment_diagnostics",from:{id:7},message:{chat:{id:"ADMIN"},message_id:1}
 });
 assert.equal(result.ok,true);
 assert.ok(sentMessage.length <= 3500,"report must stay under conservative Telegram message budget");

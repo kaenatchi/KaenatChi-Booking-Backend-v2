@@ -948,6 +948,9 @@ function getBookingTelegramAdminKeyboard_(bookingId, mode) {
     ],
     [
       {text:'❌ رد فیش',callback_data:'kaenatchi:reject:'+id}
+    ],
+    [
+      {text:'🔎 گزارش مغایرت پرداخت',callback_data:'kaenatchi:payment_diagnostics'}
     ]
   ]};
 }
@@ -998,6 +1001,31 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   if (data === 'kaenatchi:noop') {
     answerTelegramCallbackQuery_(queryId,'این نوبت قبلاً تعیین تکلیف شده است.',false);
     return {ok:true,noop:true};
+  }
+
+  // Admin-only read-only report; never reachable through the public action router.
+  if (data === 'kaenatchi:payment_diagnostics') {
+    var diagnostic;
+    try {
+      diagnostic = getPaymentConsistencyDiagnosticReport_();
+    } catch (diagnosticError) {
+      answerTelegramCallbackQuery_(queryId,'گزارش مغایرت‌ها در دسترس نیست؛ هیچ تغییری اعمال نشده است.',true);
+      return {ok:false,error:'PAYMENT_DIAGNOSTIC_FAILED',noWrites:true};
+    }
+    var lines = ['<b>گزارش فقط‌خواندنی مغایرت پرداخت</b>','موارد: '+diagnostic.caseCount,''];
+    (diagnostic.cases || []).slice(0,15).forEach(function(item) {
+      lines.push('رزرو: '+String(item.bookingId || '-').replace(/[&<>]/g,''));
+      lines.push('وضعیت: '+String(item.state || '-').replace(/[&<>]/g,''));
+      lines.push('وضعیت رزرو: '+String(item.appointmentStatus || '-').replace(/[&<>]/g,''));
+      lines.push('وضعیت پرداخت: '+String(item.bookingPaymentStatus || '-').replace(/[&<>]/g,''));
+      lines.push('اقدام: بررسی دستی؛ اصلاح خودکار غیرفعال');
+      lines.push('');
+    });
+    if (!diagnostic.caseCount) lines.push('مغایرتی در داده‌های بررسی‌شده پیدا نشد.');
+    if (diagnostic.caseCount > 15) lines.push('برای کوتاه ماندن پیام، فقط ۱۵ مورد اول نمایش داده شد.');
+    var sent = sendTelegramMessage_(chatId,lines.join('\n'));
+    answerTelegramCallbackQuery_(queryId,sent && sent.ok ? 'گزارش فقط‌خواندنی ارسال شد.' : 'گزارش آماده شد اما ارسال آن تأیید نشد.',!(sent && sent.ok));
+    return {ok:!!(sent && sent.ok),report:'PAYMENT_CONSISTENCY_READ_ONLY',caseCount:diagnostic.caseCount,noWrites:true,noAutoRepair:true};
   }
 
   var match = data.match(/^kaenatchi:(request_approve|request_reject|approve|reject|hold_review):([^:]+)$/);

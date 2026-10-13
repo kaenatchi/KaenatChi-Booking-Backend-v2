@@ -13,7 +13,7 @@
 const CONFIG = {
   // Isolated staging only. Never use production CMS, VIP, Drive receipts, or Telegram.
   STAGING_MODE: true,
-  SPREADSHEET_ID: '1xGgeqdsUGFzHhD00NIVVD8QqwnutnDfKwsmssHzaklw',
+  SPREADSHEET_ID: '1mFlfZgNxBoJIR42E388cuPxIgniTGMffWklVy0b3DH4',
 
   SHEETS: {
     BOOKINGS: 'Bookings',
@@ -28,7 +28,7 @@ const CONFIG = {
   },
 
   VIP: {
-    SPREADSHEET_ID: '1xGgeqdsUGFzHhD00NIVVD8QqwnutnDfKwsmssHzaklw',
+    SPREADSHEET_ID: '1w8sJ9NdZHNdh7DQp_9OsJv_VMCJHY18wxVngc7HNDIM',
     CUSTOMERS_SHEET: 'مشتریان',
     TOKENS_SHEET: 'توکن ها',
     ACTIVE_STATUS: 'فعال',

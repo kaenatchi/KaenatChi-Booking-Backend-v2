@@ -16,7 +16,7 @@ const CORE = Object.freeze({
     LOGS: 'BookingLogs'
   },
   HEADERS: {
-    Bookings: ['Request ID','Tracking Code','Appointment Code','Status','First Name','Last Name','Phone','Appointment Date','Appointment Time','Service IDs','Service Names','Subtotal','Discount Code','Discount Amount','Total','Created At','Request Expires At','Payment Expires At','Receipt File ID','Receipt MIME Type','Transaction Ref','Decision At','Decision By','Reschedule From','Updated At'],
+    Bookings: ['Request ID','Tracking Code','Appointment Code','Status','First Name','Last Name','Phone','Appointment Date','Appointment Time','Service IDs','Service Names','Subtotal','Discount Code','Discount Amount','Total','Created At','Request Expires At','Payment Expires At','Receipt File ID','Receipt MIME Type','Transaction Ref','Decision At','Decision By','Reschedule From','Requested Reschedule Date','Requested Reschedule Time','Updated At'],
     Payments: ['Payment ID','Request ID','Tracking Code','Amount','Transaction Ref','Receipt File ID','Receipt MIME Type','Status','Submitted At','Reviewed At','Reviewed By','Notes'],
     BookingLogs: ['Event ID','Request ID','Event','From Status','To Status','Actor','At','Details']
   },
@@ -106,7 +106,7 @@ function getPublicConfig_() {
 function getSlots_(date) {
   const tomorrow = tomorrowJalali_();
   if (String(date || tomorrow) !== tomorrow) return {ok:true,date:tomorrow,slots:[],message:'فقط برای فردا امکان ثبت درخواست وجود دارد.'};
-  const day = new Date(Date.now() + 24*60*60*1000).getDay(); // local timezone is set in project settings
+  expireStaleRequests_();\n  const day = new Date(Date.now() + 24*60*60*1000).getDay(); // Script project timezone must be Asia/Tehran
   const schedule = scheduleForDay_(day);
   const closures = readClosureSet_();
   const booked = activeSlotSet_();
@@ -229,7 +229,7 @@ function adminDecision_(b) {
       updatePaymentStatus_(id,'REJECTED',actor);
       return {ok:true,status:row.Status};
     }
-    if (decision === 'holdForReview') {
+    if (decision === 'approveReschedule') {\n      if (row.Status !== CORE.STATUS.RESCHEDULE_REQUESTED) fail_('INVALID_STATE','درخواست تغییر زمان در صف بررسی نیست.');\n      const d=String(row['Requested Reschedule Date']||'');const t=normalizeTime_(row['Requested Reschedule Time']);\n      const slot=getSlots_(d).slots.find(s=>s.time===t);\n      if(!slot||slot.status!=='AVAILABLE') fail_('SLOT_UNAVAILABLE','زمان پیشنهادی دیگر در دسترس نیست؛ نوبت قبلی حفظ شده است.');\n      row['Appointment Date']=d;row['Appointment Time']=t;row['Requested Reschedule Date']='';row['Requested Reschedule Time']='';row.Status=CORE.STATUS.CONFIRMED;row['Updated At']=new Date();writeObject_(ref.sheet,ref.row,row);\n      log_(id,'RESCHEDULE_APPROVED',CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.CONFIRMED,actor,{newDate:d,newTime:t,oldSlotReleased:true});\n      return {ok:true,status:row.Status,date:d,time:t,appointmentCode:row['Appointment Code']};\n    }\n    if (decision === 'rejectReschedule') {\n      if (row.Status !== CORE.STATUS.RESCHEDULE_REQUESTED) fail_('INVALID_STATE','درخواست تغییر زمان در صف بررسی نیست.');\n      row['Requested Reschedule Date']='';row['Requested Reschedule Time']='';row.Status=CORE.STATUS.CONFIRMED;row['Updated At']=new Date();writeObject_(ref.sheet,ref.row,row);\n      log_(id,'RESCHEDULE_REJECTED',CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.CONFIRMED,actor,{oldSlotRetained:true});\n      return {ok:true,status:row.Status,message:'درخواست تغییر زمان رد شد؛ نوبت قبلی حفظ شد.'};\n    }\n    if (decision === 'holdForReview') {
       if (row.Status !== CORE.STATUS.RECEIPT_REVIEW) fail_('INVALID_STATE','فیشی برای نگه‌داشتن در صف بررسی وجود ندارد.');
       log_(id,'PAYMENT_HELD_FOR_REVIEW',row.Status,row.Status,actor,{});
       return {ok:true,status:row.Status,autoRelease:false};
@@ -307,7 +307,7 @@ function readClosureSet_() {
   });
   return {dates,slots};
 }
-function activeSlotSet_() {
+function expireStaleRequests_() {\n  const now=Date.now();\n  objectsWithRows_(tab_(CORE.TABS.BOOKINGS)).forEach(ref=>{\n    const status=String(ref.obj.Status||'');\n    const requestExpiry=new Date(ref.obj['Request Expires At']).getTime();\n    const paymentExpiry=new Date(ref.obj['Payment Expires At']).getTime();\n    if(status===CORE.STATUS.REQUEST_PENDING && Number.isFinite(requestExpiry) && requestExpiry>0 && requestExpiry<=now) transition_(ref,CORE.STATUS.EXPIRED,'system','REQUEST_WINDOW_EXPIRED');\n    else if(status===CORE.STATUS.PAYMENT_PENDING && Number.isFinite(paymentExpiry) && paymentExpiry>0 && paymentExpiry<=now) transition_(ref,CORE.STATUS.EXPIRED,'system','PAYMENT_WINDOW_EXPIRED');\n  });\n}\nfunction activeSlotSet_() {
   const set=new Set();
   readObjects_(staging_(),[CORE.TABS.BOOKINGS]).forEach(r=>{
     if([CORE.STATUS.REQUEST_PENDING,CORE.STATUS.PAYMENT_PENDING,CORE.STATUS.RECEIPT_REVIEW,CORE.STATUS.CONFIRMED,CORE.STATUS.CANCEL_REQUESTED,CORE.STATUS.RESCHEDULE_REQUESTED].includes(String(r.Status||''))) set.add(normalizeDate_(r['Appointment Date'])+'|'+normalizeTime_(r['Appointment Time']));

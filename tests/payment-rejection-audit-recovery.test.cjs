@@ -35,7 +35,7 @@ const sandbox={
  getSheetObjects_:()=>[{...payment}],
  updateRowFields_:(sheet,row,fields)=>Object.assign(sheet==="Payments"?payment:booking,fields),
  appendBookingLog_:entry=>{if(failAuditOnce){failAuditOnce=false;throw new Error("simulated booking audit write failure");}logs.push(entry);},
- queueBookingTelegramNotificationWithAudit_:(...args)=>queued.push(args),
+ queueBookingTelegramNotification_:(...args)=>queued.push(args),
  fail_:(error,message)=>({ok:false,error,message}),Date,String
 };
 vm.runInNewContext(extractFunction("rejectBooking_"),sandbox,{timeout:1000});

@@ -2,16 +2,21 @@
 
 ## Current safety state
 
-The branch staging/payment-review-hold-isolated has STAGING_MODE: true.
-Its current booking spreadsheet ID and VIP spreadsheet ID still point to the same existing CMS/VIP spreadsheet. The runtime guard intentionally blocks all spreadsheet access in this state.
+The branch `staging/payment-review-hold-isolated` has `STAGING_MODE: true`.
+The two staging spreadsheet IDs have been supplied and configured in `Code.gs`:
 
-**Do not deploy this branch or disable the guard to make tests pass.**
+- Booking staging: `1mFlfZgNxBoJIR42E388cuPxIgniTGMffWklVy0b3DH4`
+- VIP staging: `1w8sJ9NdZHNdh7DQp_9OsJv_VMCJHY18wxVngc7HNDIM`
+
+The IDs are distinct and the runtime isolation guard remains enabled. The code configuration has been read back from the branch, but spreadsheet tab contents/permissions have not been independently inspected and no Apps Script execution has occurred.
+
+**Do not deploy this branch to the live Apps Script or disable the guard to make tests pass.**
 
 ## Required isolated resources
 
 Before any Apps Script staging execution, provision two new, empty Google spreadsheets owned by the project operator:
 
-1. **Booking staging spreadsheet** — for the eight booking tabs listed below.
+1. **Booking staging spreadsheet** — for the nine booking tabs listed below.
 2. **VIP staging spreadsheet** — for mock/test-only VIP data. It must not contain copied customer/token data from production.
 
 Neither spreadsheet may be the existing KaenatChi CMS spreadsheet or any production spreadsheet. Do not copy production rows, receipts, customer details, VIP tokens, or payment data.
@@ -59,12 +64,7 @@ Use synthetic test records only. A blank spreadsheet is not ready until all requ
 
 ## Configuration gate
 
-After both staging spreadsheets exist, update only the staging branch configuration:
-
-- CONFIG.SPREADSHEET_ID → the new booking staging spreadsheet ID.
-- CONFIG.VIP.SPREADSHEET_ID → the new VIP staging spreadsheet ID.
-
-Keep STAGING_MODE: true. Keep the IDs different. Do not edit the production branch, Worker, production CMS, or live Apps Script deployment.
+The staging branch configuration has now been updated with the two IDs above. Keep `STAGING_MODE: true` and keep the IDs different. Do not edit the production branch, Worker, production CMS, or live Apps Script deployment.
 
 ## Verification sequence
 
@@ -76,4 +76,4 @@ Keep STAGING_MODE: true. Keep the IDs different. Do not edit the production bran
 
 ## Current blocker
 
-No staging spreadsheet IDs have been supplied or provisioned in this workflow. Consequently, real-sheet diagnostics and end-to-end Apps Script tests remain blocked by design.
+The IDs are configured, but the required tabs and header rows have not yet been verified. There is no connected Google Sheets tool in this workflow, and no Apps Script execution has been run. Before any backend smoke test, create/review the nine booking tabs and their headers, confirm access permissions, and ensure the VIP staging file contains only synthetic test data. VIP lookup is deliberately blocked while `STAGING_MODE` is true; do not remove that block as part of initial staging setup. Telegram sends are skipped and receipt uploads return synthetic staging metadata while staging mode is on.

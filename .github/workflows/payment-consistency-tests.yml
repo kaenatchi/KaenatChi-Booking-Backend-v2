@@ -1,0 +1,43 @@
+name: Isolated payment recovery tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "Code.gs"
+      - "tests/payment-approval-discount-token-recovery.test.cjs"
+      - "tests/payment-rejection-audit-recovery.test.cjs"
+      - "tests/telegram-approval-queue-audit-recovery.test.cjs"
+      - "tests/payment-notification-queue-recovery.test.cjs"
+      - "tests/discount-token-idempotency.test.cjs"
+      - "tests/telegram-callback-queue-retry.test.cjs"
+      - ".github/workflows/payment-consistency-tests.yml"
+
+jobs:
+  recovery-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test approval recovery after discount-token partial failure
+        run: node tests/payment-approval-discount-token-recovery.test.cjs
+      - name: Test rejection audit recovery after partial failure
+        run: node tests/payment-rejection-audit-recovery.test.cjs
+      - name: Test Telegram queue storage failure handling
+        run: node tests/telegram-approval-queue-audit-recovery.test.cjs
+      - name: Test approval/rejection notification queue recovery
+        run: node tests/payment-notification-queue-recovery.test.cjs
+      - name: Test discount-token idempotent retry
+        run: node tests/discount-token-idempotency.test.cjs
+      - name: Test Telegram callback retry after queue-save failure
+        run: node tests/telegram-callback-queue-retry.test.cjs
+      - name: Test stale rejection callback against confirmed booking
+        run: node tests/reject-already-confirmed-booking.test.cjs
+      - name: Test transient Telegram queue re-persist recovery
+        run: node tests/telegram-queue-repersist-recovery.test.cjs
+      - name: Test reminder failure isolation from booking notifications
+        run: node tests/telegram-reminder-failure-isolation.test.cjs

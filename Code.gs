@@ -974,29 +974,49 @@ function handleTelegramCallbackQuery_(callbackQuery) {
     };
   }
 
+  var notificationFailed = result.notificationQueued === false;
   var finalStatus =
     action === 'approve'
       ? 'approved'
       : 'rejected';
 
-  editTelegramMessageReplyMarkup_(
-    chatId,
-    message.message_id,
-    getBookingTelegramResultKeyboard_(finalStatus)
-  );
+  /*
+   * Keep the action buttons available when the booking decision committed
+   * but notification queue persistence failed. The admin can press the same
+   * button again; approve/reject are designed to recover that queue item.
+   * Only finalize the Telegram keyboard after notification queuing succeeds.
+   */
+  if (!notificationFailed) {
+    editTelegramMessageReplyMarkup_(
+      chatId,
+      message.message_id,
+      getBookingTelegramResultKeyboard_(finalStatus)
+    );
+  }
+
+  var successMessage = action === 'approve'
+    ? 'نوبت با موفقیت تأیید شد.'
+    : 'فیش با موفقیت رد شد.';
 
   answerTelegramCallbackQuery_(
     queryId,
-    action === 'approve'
-      ? 'نوبت با موفقیت تأیید شد.'
-      : 'فیش با موفقیت رد شد.',
-    false
+    notificationFailed
+      ? String(result.message || 'ذخیره اعلان تلگرام ناموفق بود؛ همان دکمه را دوباره بزنید.')
+      : successMessage,
+    notificationFailed
   );
 
   return {
     ok:true,
     action:action,
-    bookingId:bookingId
+    bookingId:bookingId,
+    notificationQueued:!notificationFailed,
+    notificationError:notificationFailed
+      ? String(result.notificationError || 'TELEGRAM_QUEUE_SAVE_FAILED')
+      : '',
+    message:notificationFailed
+      ? String(result.message || 'ذخیره اعلان تلگرام ناموفق بود؛ همان دکمه را دوباره بزنید.')
+      : successMessage
   };
 }
 

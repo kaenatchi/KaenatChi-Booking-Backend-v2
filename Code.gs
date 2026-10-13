@@ -23,7 +23,8 @@ const CONFIG = {
     BLOCKED_SLOTS: 'BlockedSlots',
     PAYMENTS: 'Payments',
     BOOKING_SETTINGS: 'BookingSettings',
-    BOOKING_LOGS: 'BookingLogs'
+    BOOKING_LOGS: 'BookingLogs',
+    SERVICES: 'Services'
   },
 
   VIP: {
@@ -3881,6 +3882,28 @@ function testBookingBackendContract() {
       }
     });
   });
+
+  // Services uses aliases accepted by getServices_(); do not force one CMS schema.
+  const serviceHeaderGroups = [
+    { label: 'service ID', aliases: ['Service ID', 'ServiceId', 'ID', 'Id', 'id', 'شناسه خدمت'] },
+    { label: 'service name', aliases: ['نام خدمت', 'Service Name', 'Name', 'Title', 'عنوان'] },
+    { label: 'service price', aliases: ['قیمت', 'Price', 'Base Price', 'Original Price', 'مبلغ'] }
+  ];
+  const serviceSheet = result.sheets.Services;
+  if (!serviceSheet || !serviceSheet.exists) {
+    result.ok = false;
+    if (result.missingSheets.indexOf('Services') === -1) result.missingSheets.push('Services');
+  } else {
+    serviceHeaderGroups.forEach(function(group) {
+      const found = group.aliases.some(function(alias) {
+        return serviceSheet.headers.indexOf(alias) !== -1;
+      });
+      if (!found) {
+        result.ok = false;
+        result.headerWarnings.push('Services: missing one recognized ' + group.label + ' header (' + group.aliases.join(', ') + ')');
+      }
+    });
+  }
 
   return result;
 }

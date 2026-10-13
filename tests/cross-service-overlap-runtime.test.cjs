@@ -126,6 +126,51 @@ assert.equal(persistenceCalls, 0, "overlapping booking must be rejected before p
 sandbox.hasBookingOverlap_ = actualHasBookingOverlap;
 
 
+// Exercise getAvailableSlots_ itself: the UI must not advertise a
+// duration-incompatible or overlapping time as selectable.
+const savedBookingRows = [
+  {
+    "Booking ID": "existing-therapy", "Appointment Date": "1405/07/21",
+    "Appointment Time": "11:00", "Service ID": "therapy",
+    "Service Name": "Therapy", "Appointment Status": "CONFIRMED",
+    "Payment Status": "PAYMENT_APPROVED", "Hold Until": new Date(Date.now() - 60000)
+  }
+];
+sandbox.CONFIG.SHEETS.BLOCKED_SLOTS = "Blocked Slots";
+sandbox.CONFIG.SHEETS.BOOKINGS = "Bookings";
+sandbox.CONFIG.SLOT_STATUS = { FREE: "FREE", BLOCKED: "BLOCKED", CONFIRMED: "CONFIRMED", HELD: "HELD" };
+sandbox.normalizeJalaliDate_ = value => String(value || "").trim();
+sandbox.getScheduleForDate_ = () => ({
+  active: true,
+  ranges: [{ startTime: "11:00", endTime: "13:30", slotDuration: 30 }]
+});
+sandbox.findServiceRecord_ = () => ({ id: "energy", name: "Energy", price: 700000, duration: 30 });
+sandbox.buildServiceDurationMap_ = () => ({ "id:energy": 30, "id:therapy": 45 });
+sandbox.getSheetObjects_ = sheet => sheet === "Blocked Slots" ? [] : savedBookingRows;
+sandbox.isTruthy_ = value => value === true || String(value).toLowerCase() === "true";
+sandbox.buildSlotKey_ = (date, time) => date + "|" + time;
+sandbox.generateSlots_ = (start, end, step) => {
+  const out = [];
+  const startM = sandbox.timeToMinutes_(start), endM = sandbox.timeToMinutes_(end);
+  for (let m = startM; m + (Number(step) || 30) <= endM; m += Number(step) || 30) {
+    out.push(String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0"));
+  }
+  return out;
+};
+sandbox.isWithinScheduleRange_ = (start, duration, ranges) => {
+  const s = sandbox.timeToMinutes_(start), e = s + Number(duration);
+  return ranges.some(r => s >= sandbox.timeToMinutes_(r.startTime) && e <= sandbox.timeToMinutes_(r.endTime));
+};
+sandbox.hasBookingOverlap_ = actualHasBookingOverlap;
+vm.runInNewContext(extractFunction("getAvailableSlots_"), sandbox, { timeout: 1000 });
+const listed = sandbox.getAvailableSlots_({ date: "1405/07/21", serviceId: "energy" });
+assert.equal(listed.ok, true, "availability lookup should succeed");
+assert.equal(listed.slots.find(slot => slot.time === "11:00").available, false, "exact occupied start must not be advertised as free");
+assert.equal(listed.slots.find(slot => slot.time === "11:30").available, false, "cross-service overlap must be blocked in the available-slots list");
+assert.equal(listed.slots.find(slot => slot.time === "12:00").available, true, "non-overlapping interval should remain available");
+assert.equal(listed.slots.find(slot => slot.time === "13:00").available, true, "a 30-minute service ending at range close should remain available");
+
+
 const now = Date.now();
 const date = "1405/07/21";
 const durations = { "id:energy": 30, "id:candle": 20, "id:therapy": 45 };
@@ -185,6 +230,7 @@ assert.match(
   "slot availability must preserve the receipt-backed hold"
 );
 console.log("PASS actual createBooking_ rejects out-of-range and overlapping requests before persistence");
+console.log("PASS getAvailableSlots_ hides occupied and overlapping times");
 console.log("PASS service lookup returns configured duration and price");
 console.log("PASS cross-service interval overlap");
 console.log("PASS receipt remains blocking after hold expiry");

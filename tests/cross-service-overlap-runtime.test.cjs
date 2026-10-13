@@ -171,6 +171,52 @@ assert.equal(listed.slots.find(slot => slot.time === "12:00").available, true, "
 assert.equal(listed.slots.find(slot => slot.time === "13:00").available, true, "a 30-minute service ending at range close should remain available");
 
 
+// Verify the exact-slot status function retains submitted-receipt holds
+// after the review timer expires, and releases only expired unpaid requests.
+const fixedNow = Date.parse("2026-10-13T12:00:00.000Z");
+sandbox.CONFIG.STATUSES = {
+  BOOKING_PENDING: "در انتظار بررسی",
+  BOOKING_CONFIRMED: "تأیید شده",
+  PAYMENT_PENDING: "در انتظار پرداخت",
+  PAYMENT_RECEIVED: "فیش دریافت شد",
+  PAYMENT_APPROVED: "تأیید شد"
+};
+sandbox.CONFIG.SLOT_STATUS = { FREE: "FREE", BLOCKED: "BLOCKED", CONFIRMED: "CONFIRMED", HELD: "HELD" };
+sandbox.CONFIG.SHEETS.BOOKINGS = "Bookings";
+sandbox.isBlockedSlot_ = () => false;
+sandbox.getSheetObjects_ = () => [{
+  "Slot Key": "1405/07/21|11:00",
+  "Appointment Date": "1405/07/21",
+  "Appointment Time": "11:00",
+  "Appointment Status": "در انتظار بررسی",
+  "Payment Status": "فیش دریافت شد",
+  "Hold Until": new Date(fixedNow - 121 * 60 * 1000).toISOString()
+}];
+const realDateNow = Date.now;
+Date.now = () => fixedNow;
+try {
+  vm.runInNewContext(extractFunction("getSlotStatus_"), sandbox, { timeout: 1000 });
+  assert.equal(
+    sandbox.getSlotStatus_("1405/07/21|11:00", "1405/07/21", "11:00"),
+    "HELD",
+    "slot status must remain held after receipt review timer expires"
+  );
+  sandbox.getSheetObjects_ = () => [{
+    "Slot Key": "1405/07/21|11:00",
+    "Appointment Status": "در انتظار بررسی",
+    "Payment Status": "در انتظار پرداخت",
+    "Hold Until": new Date(fixedNow - 11 * 60 * 1000).toISOString()
+  }];
+  assert.equal(
+    sandbox.getSlotStatus_("1405/07/21|11:00", "1405/07/21", "11:00"),
+    "FREE",
+    "expired unpaid request should no longer hold the slot"
+  );
+} finally {
+  Date.now = realDateNow;
+}
+
+
 const now = Date.now();
 const date = "1405/07/21";
 const durations = { "id:energy": 30, "id:candle": 20, "id:therapy": 45 };
@@ -231,6 +277,7 @@ assert.match(
 );
 console.log("PASS actual createBooking_ rejects out-of-range and overlapping requests before persistence");
 console.log("PASS getAvailableSlots_ hides occupied and overlapping times");
+console.log("PASS exact slot remains held after receipt review timer expires");
 console.log("PASS service lookup returns configured duration and price");
 console.log("PASS cross-service interval overlap");
 console.log("PASS receipt remains blocking after hold expiry");

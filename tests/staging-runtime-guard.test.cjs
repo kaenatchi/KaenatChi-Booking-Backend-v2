@@ -1,34 +1,12 @@
+const fs = require("node:fs");
+const path = require("node:path");
 const vm = require("node:vm");
 const assert = require("node:assert/strict");
 
-const source = `function assertStagingSpreadsheetIsolation_() {
-  const bookingSpreadsheetId = String(CONFIG.SPREADSHEET_ID || '').trim();
-  const vipSpreadsheetId = String(
-    CONFIG.VIP && CONFIG.VIP.SPREADSHEET_ID || ''
-  ).trim();
-
-  if (
-    CONFIG.STAGING_MODE === true &&
-    bookingSpreadsheetId &&
-    vipSpreadsheetId &&
-    bookingSpreadsheetId === vipSpreadsheetId
-  ) {
-    throw new Error(
-      'STAGING SAFETY BLOCK: Booking staging points to the CMS/VIP spreadsheet. ' +
-      'Configure a dedicated staging spreadsheet before any sheet access.'
-    );
-  }
-
-  return true;
-}
-
-function getSpreadsheet_() {
-  assertStagingSpreadsheetIsolation_();
-  const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-  if (!spreadsheet) throw new Error('No spreadsheet');
-  return spreadsheet;
-}
-`;
+const code = fs.readFileSync(path.join(process.cwd(), "Code.gs"), "utf8");
+const match = code.match(/function assertStagingSpreadsheetIsolation_\(\)\s*\{[\s\S]*?\n\}/);
+assert.ok(match, "extract the actual runtime guard from Code.gs");
+const actualGuard = match[0];
 
 let openByIdCalls = 0;
 const sandbox = {
@@ -44,26 +22,36 @@ const sandbox = {
     }
   }
 };
-vm.runInNewContext(source, sandbox, {timeout:1000});
+
+// Execute the guard taken from Code.gs, not a duplicated test-only copy.
+vm.runInNewContext(
+  actualGuard + `
+    function getSpreadsheetGuardHarness_() {
+      assertStagingSpreadsheetIsolation_();
+      return SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    }
+  `,
+  sandbox,
+  { timeout: 1000 }
+);
 
 assert.throws(
-  () => sandbox.getSpreadsheet_(),
+  () => sandbox.getSpreadsheetGuardHarness_(),
   /STAGING SAFETY BLOCK/,
-  "shared CMS/VIP spreadsheet must be blocked"
+  "actual guard from Code.gs must block shared CMS/VIP ID"
 );
-assert.equal(openByIdCalls, 0, "openById must never run when IDs are shared");
+assert.equal(openByIdCalls, 0, "openById must not run for a shared ID");
 
 sandbox.CONFIG.SPREADSHEET_ID = "staging-id";
-const opened = sandbox.getSpreadsheet_();
-assert.equal(opened.id, "staging-id");
-assert.equal(openByIdCalls, 1, "separate staging ID may be opened");
+assert.equal(sandbox.getSpreadsheetGuardHarness_().id, "staging-id");
+assert.equal(openByIdCalls, 1, "separate staging ID should pass the guard");
 
 sandbox.CONFIG.STAGING_MODE = false;
 sandbox.CONFIG.SPREADSHEET_ID = "shared-id";
-assert.equal(sandbox.getSpreadsheet_().id, "shared-id");
-assert.equal(openByIdCalls, 2, "non-staging behavior remains unchanged");
+assert.equal(sandbox.getSpreadsheetGuardHarness_().id, "shared-id");
+assert.equal(openByIdCalls, 2, "non-staging mode remains unchanged");
 
-console.log("PASS shared staging/CMS/VIP ID is blocked before openById");
+console.log("PASS actual Code.gs guard blocks shared ID before openById");
 console.log("PASS separate staging ID is allowed");
 console.log("PASS non-staging configuration remains unchanged");
 console.log("PASS total: 3/3");

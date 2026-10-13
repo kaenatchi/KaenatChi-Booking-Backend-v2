@@ -21,10 +21,14 @@ function extractFunction(name) {
 }
 let logs = [], answers = [], bookingWrites = 0, paymentWrites = 0, failAudit = false;
 let priorLogs = [];
+let lockAcquires = 0, lockReleases = 0;
 const sandbox = {
   CONFIG: {SHEETS:{BOOKING_LOGS:"BookingLogs"},LOG_ACTIONS:{PAYMENT_REVIEW_HOLD:"PAYMENT_REVIEW_HOLD"}},
+  LockService: {getScriptLock: () => ({
+    waitLock: ms => { assert.equal(ms,30000); lockAcquires++; },
+    releaseLock: () => { lockReleases++; }
+  })},
   getTelegramConfig_: () => ({adminChatId:"admin-1"}),
-  withBookingLock_: fn => fn(),
   getSheetObjects_: name => { assert.equal(name,"BookingLogs"); return priorLogs; },
   appendBookingLog_: entry => { if (failAudit) throw new Error("simulated audit storage failure"); logs.push(entry); priorLogs.push({"Booking ID":entry.bookingId,Action:entry.action}); },
   answerTelegramCallbackQuery_: (...args) => answers.push(args),
@@ -32,7 +36,11 @@ const sandbox = {
   appendObjectRow_: () => { paymentWrites++; },
   getBookingByIdObject_: () => { throw new Error("hold-review must not fetch or mutate booking"); }
 };
-vm.runInNewContext(extractFunction("handleTelegramCallbackQuery_"), sandbox, {timeout:1000});
+vm.runInNewContext(
+  extractFunction("withBookingLock_") + "\\n" + extractFunction("handleTelegramCallbackQuery_"),
+  sandbox,
+  {timeout:1000}
+);
 const callback = chat => ({id:"callback-1",data:"kaenatchi:hold_review:B-100",message:{chat:{id:chat},message_id:44}});
 const result = sandbox.handleTelegramCallbackQuery_(callback("admin-1"));
 assert.equal(result.ok, true);
@@ -44,6 +52,8 @@ assert.equal(logs[0].bookingId, "B-100");
 assert.equal(bookingWrites, 0);
 assert.equal(paymentWrites, 0);
 assert.equal(answers.length, 1);
+assert.equal(lockAcquires, 1, "first hold must acquire script lock");
+assert.equal(lockReleases, 1, "first hold must release script lock");
 
 answers = [];
 const repeated = sandbox.handleTelegramCallbackQuery_(callback("admin-1"));
@@ -52,6 +62,8 @@ assert.equal(repeated.duplicate, true);
 assert.equal(logs.length, 1, "repeat click must not duplicate audit row");
 assert.equal(bookingWrites, 0);
 assert.equal(paymentWrites, 0);
+assert.equal(lockAcquires, 2, "repeat must check idempotency under lock");
+assert.equal(lockReleases, 2, "repeat must release lock");
 
 const unauthorized = sandbox.handleTelegramCallbackQuery_(callback("not-admin"));
 assert.equal(unauthorized.error, "TELEGRAM_ADMIN_ONLY");
@@ -68,7 +80,10 @@ assert.equal(answers.length, 1);
 assert.equal(answers[0][2], true);
 assert.equal(bookingWrites, 0);
 assert.equal(paymentWrites, 0);
+assert.equal(lockAcquires, 3, "audit failure path also acquires lock");
+assert.equal(lockReleases, 3, "lock releases when audit append throws");
 
+console.log("PASS actual withBookingLock_ acquires and releases script lock");
 console.log("PASS first hold-review writes one audit record only");
 console.log("PASS repeated click is idempotent and creates no duplicate log");
 console.log("PASS unauthorized callback cannot create audit record");

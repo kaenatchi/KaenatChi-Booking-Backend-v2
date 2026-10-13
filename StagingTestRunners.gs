@@ -8,41 +8,40 @@
  */
 
 function runBookingStagingPureTests_() {
-  var names = [
-    'testPaymentReviewKeyboardPure_',
-    'testTelegramQueueStorageLimitPure_',
-    'testTelegramQueueRecoveryMergePure_',
-    'testTelegramRetrySchedulePure_',
-    'testTelegramRetryPolicyPure_',
-    'testTelegramNotificationRetryPolicyPure_',
-    'testTelegramDeliveryResultGuardPure_',
-    'testPaymentSubmissionConsistencyClassificationPure_',
-    'testPaymentConsistencyRecoveryPlanPure_',
-    'testPaymentConsistencyDiagnosticReportPure_',
-    'testPaymentSubmissionPreflightPure_',
-    'testPaymentRecordApprovalGuardPure_',
-    'testPaymentRejectionGuardPure_',
-    'testExpiredHoldReleaseGuardPure_',
-    'testBookingTelegramTextPure_',
-    'testPaymentReceiptRequiredContractPure_',
-    'testTelegramPaymentReviewButtonsPure_',
-    'testBookingStatusMobileMatchPure_'
+  var tests = [
+    ['testPaymentReviewKeyboardPure_', testPaymentReviewKeyboardPure_],
+    ['testTelegramQueueStorageLimitPure_', testTelegramQueueStorageLimitPure_],
+    ['testTelegramQueueRecoveryMergePure_', testTelegramQueueRecoveryMergePure_],
+    ['testTelegramRetrySchedulePure_', testTelegramRetrySchedulePure_],
+    ['testTelegramRetryPolicyPure_', testTelegramRetryPolicyPure_],
+    ['testTelegramNotificationRetryPolicyPure_', testTelegramNotificationRetryPolicyPure_],
+    ['testTelegramDeliveryResultGuardPure_', testTelegramDeliveryResultGuardPure_],
+    ['testPaymentSubmissionConsistencyClassificationPure_', testPaymentSubmissionConsistencyClassificationPure_],
+    ['testPaymentConsistencyRecoveryPlanPure_', testPaymentConsistencyRecoveryPlanPure_],
+    ['testPaymentConsistencyDiagnosticReportPure_', testPaymentConsistencyDiagnosticReportPure_],
+    ['testPaymentSubmissionPreflightPure_', testPaymentSubmissionPreflightPure_],
+    ['testPaymentRecordApprovalGuardPure_', testPaymentRecordApprovalGuardPure_],
+    ['testPaymentRejectionGuardPure_', testPaymentRejectionGuardPure_],
+    ['testExpiredHoldReleaseGuardPure_', testExpiredHoldReleaseGuardPure_],
+    ['testBookingTelegramTextPure_', testBookingTelegramTextPure_],
+    ['testPaymentReceiptRequiredContractPure_', testPaymentReceiptRequiredContractPure_],
+    ['testTelegramPaymentReviewButtonsPure_', testTelegramPaymentReviewButtonsPure_],
+    ['testBookingStatusMobileMatchPure_', testBookingStatusMobileMatchPure_]
   ];
   var results = [];
   var failures = [];
-  names.forEach(function(name) {
+  tests.forEach(function(entry) {
     try {
-      if (typeof this[name] !== 'function') throw new Error('Test function not found');
-      var r = this[name]();
-      var item = {test:name,ok:!!(r && r.ok===true),result:r||null};
+      var r = entry[1]();
+      var item = {test:entry[0],ok:!!(r && r.ok===true),result:r||null};
       results.push(item);
       if (!item.ok) failures.push(item);
     } catch (e) {
-      var item = {test:name,ok:false,error:String(e && e.message || e)};
+      var item = {test:entry[0],ok:false,error:String(e && e.message || e)};
       results.push(item);
       failures.push(item);
     }
-  }, this);
+  });
   var report = {
     suite:'BOOKING STAGING PURE TESTS',
     ok:failures.length===0,

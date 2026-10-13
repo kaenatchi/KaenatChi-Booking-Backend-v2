@@ -54,3 +54,5 @@ jobs:
         run: node tests/payment-approval-state-guard.test.cjs
       - name: Test payment rejection recovery after partial write
         run: node tests/payment-rejection-recovery.test.cjs
+      - name: Test Telegram notification worker recovery
+        run: node tests/telegram-notification-worker-recovery.test.cjs

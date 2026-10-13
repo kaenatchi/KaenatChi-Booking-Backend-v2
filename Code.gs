@@ -2587,6 +2587,13 @@ function getAvailableSlots_(request) {
     };
   }
 
+  const service = findServiceRecord_(
+    String(request.serviceId || ''),
+    String(request.serviceName || request.service || '')
+  );
+  const serviceDuration = service ? (Number(service.duration) || 30) : 30;
+  const serviceDurationMap = service ? buildServiceDurationMap_() : {};
+
   const blockedRows = getSheetObjects_(CONFIG.SHEETS.BLOCKED_SLOTS);
   const bookingRows = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
 

@@ -552,17 +552,25 @@ function healthCheck_() {
    ===================================================== */
 
 function assertStagingSpreadsheetIsolation_() {
+  if (CONFIG.STAGING_MODE !== true) {
+    return true;
+  }
+
   const bookingSpreadsheetId = String(CONFIG.SPREADSHEET_ID || '').trim();
   const vipSpreadsheetId = String(
     CONFIG.VIP && CONFIG.VIP.SPREADSHEET_ID || ''
   ).trim();
 
-  if (
-    CONFIG.STAGING_MODE === true &&
-    bookingSpreadsheetId &&
-    vipSpreadsheetId &&
-    bookingSpreadsheetId === vipSpreadsheetId
-  ) {
+  // Staging must fail closed unless both IDs are configured and distinct.
+  // Never allow a blank ID to fall through to openById.
+  if (!bookingSpreadsheetId || !vipSpreadsheetId) {
+    throw new Error(
+      'STAGING SAFETY BLOCK: Booking and CMS/VIP spreadsheet IDs must both be configured. ' +
+      'Configure a dedicated staging spreadsheet before any sheet access.'
+    );
+  }
+
+  if (bookingSpreadsheetId === vipSpreadsheetId) {
     throw new Error(
       'STAGING SAFETY BLOCK: Booking staging points to the CMS/VIP spreadsheet. ' +
       'Configure a dedicated staging spreadsheet before any sheet access.'

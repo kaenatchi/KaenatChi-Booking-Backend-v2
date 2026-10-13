@@ -204,6 +204,27 @@ try {
   );
   sandbox.getSheetObjects_ = () => [{
     "Slot Key": "1405/07/21|11:00",
+    "Appointment Date": "1405/07/21",
+    "Appointment Time": "11:00",
+    "Appointment Status": "در انتظار بررسی",
+    "Payment Status": "تأیید شد",
+    "Hold Until": new Date(fixedNow - 121 * 60 * 1000).toISOString()
+  }];
+  assert.equal(
+    sandbox.getSlotStatus_("1405/07/21|11:00", "1405/07/21", "11:00"),
+    "HELD",
+    "slot must remain held if payment was approved but booking finalization needs recovery"
+  );
+  sandbox.normalizeJalaliDate_ = value => String(value || "");
+  sandbox.normalizeTime_ = value => String(value || "");
+  sandbox.parseDateValue_ = value => value ? new Date(value) : null;
+  sandbox.buildSlotKey_ = (date, time) => date + "|" + time;
+  vm.runInNewContext(extractFunction("getBookedSlots_"), sandbox, { timeout: 1000 });
+  const approvedPendingList = sandbox.getBookedSlots_();
+  assert.equal(approvedPendingList.bookedSlots.length, 1,
+    "approved-payment pending booking must remain visible as occupied");
+  sandbox.getSheetObjects_ = () => [{
+    "Slot Key": "1405/07/21|11:00",
     "Appointment Status": "در انتظار بررسی",
     "Payment Status": "در انتظار پرداخت",
     "Hold Until": new Date(fixedNow - 11 * 60 * 1000).toISOString()

@@ -1114,27 +1114,21 @@ function buildBookingTelegramText_(booking, eventType) {
     ' ' +
     String(booking['Last Name'] || '')
   ).trim();
-
   var tracking = escapeTelegramHtml_(
     booking['Tracking Code'] || ''
   );
-
   var service = escapeTelegramHtml_(
     booking['Service Name'] || ''
   );
-
   var date = escapeTelegramHtml_(
     normalizeJalaliDate_(booking['Appointment Date'] || '')
   );
-
   var time = escapeTelegramHtml_(
     normalizeTime_(booking['Appointment Time'] || '')
   );
-
   var customer = escapeTelegramHtml_(
     name || 'مشتری'
   );
-
   var price = escapeTelegramHtml_(
     booking['Final Price'] || ''
   );
@@ -1144,24 +1138,36 @@ function buildBookingTelegramText_(booking, eventType) {
   var transactionNumber = escapeTelegramHtml_(
     booking['Transaction Number'] || 'ثبت نشده'
   );
-
   if (eventType === 'request_received') {
-    return ('📩 <b>درخواست جدید نوبت کائنات‌چی</b>\n\n' +
-      '👤 ' + customer + '\n' + '✨ ' + service + '\n' +
-      '📅 ' + date + ' — ' + time + '\n' + '💳 مبلغ: ' + price + '\n' +
-      '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' + '⏳ مهلت بررسی اولیه: ۱۲ ساعت');
+    return (
+      '📩 <b>درخواست جدید نوبت کائنات‌چی</b>\n\n' +
+      '👤 ' + customer + '\n' +
+      '✨ ' + service + '\n' +
+      '📅 ' + date + ' — ' + time + '\n' +
+      '💳 مبلغ: ' + price + '\n' +
+      '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' +
+      '⏳ مهلت بررسی اولیه: ۱۲ ساعت'
+    );
   }
   if (eventType === 'request_approved') {
-    return ('✅ <b>درخواست نوبت تأیید اولیه شد</b>\n\n' +
-      '👤 ' + customer + '\n' + '✨ ' + service + '\n' +
-      '📅 ' + date + ' — ' + time + '\n' + '💳 مبلغ قابل پرداخت: ' + price + '\n' +
+    return (
+      '✅ <b>درخواست نوبت تأیید اولیه شد</b>\n\n' +
+      '👤 ' + customer + '\n' +
+      '✨ ' + service + '\n' +
+      '📅 ' + date + ' — ' + time + '\n' +
+      '💳 مبلغ قابل پرداخت: ' + price + '\n' +
       '🎫 کد پیگیری: <code>' + tracking + '</code>\n\n' +
-      'برای پرداخت، در مینی‌اپ کائنات‌چی وارد بخش «پیگیری درخواست» شو و کد پیگیری و شماره موبایل ثبت‌شده را وارد کن؛ سپس تصویر فیش پرداخت را بارگذاری کن. کد پیگیری بانکی اختیاری است. مهلت پرداخت: ۳۰ دقیقه.');
+      'برای پرداخت، در مینی‌اپ کائنات‌چی وارد بخش «پیگیری درخواست» شو و کد پیگیری و شماره موبایل ثبت‌شده را وارد کن؛ سپس تصویر فیش پرداخت را بارگذاری کن. کد پیگیری بانکی اختیاری است. مهلت پرداخت: ۱۰ دقیقه.'
+    );
   }
   if (eventType === 'request_rejected') {
-    return ('❌ <b>درخواست نوبت پذیرفته نشد</b>\n\n' +
-      '👤 ' + customer + '\n' + '✨ ' + service + '\n' +
-      '📅 ' + date + ' — ' + time + '\n' + '🎫 کد پیگیری: <code>' + tracking + '</code>');
+    return (
+      '❌ <b>درخواست نوبت پذیرفته نشد</b>\n\n' +
+      '👤 ' + customer + '\n' +
+      '✨ ' + service + '\n' +
+      '📅 ' + date + ' — ' + time + '\n' +
+      '🎫 کد پیگیری: <code>' + tracking + '</code>'
+    );
   }
   if (eventType === 'approved') {
     return (
@@ -1173,7 +1179,6 @@ function buildBookingTelegramText_(booking, eventType) {
       '🎫 کد پیگیری: <code>' + tracking + '</code>'
     );
   }
-
   if (eventType === 'rejected') {
     return (
       '❌ <b>فیش پرداخت کائنات‌چی رد شد</b>\n\n' +
@@ -1184,7 +1189,6 @@ function buildBookingTelegramText_(booking, eventType) {
       '⛔ وضعیت: فیش پرداخت تأیید نشد'
     );
   }
-
   return (
     '🧾 <b>فیش پرداخت کائنات‌چی دریافت شد</b>\n\n' +
     '👤 ' + customer + '\n' +
@@ -3851,31 +3855,52 @@ function submitPayment_(request){
 
 function approveBookingRequest_(request) {
   return withBookingLock_(function() {
-    var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
-    if(!b)return fail_('BOOKING_NOT_FOUND','درخواست نوبت پیدا نشد.');
-    if(String(b['Appointment Status']||'')!==CONFIG.STATUSES.BOOKING_PENDING)
-      return fail_('BOOKING_NOT_PENDING','این درخواست دیگر در انتظار بررسی اولیه نیست.');
-    if(String(b['Payment Status']||'')!==CONFIG.STATUSES.PAYMENT_PENDING)
-      return fail_('REQUEST_ALREADY_PAID','برای این درخواست قبلاً پرداخت ثبت شده است.');
-    var hold=parseDateValue_(b['Hold Until']);
-    if(!hold||hold.getTime()<=Date.now()){
-      releaseBookingRow_(b._row,b['Booking ID'],b['Slot Key']);
-      return fail_('REQUEST_EXPIRED','مهلت درخواست پایان یافته است.');
+    var b = getBookingByIdObject_(request.bookingId || request.trackingCode);
+    if (!b) return fail_('BOOKING_NOT_FOUND', 'درخواست نوبت پیدا نشد.');
+    if (String(b['Appointment Status'] || '') !== CONFIG.STATUSES.BOOKING_PENDING) {
+      return fail_('BOOKING_NOT_PENDING', 'این درخواست دیگر در انتظار بررسی اولیه نیست.');
     }
-    if(String(b['Admin Note']||'').indexOf('INITIAL_REQUEST_APPROVED')!==-1){
-      return {ok:true,bookingId:b['Booking ID'],trackingCode:b['Tracking Code'],status:'AWAITING_PAYMENT',alreadyApproved:true};
+    if (String(b['Payment Status'] || '') !== CONFIG.STATUSES.PAYMENT_PENDING) {
+      return fail_('REQUEST_ALREADY_PAID', 'برای این درخواست قبلاً پرداخت ثبت شده است.');
     }
-    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
-      'Admin Note':'INITIAL_REQUEST_APPROVED',
-      'Hold Until':new Date(Date.now()+Math.max(15,toNumber_(getSetting_('Payment Hold Minutes',30)))*60000),
-      'Initial Approved At':new Date(),'Initial Approved By':String(request.adminId||request.admin||'admin')
+    var hold = parseDateValue_(b['Hold Until']);
+    if (!hold || hold.getTime() <= Date.now()) {
+      releaseBookingRow_(b._row, b['Booking ID'], b['Slot Key']);
+      return fail_('REQUEST_EXPIRED', 'مهلت درخواست پایان یافته است.');
+    }
+    if (String(b['Admin Note'] || '').indexOf('INITIAL_REQUEST_APPROVED') !== -1) {
+      return {
+        ok: true,
+        bookingId: b['Booking ID'],
+        trackingCode: b['Tracking Code'],
+        status: 'AWAITING_PAYMENT',
+        alreadyApproved: true
+      };
+    }
+    updateRowFields_(CONFIG.SHEETS.BOOKINGS, b._row, {
+      'Admin Note': 'INITIAL_REQUEST_APPROVED',
+      'Hold Until': new Date(Date.now() + 10 * 60000),
+      'Initial Approved At': new Date(),
+      'Initial Approved By': String(request.adminId || request.admin || 'admin')
     });
-    appendBookingLog_({action:'INITIAL_REQUEST_APPROVED',bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:'Initial request approved; 30-minute payment window started.'});
-    queueBookingTelegramNotification_(getBookingByIdObject_(b['Booking ID']), 'request_approved');
-    return {ok:true,bookingId:b['Booking ID'],trackingCode:b['Tracking Code'],status:'AWAITING_PAYMENT'};
+    appendBookingLog_({
+      action: 'INITIAL_REQUEST_APPROVED',
+      bookingId: b['Booking ID'],
+      slotKey: b['Slot Key'],
+      details: 'Initial request approved; 10-minute payment window started.'
+    });
+    queueBookingTelegramNotification_(
+      getBookingByIdObject_(b['Booking ID']),
+      'request_approved'
+    );
+    return {
+      ok: true,
+      bookingId: b['Booking ID'],
+      trackingCode: b['Tracking Code'],
+      status: 'AWAITING_PAYMENT'
+    };
   });
 }
-
 function rejectBookingRequest_(request) {
   return withBookingLock_(function() {
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);

@@ -31,3 +31,5 @@ jobs:
         run: node tests/staging-runtime-guard.test.cjs
       - name: Test actual partial-payment failure path
         run: node tests/payment-partial-failure.test.cjs
+      - name: Test booking state without payment row
+        run: node tests/payment-booking-without-row.test.cjs

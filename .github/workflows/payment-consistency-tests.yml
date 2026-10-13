@@ -52,3 +52,5 @@ jobs:
         run: node tests/cross-service-overlap-runtime.test.cjs
       - name: Test final payment approval state guard
         run: node tests/payment-approval-state-guard.test.cjs
+      - name: Test payment rejection recovery after partial write
+        run: node tests/payment-rejection-recovery.test.cjs

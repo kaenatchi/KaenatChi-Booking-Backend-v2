@@ -3695,7 +3695,7 @@ function approveBooking_(request){
     if(status===CONFIG.SLOT_STATUS.CONFIRMED && !alreadyApproved){
       return fail_('SLOT_ALREADY_CONFIRMED','این زمان قبلاً تأیید شده است.');
     }
-    if(status===CONFIG.SLOT_STATUS.BLOCKED)return fail_('SLOT_BLOCKED','این زمان مسدود شده است.');
+    if(status===CONFIG.SLOT_STATUS.BLOCKED && !alreadyApproved)return fail_('SLOT_BLOCKED','این زمان مسدود شده است.');
     if(!alreadyApproved){
       updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
         'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,'Appointment Status':CONFIG.STATUSES.BOOKING_CONFIRMED,

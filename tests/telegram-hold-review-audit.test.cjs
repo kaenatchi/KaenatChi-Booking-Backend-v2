@@ -24,6 +24,7 @@ let priorLogs = [];
 const sandbox = {
   CONFIG: {SHEETS:{BOOKING_LOGS:"BookingLogs"},LOG_ACTIONS:{PAYMENT_REVIEW_HOLD:"PAYMENT_REVIEW_HOLD"}},
   getTelegramConfig_: () => ({adminChatId:"admin-1"}),
+  withBookingLock_: fn => fn(),
   getSheetObjects_: name => { assert.equal(name,"BookingLogs"); return priorLogs; },
   appendBookingLog_: entry => { if (failAudit) throw new Error("simulated audit storage failure"); logs.push(entry); priorLogs.push({"Booking ID":entry.bookingId,Action:entry.action}); },
   answerTelegramCallbackQuery_: (...args) => answers.push(args),

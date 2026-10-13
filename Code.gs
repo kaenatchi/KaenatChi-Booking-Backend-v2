@@ -1390,7 +1390,20 @@ function processBookingTelegramNotificationQueue_() {
       combined = combined.slice(combined.length - 100);
     }
 
-    props2.setProperty(queueKey, JSON.stringify(combined));
+    var combinedJson = JSON.stringify(combined);
+    try {
+      props2.setProperty(queueKey, combinedJson);
+    } catch (persistError) {
+      /*
+       * A transient ScriptProperties failure here would otherwise lose the
+       * items already removed from the queue at the start of this run.
+       * Retry the same idempotent write once before allowing the worker to
+       * exit with the failed items only in memory.
+       */
+      console.warn('Telegram queue re-persist failed; retrying once: ' +
+        String(persistError && persistError.message ? persistError.message : persistError));
+      props2.setProperty(queueKey, combinedJson);
+    }
 
     if (String(props2.getProperty(triggerKey) || '') !== '1') {
       ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')

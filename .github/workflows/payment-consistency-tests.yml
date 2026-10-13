@@ -56,3 +56,9 @@ jobs:
         run: node tests/payment-rejection-recovery.test.cjs
       - name: Test Telegram notification worker recovery
         run: node tests/telegram-notification-worker-recovery.test.cjs
+      - name: Test approval recovery after discount-token partial failure
+        run: node tests/payment-approval-discount-token-recovery.test.cjs
+      - name: Test rejection recovery after audit-log partial failure
+        run: node tests/payment-rejection-audit-recovery.test.cjs
+      - name: Test Telegram queue and audit failure visibility
+        run: node tests/telegram-approval-queue-audit-recovery.test.cjs

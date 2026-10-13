@@ -4209,7 +4209,17 @@ function buildPaymentConsistencyDiagnosticReportPure_(bookings, paymentRows) {
   };
 }
 
-/* Live-sheet report entry point intentionally omitted until a separate staging spreadsheet is configured. */
+/**
+ * Read-only admin/editor diagnostic entry point.
+ * Not registered in routeRequest_: it is not a public API.
+ * Sheet access still passes through the staging isolation guard in getSheet_.
+ * This function never repairs records, sends Telegram, or exposes receipt URLs.
+ */
+function getPaymentConsistencyDiagnosticReport_() {
+  var bookings = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
+  var payments = getSheetObjects_(CONFIG.SHEETS.PAYMENTS);
+  return buildPaymentConsistencyDiagnosticReportPure_(bookings, payments);
+}
 
 function testPaymentConsistencyDiagnosticReportPure_() {
   var tests = [

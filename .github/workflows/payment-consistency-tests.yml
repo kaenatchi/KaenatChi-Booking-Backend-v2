@@ -37,6 +37,8 @@ jobs:
         run: node tests/payment-diagnostic-entrypoint.test.cjs
       - name: Test admin-only Telegram diagnostic access
         run: node tests/payment-diagnostic-telegram-access.test.cjs
+      - name: Test Telegram diagnostic message bounds and escaping
+        run: node tests/payment-diagnostic-message-bounds.test.cjs
       - name: Test Telegram hold-review audit logging
         run: node tests/telegram-hold-review-audit.test.cjs
       - name: Test shared lock integration invariants

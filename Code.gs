@@ -1143,9 +1143,19 @@ function queueBookingTelegramNotification_(booking, eventType) {
       queue = [];
     }
 
+    var bookingId=String(booking['Booking ID'] || '');
+    var normalizedEventType=String(eventType || '');
+    var alreadyQueued=queue.some(function(item){
+      return String(item&&item.bookingId||'')===bookingId &&
+        String(item&&item.eventType||'')===normalizedEventType;
+    });
+    if(alreadyQueued){
+      return {ok:true,queued:true,duplicate:true};
+    }
+
     queue.push({
-      bookingId: String(booking['Booking ID'] || ''),
-      eventType: String(eventType || ''),
+      bookingId: bookingId,
+      eventType: normalizedEventType,
       queuedAt: new Date().toISOString(),
       attempts: 0
     });
@@ -3680,12 +3690,18 @@ function approveBooking_(request){
     var date=normalizeJalaliDate_(b['Appointment Date']),time=normalizeTime_(b['Appointment Time']);
     var slotKey=String(b['Slot Key']||buildSlotKey_(date,time));
     var status=getSlotStatus_(slotKey,date,time);
-    if(status===CONFIG.SLOT_STATUS.CONFIRMED)return fail_('SLOT_ALREADY_CONFIRMED','این زمان قبلاً تأیید شده است.');
+    var alreadyApproved=String(b['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_CONFIRMED &&
+      ps===CONFIG.STATUSES.PAYMENT_APPROVED;
+    if(status===CONFIG.SLOT_STATUS.CONFIRMED && !alreadyApproved){
+      return fail_('SLOT_ALREADY_CONFIRMED','این زمان قبلاً تأیید شده است.');
+    }
     if(status===CONFIG.SLOT_STATUS.BLOCKED)return fail_('SLOT_BLOCKED','این زمان مسدود شده است.');
-    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
-      'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,'Appointment Status':CONFIG.STATUSES.BOOKING_CONFIRMED,
-      'Approved At':new Date(),'Approved By':String(request.adminId||request.admin||'admin'),'Hold Until':''
-    });
+    if(!alreadyApproved){
+      updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+        'Payment Status':CONFIG.STATUSES.PAYMENT_APPROVED,'Appointment Status':CONFIG.STATUSES.BOOKING_CONFIRMED,
+        'Approved At':new Date(),'Approved By':String(request.adminId||request.admin||'admin'),'Hold Until':''
+      });
+    }
 
     // Keep the financial record synchronized with the Booking record.
     // Approval must update the matching Payments row to PAYMENT_APPROVED.
@@ -3707,7 +3723,7 @@ function approveBooking_(request){
       String(b['Telegram ID']||''),
       String(b['Tracking Code']||'')
     );
-    appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_APPROVED,bookingId:b['Booking ID'],slotKey:slotKey,details:'Booking approved.'});
+    ensureBookingLogOnce_({action:CONFIG.LOG_ACTIONS.ADMIN_APPROVED,bookingId:b['Booking ID'],slotKey:slotKey,details:'Booking approved.'});
 
     // Queue Telegram notification outside the booking request path.
     // The notification worker runs from a time-based Apps Script trigger,
@@ -3727,7 +3743,7 @@ function rejectBooking_(request){
       'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),
       'Admin Note':String(request.note||request.reason||''),'Hold Until':''
     });
-    appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.note||request.reason||'')});
+    ensureBookingLogOnce_({action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.note||request.reason||'')});
 
     // Queue the rejection notification outside the booking request path.
     queueBookingTelegramNotification_(b, 'rejected');
@@ -3878,6 +3894,22 @@ function updateRowFields_(sheetName,rowNumber,fields){
   Object.keys(fields).forEach(function(h){var actual=findHeader_(headers,[h]);if(actual)sheet.getRange(rowNumber,headers.indexOf(actual)+1).setValue(fields[h]);});
 }
 
+function ensureBookingLogOnce_(entry){
+  var bookingId=String(entry&&entry.bookingId||'');
+  var action=String(entry&&entry.action||'');
+  if(bookingId && action){
+    var existingLogs=getSheetObjects_(CONFIG.SHEETS.BOOKING_LOGS);
+    for(var i=0;i<existingLogs.length;i++){
+      if(String(existingLogs[i]['Booking ID']||'')===bookingId &&
+         String(existingLogs[i]['Action']||'')===action){
+        return false;
+      }
+    }
+  }
+  appendBookingLog_(entry);
+  return true;
+}
+
 function appendBookingLog_(entry){
   appendObjectRow_(CONFIG.SHEETS.BOOKING_LOGS,{},{
     'Log ID':generateId_('LOG'),'Booking ID':entry.bookingId||'','Action':entry.action||'','Slot Key':entry.slotKey||'','Details':entry.details||'','Created At':new Date()
@@ -3992,6 +4024,20 @@ function consumeDiscountToken_(code,customerId,telegramId,trackingCode){
   }
 
   if(found.used){
+    var requestedCustomerIdForRetry=String(customerId||'').trim();
+    var requestedTelegramIdForRetry=String(telegramId||'').trim();
+    var requestedTrackingCodeForRetry=String(trackingCode||'').trim();
+    var consumedTrackingCode=String(found.row[7]||'').trim();
+
+    if(requestedCustomerIdForRetry && requestedCustomerIdForRetry!==found.customerId){
+      throw new Error('این کد تخفیف متعلق به این حساب VIP نیست.');
+    }
+    if(requestedTelegramIdForRetry && found.telegramId && requestedTelegramIdForRetry!==found.telegramId){
+      throw new Error('این کد تخفیف متعلق به این حساب Telegram نیست.');
+    }
+    if(requestedTrackingCodeForRetry && consumedTrackingCode===requestedTrackingCodeForRetry){
+      return;
+    }
     throw new Error('کد تخفیف قبلاً مصرف شده است.');
   }
 

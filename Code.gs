@@ -728,7 +728,8 @@ function getTelegramConfig_() {
   var props = PropertiesService.getScriptProperties();
   return {
     botToken: String(props.getProperty('KAENATCHI_TELEGRAM_BOT_TOKEN') || '').trim(),
-    adminChatId: String(props.getProperty('KAENATCHI_TELEGRAM_ADMIN_CHAT_ID') || '').trim()
+    adminChatId: String(props.getProperty('KAENATCHI_TELEGRAM_ADMIN_CHAT_ID') || '').trim(),
+    adminUserId: String(props.getProperty('KAENATCHI_TELEGRAM_ADMIN_USER_ID') || '').trim()
   };
 }
 
@@ -1001,7 +1002,10 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   if (!queryId || !message) return {ok:false,error:'TELEGRAM_CALLBACK_INVALID'};
 
   var chatId = String(message.chat && message.chat.id || '').trim();
-  if (!config.adminChatId || chatId !== config.adminChatId) {
+  var userId = String(callbackQuery && callbackQuery.from && callbackQuery.from.id || '').trim();
+  // Fail closed: both the destination chat and the individual clicking user must be authorized.
+  if (!config.adminChatId || chatId !== config.adminChatId ||
+      !config.adminUserId || !userId || userId !== config.adminUserId) {
     answerTelegramCallbackQuery_(queryId,'این عملیات فقط برای ادمین مجاز است.',true);
     return {ok:false,error:'TELEGRAM_ADMIN_ONLY'};
   }

@@ -41,3 +41,5 @@ jobs:
         run: node tests/telegram-queue-repersist-recovery.test.cjs
       - name: Test reminder failure isolation from booking notifications
         run: node tests/telegram-reminder-failure-isolation.test.cjs
+      - name: Test two-stage booking acceptance contract
+        run: node tests/two-stage-booking-contract.test.cjs

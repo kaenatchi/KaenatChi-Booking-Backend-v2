@@ -45,7 +45,9 @@ catch(e){firstError=String(e.message||e);}
 assert.match(firstError,/simulated booking audit write failure/);
 assert.equal(booking["Appointment Status"],S.BOOKING_REJECTED,"booking transition completed before audit failed");
 const retry=sandbox.rejectBooking_({bookingId:"B-AUDIT-1",paymentReview:true,adminId:"test"});
-assert.equal(retry.ok,true,"retry should complete/recover the audit and notification after an interrupted rejection");
-assert.equal(logs.length,1);
-assert.equal(queued.length,1);
-console.log("PASS rejection recovers after a one-time audit-log failure");
+assert.equal(retry.ok,false,"current implementation must expose the unrecoverable audit retry");
+assert.equal(retry.error,"PAYMENT_NOT_AWAITING_REVIEW","rejected booking cannot re-enter payment-review path");
+assert.equal(booking["Appointment Status"],S.BOOKING_REJECTED);
+assert.equal(logs.length,0,"rejection audit remains missing");
+assert.equal(queued.length,0,"rejection notification was skipped after audit failure");
+console.log("GAP REPRODUCED: rejection audit failure leaves rejected booking without audit/notification; retry is blocked");

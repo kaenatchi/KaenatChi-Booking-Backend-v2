@@ -28,7 +28,7 @@ assert.ok(!source.slice(routeStart, routeEnd < 0 ? source.length : routeEnd).inc
 
 let sends = [], answers = [], writes = 0, reportReads = 0;
 const sandbox = {
-  getTelegramConfig_: () => ({adminChatId:"ADMIN-1"}),
+  getTelegramConfig_: () => ({adminChatId:"ADMIN-1",adminUserId:"USER-7"}),
   answerTelegramCallbackQuery_: (...args) => { answers.push(args); return {ok:true}; },
   getPaymentConsistencyDiagnosticReport_: () => {
     reportReads++;
@@ -43,14 +43,27 @@ const sandbox = {
 vm.runInNewContext(extract("handleTelegramCallbackQuery_"), sandbox, {timeout:1000});
 
 const unauthorized = sandbox.handleTelegramCallbackQuery_({
-  id:"Q-1",data:"kaenatchi:payment_diagnostics",message:{chat:{id:"OTHER"},message_id:1}
+  id:"Q-1",data:"kaenatchi:payment_diagnostics",from:{id:7},message:{chat:{id:"OTHER"},message_id:1}
 });
 assert.equal(unauthorized.error,"TELEGRAM_ADMIN_ONLY");
 assert.equal(reportReads,0,"unauthorized caller must not read diagnostics");
 assert.equal(sends.length,0,"unauthorized caller must not receive report");
 
+const wrongUser = sandbox.handleTelegramCallbackQuery_({
+  id:"Q-1B",data:"kaenatchi:payment_diagnostics",from:{id:8},message:{chat:{id:"ADMIN-1"},message_id:3}
+});
+assert.equal(wrongUser.error,"TELEGRAM_ADMIN_ONLY","another group member cannot access diagnostics");
+assert.equal(reportReads,0,"wrong user must not read diagnostics");
+assert.equal(sends.length,0,"wrong user must not receive report");
+
+const missingUser = sandbox.handleTelegramCallbackQuery_({
+  id:"Q-1C",data:"kaenatchi:payment_diagnostics",message:{chat:{id:"ADMIN-1"},message_id:4}
+});
+assert.equal(missingUser.error,"TELEGRAM_ADMIN_ONLY","missing user identity must fail closed");
+assert.equal(reportReads,0,"missing identity must not read diagnostics");
+
 const result = sandbox.handleTelegramCallbackQuery_({
-  id:"Q-2",data:"kaenatchi:payment_diagnostics",message:{chat:{id:"ADMIN-1"},message_id:2}
+  id:"Q-2",data:"kaenatchi:payment_diagnostics",from:{id:7},message:{chat:{id:"ADMIN-1"},message_id:2}
 });
 assert.equal(result.ok,true);
 assert.equal(reportReads,1);

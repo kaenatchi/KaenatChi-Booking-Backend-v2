@@ -83,3 +83,21 @@ const paymentResult=paymentSandbox.submitPayment_({bookingId:unaccepted["Booking
 assert.equal(paymentResult.ok,false);
 assert.equal(paymentResult.error,"BOOKING_NOT_ACCEPTED");
 console.log("PASS request acceptance starts one 10-minute deadline; repeat acceptance is idempotent; payment before acceptance is blocked");
+
+const receiptBooking = {
+  "Slot Key":"1405/07/22|11:00",
+  "Appointment Status":S.BOOKING_PENDING,
+  "Payment Status":S.PAYMENT_RECEIVED,
+  "Hold Until":new Date(Date.now()-3*60*60*1000)
+};
+const slotSandbox = {
+  CONFIG:{STATUSES:S,SLOT_STATUS:{FREE:"free",HELD:"held",CONFIRMED:"confirmed",BLOCKED:"blocked"}},
+  isBlockedSlot_:()=>false,
+  getSheetObjects_:()=>[receiptBooking],
+  parseDateValue_:()=>new Date(Date.now()-3*60*60*1000),
+  Date,String
+};
+vm.runInNewContext(extractFunction("getSlotStatus_"),slotSandbox,{timeout:1000});
+assert.equal(slotSandbox.getSlotStatus_(receiptBooking["Slot Key"],"1405/07/22","11:00"),"held",
+  "a receipt awaiting manual bank verification must keep the slot reserved beyond 120 minutes");
+console.log("PASS receipt-review booking remains reserved after the old 120-minute review interval");

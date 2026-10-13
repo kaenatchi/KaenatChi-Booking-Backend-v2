@@ -48,12 +48,6 @@ assert.equal(result.unchanged, true);
 assert.equal(result.audited, true);
 assert.equal(logs.length, 1);
 
-const wrongUser = sandbox.handleTelegramCallbackQuery_(callback("admin-1", "other-user"));
-assert.equal(wrongUser.error, "TELEGRAM_ADMIN_ONLY");
-assert.equal(logs.length, 1, "unauthorized group member must not create audit record");
-const missingUser = sandbox.handleTelegramCallbackQuery_(callback("admin-1", null));
-assert.equal(missingUser.error, "TELEGRAM_ADMIN_ONLY");
-assert.equal(logs.length, 1, "missing clicker identity must fail closed");
 assert.equal(logs[0].action, "PAYMENT_REVIEW_HOLD");
 assert.equal(logs[0].bookingId, "B-100");
 assert.equal(bookingWrites, 0);
@@ -102,6 +96,15 @@ assert.equal(logs.length, 1, "lock timeout must not append audit record");
 assert.equal(answers.length, 1);
 assert.equal(answers[0][2], true);
 assert.equal(lockReleases, 3, "lock that was never acquired must not be released");
+
+
+const logCountBeforeUnauthorizedIdentityChecks = logs.length;
+const wrongUser = sandbox.handleTelegramCallbackQuery_(callback("admin-1", "other-user"));
+assert.equal(wrongUser.error, "TELEGRAM_ADMIN_ONLY");
+assert.equal(logs.length, logCountBeforeUnauthorizedIdentityChecks, "unauthorized group member must not create audit record");
+const missingUser = sandbox.handleTelegramCallbackQuery_(callback("admin-1", null));
+assert.equal(missingUser.error, "TELEGRAM_ADMIN_ONLY");
+assert.equal(logs.length, logCountBeforeUnauthorizedIdentityChecks, "missing clicker identity must fail closed");
 
 console.log("PASS actual withBookingLock_ acquires and releases script lock");
 console.log("PASS first hold-review writes one audit record only");

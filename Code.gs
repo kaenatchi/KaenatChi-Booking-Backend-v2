@@ -1070,7 +1070,7 @@ function buildBookingTelegramText_(booking, eventType) {
   );
 }
 
-function sendBookingTelegramNotifications_(booking, eventType) {
+function sendBookingTelegramNotifications_(booking, eventType, queueItem) {
   var config=getTelegramConfig_();
   var text=buildBookingTelegramText_(booking,eventType);
   var results=[];
@@ -1087,14 +1087,17 @@ function sendBookingTelegramNotifications_(booking, eventType) {
         )
       : null;
 
-  if(config.adminChatId){
+  if(config.adminChatId && !(queueItem && queueItem.adminDelivered===true)){
     adminResult=sendTelegramMessage_(
       config.adminChatId,
       text,
       replyMarkup
     );
     results.push(adminResult);
-  } else {
+    if(adminResult && adminResult.ok===true && queueItem){
+      queueItem.adminDelivered=true;
+    }
+  } else if(!config.adminChatId) {
     results.push({
       ok:false,
       skipped:true,
@@ -1103,13 +1106,19 @@ function sendBookingTelegramNotifications_(booking, eventType) {
   }
 
   var customerChatId=String(booking['Telegram ID']||'').trim();
-  if(customerChatId && customerChatId!==config.adminChatId){
-    results.push(
-      sendTelegramMessage_(
-        customerChatId,
-        text
-      )
+  if(
+    customerChatId &&
+    customerChatId!==config.adminChatId &&
+    !(queueItem && queueItem.customerDelivered===true)
+  ){
+    var customerResult=sendTelegramMessage_(
+      customerChatId,
+      text
     );
+    results.push(customerResult);
+    if(customerResult && customerResult.ok===true && queueItem){
+      queueItem.customerDelivered=true;
+    }
   }
 
   return {
@@ -1265,7 +1274,8 @@ function processBookingTelegramNotificationQueue_() {
 
       var result = sendBookingTelegramNotifications_(
         booking,
-        String(item.eventType || '')
+        String(item.eventType || ''),
+        item
       );
 
       /*

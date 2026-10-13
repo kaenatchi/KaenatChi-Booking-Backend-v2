@@ -20,10 +20,12 @@ function extractFunction(name) {
   throw new Error("unterminated " + name);
 }
 let logs = [], answers = [], bookingWrites = 0, paymentWrites = 0, failAudit = false;
+let priorLogs = [];
 const sandbox = {
-  CONFIG: {LOG_ACTIONS:{PAYMENT_REVIEW_HOLD:"PAYMENT_REVIEW_HOLD"}},
+  CONFIG: {SHEETS:{BOOKING_LOGS:"BookingLogs"},LOG_ACTIONS:{PAYMENT_REVIEW_HOLD:"PAYMENT_REVIEW_HOLD"}},
   getTelegramConfig_: () => ({adminChatId:"admin-1"}),
-  appendBookingLog_: entry => { if (failAudit) throw new Error("simulated audit storage failure"); logs.push(entry); },
+  getSheetObjects_: name => { assert.equal(name,"BookingLogs"); return priorLogs; },
+  appendBookingLog_: entry => { if (failAudit) throw new Error("simulated audit storage failure"); logs.push(entry); priorLogs.push({"Booking ID":entry.bookingId,Action:entry.action}); },
   answerTelegramCallbackQuery_: (...args) => answers.push(args),
   updateRowFields_: () => { bookingWrites++; },
   appendObjectRow_: () => { paymentWrites++; },
@@ -42,11 +44,19 @@ assert.equal(bookingWrites, 0);
 assert.equal(paymentWrites, 0);
 assert.equal(answers.length, 1);
 
-logs = [];
+answers = [];
+const repeated = sandbox.handleTelegramCallbackQuery_(callback("admin-1"));
+assert.equal(repeated.ok, true);
+assert.equal(repeated.duplicate, true);
+assert.equal(logs.length, 1, "repeat click must not duplicate audit row");
+assert.equal(bookingWrites, 0);
+assert.equal(paymentWrites, 0);
+
 const unauthorized = sandbox.handleTelegramCallbackQuery_(callback("not-admin"));
 assert.equal(unauthorized.error, "TELEGRAM_ADMIN_ONLY");
-assert.equal(logs.length, 0);
+assert.equal(logs.length, 1);
 
+priorLogs = [];
 failAudit = true;
 answers = [];
 const failed = sandbox.handleTelegramCallbackQuery_(callback("admin-1"));
@@ -54,11 +64,12 @@ assert.equal(failed.ok, false);
 assert.equal(failed.error, "PAYMENT_REVIEW_AUDIT_FAILED");
 assert.equal(failed.unchanged, true);
 assert.equal(answers.length, 1);
-assert.equal(answers[0][2], true, "admin should be alerted that audit persistence failed");
+assert.equal(answers[0][2], true);
 assert.equal(bookingWrites, 0);
 assert.equal(paymentWrites, 0);
 
-console.log("PASS successful audit records admin hold without changing booking/payment");
+console.log("PASS first hold-review writes one audit record only");
+console.log("PASS repeated click is idempotent and creates no duplicate log");
 console.log("PASS unauthorized callback cannot create audit record");
-console.log("PASS audit storage failure is reported and no success is claimed");
-console.log("PASS total: 3/3 scenarios");
+console.log("PASS audit failure is reported without claiming success");
+console.log("PASS total: 4/4 scenarios");

@@ -55,6 +55,7 @@ const CONFIG = {
     PAYMENT_SUBMITTED: 'PAYMENT_SUBMITTED',
     ADMIN_APPROVED: 'ADMIN_APPROVED',
     ADMIN_REJECTED: 'ADMIN_REJECTED',
+    PAYMENT_REVIEW_HOLD: 'PAYMENT_REVIEW_HOLD',
     SLOT_RELEASED: 'SLOT_RELEASED',
     BOOKING_CANCELLED: 'BOOKING_CANCELLED'
   },
@@ -1008,10 +1009,16 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   var action = match[1];
   var bookingId = String(match[2] || '').trim();
 
-  // This action is deliberately non-mutating: it leaves payment pending manual bank verification.
+  // This action leaves booking/payment status unchanged, but records the admin decision.
   if (action === 'hold_review') {
-    answerTelegramCallbackQuery_(queryId,'فیش در انتظار بررسی بانکی باقی ماند؛ وضعیت نوبت تغییری نکرد.',false);
-    return {ok:true,action:action,bookingId:bookingId,unchanged:true};
+    appendBookingLog_({
+      action:CONFIG.LOG_ACTIONS.PAYMENT_REVIEW_HOLD,
+      bookingId:bookingId,
+      slotKey:'',
+      details:'ادمین فیش را برای بررسی بانکی نگه داشت؛ وضعیت رزرو و پرداخت تغییر نکرد.'
+    });
+    answerTelegramCallbackQuery_(queryId,'فیش برای بررسی بانکی نگه داشته شد؛ وضعیت نوبت تغییری نکرد.',false);
+    return {ok:true,action:action,bookingId:bookingId,unchanged:true,audited:true};
   }
 
   var result;

@@ -1292,7 +1292,18 @@ function processBookingTelegramNotificationQueue_() {
    * Appointment reminders share the existing one-minute Telegram worker.
    * This runs even when the notification queue is empty.
    */
-  processAppointmentReminders_();
+  /*
+   * Reminder processing is best-effort and must never abort the payment
+   * notification queue after its items have been drained from ScriptProperties.
+   */
+  try {
+    processAppointmentReminders_();
+  } catch (reminderError) {
+    console.warn(
+      'Appointment reminder processing failed; continuing booking notifications: ' +
+      String(reminderError && reminderError.message ? reminderError.message : reminderError)
+    );
+  }
 
   if (!items.length) {
     return;

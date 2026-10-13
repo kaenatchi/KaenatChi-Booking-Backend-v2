@@ -174,6 +174,7 @@ assert.equal(listed.slots.find(slot => slot.time === "13:00").available, true, "
 // Verify the exact-slot status function retains submitted-receipt holds
 // after the review timer expires, and releases only expired unpaid requests.
 const fixedNow = Date.parse("2026-10-13T12:00:00.000Z");
+const originalStatuses = sandbox.CONFIG.STATUSES;
 sandbox.CONFIG.STATUSES = {
   BOOKING_PENDING: "در انتظار بررسی",
   BOOKING_CONFIRMED: "تأیید شده",
@@ -214,6 +215,7 @@ try {
   );
 } finally {
   Date.now = realDateNow;
+  sandbox.CONFIG.STATUSES = originalStatuses;
 }
 
 

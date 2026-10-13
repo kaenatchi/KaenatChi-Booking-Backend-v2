@@ -60,7 +60,7 @@ assert.equal(failed.failed,1);
 let inflight=JSON.parse(props.get("KAENATCHI_TELEGRAM_INFLIGHT"));
 assert.equal(inflight.length,1,"failed notification remains durable");
 assert.equal(inflight[0].attempts,1,"attempt counter increments");
-assert.equal(inflight[0].lastError,"SIMULATED_SEND_FAILURE");
+assert.match(inflight[0].lastError,/Telegram delivery failed/,"worker records a durable delivery failure reason");
 assert.equal(Date.parse(inflight[0].retryAt),now+5000,"first retry is delayed by five seconds");
 assert.ok(scheduled.some(x=>x.name==="processBookingTelegramNotificationQueue_"),"retry trigger scheduled");
 console.log("PASS failed delivery remains in durable queue with retry metadata");

@@ -137,7 +137,7 @@ function booking(id, time, serviceId, duration, status, payment, holdUntil) {
 const rows = [
   booking("confirmed-energy", "11:00", "energy", 30, "CONFIRMED", "PAYMENT_APPROVED", new Date(now - 999999)),
   booking("receipt-therapy", "12:00", "therapy", 45, "PENDING", "PAYMENT_RECEIVED", new Date(now - 999999)),
-  booking("expired-unpaid", "14:00", "energy", 30, "PENDING", "PAYMENT_PENDING", new Date(now - 999999)),
+  booking("expired-unpaid", "14:00", "energy", 30, "PENDING", "PAYMENT_PENDING", new Date(now - 999999).toISOString()),
   booking("rejected", "15:00", "energy", 30, "REJECTED", "PAYMENT_RECEIVED", new Date(now + 999999))
 ];
 
@@ -146,6 +146,7 @@ function overlaps(time, duration, excludeId) {
 }
 assert.equal(overlaps("11:20", 20), true, "cross-service overlap must block a conflicting interval");
 assert.equal(overlaps("12:40", 20), true, "receipt-backed appointment must remain blocking after hold expiry");
+assert.equal(sandbox.isBlockingBookingRow_(rows[2]), false, "expired unpaid fixture must be non-blocking");
 assert.equal(overlaps("14:15", 15), false, "expired unpaid request must not block");
 assert.equal(overlaps("15:10", 15), false, "rejected request must not block");
 assert.equal(overlaps("11:30", 20), false, "interval starting exactly at prior appointment end is allowed");

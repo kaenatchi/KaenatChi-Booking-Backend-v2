@@ -662,6 +662,23 @@ function assertStagingSpreadsheetIsolation_() {
     );
   }
 
+  // Explicit production denylist. Distinct IDs alone do not prove isolation:
+  // the booking ID must not be the production CMS spreadsheet, and the VIP ID
+  // must not be the production VIP spreadsheet (or either production ID).
+  const productionSpreadsheetIds = [
+    '1cf6SFL80xJ8YrBPlr_Fp9TYhkKGkhu2U45D2WTSyNz0',
+    '1TpljGwyRpHcxyyR6Zm1mbT2CPJBvFeHCvD3QH34BuGs'
+  ];
+  if (
+    productionSpreadsheetIds.indexOf(bookingSpreadsheetId) !== -1 ||
+    productionSpreadsheetIds.indexOf(vipSpreadsheetId) !== -1
+  ) {
+    throw new Error(
+      'STAGING SAFETY BLOCK: A production CMS/VIP spreadsheet ID was configured. ' +
+      'Use verified dedicated staging spreadsheets before any sheet access.'
+    );
+  }
+
   return true;
 }
 

@@ -37,3 +37,5 @@ jobs:
         run: node tests/telegram-callback-queue-retry.test.cjs
       - name: Test stale rejection callback against confirmed booking
         run: node tests/reject-already-confirmed-booking.test.cjs
+      - name: Test transient Telegram queue re-persist recovery
+        run: node tests/telegram-queue-repersist-recovery.test.cjs

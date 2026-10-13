@@ -1127,7 +1127,7 @@ function sendBookingTelegramNotifications_(booking, eventType, queueItem) {
      * payment notifications. A successful customer delivery cannot hide an
      * admin delivery failure or missing admin-chat configuration.
      */
-    ok: !!(adminResult && adminResult.ok === true),
+    ok: !!((adminResult && adminResult.ok === true) || (queueItem && queueItem.adminDelivered === true)),
     results: results
   };
 }

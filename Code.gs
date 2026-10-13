@@ -316,6 +316,7 @@ function getBookedSlots_() {
     const holdUntil = parseDateValue_(row['Hold Until']);
     const pendingStillReservesSlot = status === CONFIG.STATUSES.BOOKING_PENDING && (
       paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
+      paymentStatus === CONFIG.STATUSES.PAYMENT_APPROVED ||
       (holdUntil && holdUntil.getTime() > Date.now())
     );
 
@@ -2946,7 +2947,13 @@ function getSlotStatus_(
       // makes the final decision. The payment-review timer is not a license
       // to release a slot for which proof/payment details were submitted.
       const paymentStatus = String(booking['Payment Status'] || '');
-      if (paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED) {
+      if (
+        paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
+        paymentStatus === CONFIG.STATUSES.PAYMENT_APPROVED
+      ) {
+        // Once a receipt is submitted or bank verification is recorded,
+        // the slot stays reserved until the appointment state is finalized.
+        // This also protects recovery if approval's second sheet write fails.
         return CONFIG.SLOT_STATUS.HELD;
       }
 

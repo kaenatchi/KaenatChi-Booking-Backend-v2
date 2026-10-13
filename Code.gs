@@ -2660,6 +2660,14 @@ function getAvailableSlots_(request) {
         status = CONFIG.SLOT_STATUS.BLOCKED;
       } else if (statuses[slotKey]) {
         status = statuses[slotKey];
+      } else if (
+        service &&
+        (
+          !isWithinScheduleRange_(time, serviceDuration, schedule.ranges) ||
+          hasBookingOverlap_(bookingRows, date, time, serviceDuration, '', serviceDurationMap)
+        )
+      ) {
+        status = CONFIG.SLOT_STATUS.BLOCKED;
       }
 
       slots.push({
@@ -2679,6 +2687,92 @@ function getAvailableSlots_(request) {
   };
 }
 
+
+/*
+ * Duration-aware booking conflict guards.
+ * Receipt-submitted bookings remain blocking after Hold Until; unpaid pending
+ * requests block only while their initial hold remains valid.
+ */
+function buildServiceDurationMap_() {
+  var result = getServices_({}).services || [];
+  var map = {};
+  result.forEach(function(service) {
+    var duration = Number(service.duration) || 30;
+    var id = String(service.id || '').trim();
+    var name = normalizeServiceNameForOverlap_(service.name);
+    if (id) map['id:' + id] = duration;
+    if (name) map['name:' + name] = duration;
+  });
+  return map;
+}
+
+function normalizeServiceNameForOverlap_(value) {
+  var name = String(value || '');
+  if (name.normalize) name = name.normalize('NFKC');
+  return name.replace(/[\s\u200c\u200d\u200f\u200e_-]+/g, '').toLocaleLowerCase('fa');
+}
+
+function getServiceDurationMinutes_(serviceId, serviceName, durationMap) {
+  var id = String(serviceId || '').trim();
+  var name = normalizeServiceNameForOverlap_(serviceName);
+  var duration = durationMap && id ? Number(durationMap['id:' + id]) : 0;
+  if (!(duration > 0) && durationMap && name) duration = Number(durationMap['name:' + name]);
+  if (!(duration > 0) && !(durationMap && (id || name))) {
+    var service = findServiceRecord_(id, String(serviceName || ''));
+    duration = service ? toNumber_(service.duration) : 0;
+  }
+  if (!(duration > 0) && serviceName) {
+    var defaults = getBuiltInServiceDefaults_(serviceName);
+    if (defaults) duration = defaults.duration;
+  }
+  return duration > 0 ? duration : 30;
+}
+
+function isWithinScheduleRange_(startTime, durationMinutes, ranges) {
+  var start = timeToMinutes_(startTime);
+  var duration = Number(durationMinutes) || 30;
+  return (ranges || []).some(function(range) {
+    var rangeStart = timeToMinutes_(range.startTime);
+    var rangeEnd = timeToMinutes_(range.endTime);
+    return start >= rangeStart && start + duration <= rangeEnd;
+  });
+}
+
+function isBlockingBookingRow_(row) {
+  var status = String(row['Appointment Status'] || '');
+  if (status === CONFIG.STATUSES.BOOKING_CONFIRMED) return true;
+  if (status !== CONFIG.STATUSES.BOOKING_PENDING) return false;
+  var paymentStatus = String(row['Payment Status'] || '');
+  if (
+    paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED ||
+    paymentStatus === CONFIG.STATUSES.PAYMENT_APPROVED
+  ) return true;
+  var holdUntil = parseDateValue_(row['Hold Until']);
+  return !!holdUntil && holdUntil.getTime() > Date.now();
+}
+
+function intervalsOverlap_(startA, endA, startB, endB) {
+  return Number(startA) < Number(endB) && Number(startB) < Number(endA);
+}
+
+function hasBookingOverlap_(bookingRows, targetDate, startTime, durationMinutes, excludeBookingId, durationMap) {
+  var candidateStart = timeToMinutes_(startTime);
+  var candidateEnd = candidateStart + (Number(durationMinutes) || 30);
+  return (bookingRows || []).some(function(row) {
+    if (excludeBookingId && String(row['Booking ID'] || '') === String(excludeBookingId)) return false;
+    if (normalizeJalaliDate_(row['Appointment Date']) !== normalizeJalaliDate_(targetDate)) return false;
+    if (!isBlockingBookingRow_(row)) return false;
+    var existingStartText = normalizeTime_(row['Appointment Time']);
+    if (!existingStartText) return false;
+    var existingStart = timeToMinutes_(existingStartText);
+    var existingDuration = getServiceDurationMinutes_(
+      row['Service ID'], row['Service Name'], durationMap
+    );
+    return intervalsOverlap_(
+      candidateStart, candidateEnd, existingStart, existingStart + existingDuration
+    );
+  });
+}
 
 /* =====================================================
    12. DATE SCHEDULE RESOLUTION
@@ -4144,6 +4238,18 @@ function createBooking_(request){
 
     var service=findServiceRecord_(String(request.serviceId||''),String(request.serviceName||request.service||''));
     if(!service)return fail_('SERVICE_NOT_FOUND','خدمت انتخاب‌شده پیدا نشد.');
+    var serviceDuration=Number(service.duration)||30;
+    var schedule=getScheduleForDate_(date);
+    var allowed=schedule.ranges.some(function(r){
+      return generateSlots_(r.startTime,r.endTime,r.slotDuration).indexOf(time)!==-1 &&
+        isWithinScheduleRange_(time,serviceDuration,[r]);
+    });
+    if(!allowed)return fail_('SERVICE_DURATION_EXCEEDS_WORKING_HOURS','مدت این خدمت در ساعات کاری باقی‌مانده جا نمی‌شود.');
+    var activeBookings=getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
+    var serviceDurationMap=buildServiceDurationMap_();
+    if(hasBookingOverlap_(activeBookings,date,time,serviceDuration,'',serviceDurationMap)) {
+      return fail_('SLOT_OVERLAP','این ساعت با بازهٔ یک نوبت دیگر تداخل دارد. لطفاً ساعت دیگری انتخاب کن.');
+    }
     var basePrice=toNumber_(service.price);
     var discountCode=String(request.discountCode||request.vipCode||'').trim();
     var discount=validateDiscount_({

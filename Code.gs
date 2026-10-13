@@ -232,7 +232,7 @@ function adminDecision_(b) {
       updatePaymentStatus_(id,'REJECTED',actor);
       return {ok:true,status:row.Status};
     }
-    if (decision === 'approveReschedule') {\n      if (row.Status !== CORE.STATUS.RESCHEDULE_REQUESTED) fail_('INVALID_STATE','درخواست تغییر زمان در صف بررسی نیست.');\n      const d=String(row['Requested Reschedule Date']||'');const t=normalizeTime_(row['Requested Reschedule Time']);\n      const slot=getSlots_(d).slots.find(s=>s.time===t);\n      if(!slot||slot.status!=='AVAILABLE') fail_('SLOT_UNAVAILABLE','زمان پیشنهادی دیگر در دسترس نیست؛ نوبت قبلی حفظ شده است.');\n      row['Appointment Date']=d;row['Appointment Time']=t;row['Appointment Code']='KC-'+Utilities.getUuid().replace(/-/g,'').slice(0,10).toUpperCase();row['Requested Reschedule Date']='';row['Requested Reschedule Time']='';row.Status=CORE.STATUS.CONFIRMED;row['Updated At']=new Date();writeObject_(ref.sheet,ref.row,row);\n      log_(id,'RESCHEDULE_APPROVED',CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.CONFIRMED,actor,{newDate:d,newTime:t,oldSlotReleased:true});\n      return {ok:true,status:row.Status,date:d,time:t,appointmentCode:row['Appointment Code']};\n    }\n    if (decision === 'rejectReschedule') {\n      if (row.Status !== CORE.STATUS.RESCHEDULE_REQUESTED) fail_('INVALID_STATE','درخواست تغییر زمان در صف بررسی نیست.');\n      row['Requested Reschedule Date']='';row['Requested Reschedule Time']='';row.Status=CORE.STATUS.CONFIRMED;row['Updated At']=new Date();writeObject_(ref.sheet,ref.row,row);\n      log_(id,'RESCHEDULE_REJECTED',CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.CONFIRMED,actor,{oldSlotRetained:true});\n      return {ok:true,status:row.Status,message:'درخواست تغییر زمان رد شد؛ نوبت قبلی حفظ شد.'};\n    }\n    if (decision === 'approveCancel') {
+    if (decision === 'approveReschedule') {\n      if (row.Status !== CORE.STATUS.RESCHEDULE_REQUESTED) fail_('INVALID_STATE','درخواست تغییر زمان در صف بررسی نیست.');\n      const d=String(row['Requested Reschedule Date']||'');const t=normalizeTime_(row['Requested Reschedule Time']);\n      if(!isSlotAvailableFor_(d,t,String(row['Service IDs']||'').split(',').filter(Boolean),id)) fail_('SLOT_UNAVAILABLE','زمان پیشنهادی دیگر در دسترس نیست؛ نوبت قبلی حفظ شده است.');\n      row['Appointment Date']=d;row['Appointment Time']=t;row['Appointment Code']='KC-'+Utilities.getUuid().replace(/-/g,'').slice(0,10).toUpperCase();row['Requested Reschedule Date']='';row['Requested Reschedule Time']='';row.Status=CORE.STATUS.CONFIRMED;row['Updated At']=new Date();writeObject_(ref.sheet,ref.row,row);\n      log_(id,'RESCHEDULE_APPROVED',CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.CONFIRMED,actor,{newDate:d,newTime:t,oldSlotReleased:true});\n      return {ok:true,status:row.Status,date:d,time:t,appointmentCode:row['Appointment Code']};\n    }\n    if (decision === 'rejectReschedule') {\n      if (row.Status !== CORE.STATUS.RESCHEDULE_REQUESTED) fail_('INVALID_STATE','درخواست تغییر زمان در صف بررسی نیست.');\n      row['Requested Reschedule Date']='';row['Requested Reschedule Time']='';row.Status=CORE.STATUS.CONFIRMED;row['Updated At']=new Date();writeObject_(ref.sheet,ref.row,row);\n      log_(id,'RESCHEDULE_REJECTED',CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.CONFIRMED,actor,{oldSlotRetained:true});\n      return {ok:true,status:row.Status,message:'درخواست تغییر زمان رد شد؛ نوبت قبلی حفظ شد.'};\n    }\n    if (decision === 'approveCancel') {
       if (row.Status !== CORE.STATUS.CANCEL_REQUESTED) fail_('INVALID_STATE','درخواست لغو در صف بررسی نیست.');
       transition_(ref,CORE.STATUS.CANCELLED,actor,'CANCELLATION_APPROVED');
       row['Decision At']=new Date();row['Decision By']=actor;row['Updated At']=new Date();writeObject_(ref.sheet,ref.row,row);
@@ -383,7 +383,28 @@ function readClosureSet_() {
   });
   return {dates,slots};
 }
-function expireStaleRequests_() {\n  const now=Date.now();\n  objectsWithRows_(tab_(CORE.TABS.BOOKINGS)).forEach(ref=>{\n    const status=String(ref.obj.Status||'');\n    const requestExpiry=new Date(ref.obj['Request Expires At']).getTime();\n    const paymentExpiry=new Date(ref.obj['Payment Expires At']).getTime();\n    if(status===CORE.STATUS.REQUEST_PENDING && Number.isFinite(requestExpiry) && requestExpiry>0 && requestExpiry<=now) transition_(ref,CORE.STATUS.EXPIRED,'system','REQUEST_WINDOW_EXPIRED');\n    else if(status===CORE.STATUS.PAYMENT_PENDING && Number.isFinite(paymentExpiry) && paymentExpiry>0 && paymentExpiry<=now) transition_(ref,CORE.STATUS.EXPIRED,'system','PAYMENT_WINDOW_EXPIRED');\n  });\n}\nfunction activeSlotSet_() {
+function expireStaleRequests_() {\n  const now=Date.now();\n  objectsWithRows_(tab_(CORE.TABS.BOOKINGS)).forEach(ref=>{\n    const status=String(ref.obj.Status||'');\n    const requestExpiry=new Date(ref.obj['Request Expires At']).getTime();\n    const paymentExpiry=new Date(ref.obj['Payment Expires At']).getTime();\n    if(status===CORE.STATUS.REQUEST_PENDING && Number.isFinite(requestExpiry) && requestExpiry>0 && requestExpiry<=now) transition_(ref,CORE.STATUS.EXPIRED,'system','REQUEST_WINDOW_EXPIRED');\n    else if(status===CORE.STATUS.PAYMENT_PENDING && Number.isFinite(paymentExpiry) && paymentExpiry>0 && paymentExpiry<=now) transition_(ref,CORE.STATUS.EXPIRED,'system','PAYMENT_WINDOW_EXPIRED');\n  });\n}\nfunction isSlotAvailableFor_(date,time,serviceIds,excludeRequestId) {
+  if(date!==tomorrowJalali_()) return false;
+  const day=tehranTomorrowWeekday_(),ids=Array.isArray(serviceIds)?serviceIds:[];
+  const catalog=ids.length?getPublicConfig_().services:[];
+  const selected=ids.map(id=>catalog.find(s=>s.id===id)).filter(Boolean);
+  const therapy=selected.some(s=>/درمان|therapy|psychotherap|روان.?درمان|شمع.?درمان/i.test(s.category+' '+s.name));
+  const energy=selected.some(s=>!/درمان|therapy|psychotherap|روان.?درمان|شمع.?درمان/i.test(s.category+' '+s.name));
+  if(therapy&&energy) return false;
+  if(therapy ? day!==4 || !therapySlots_().includes(time) : !scheduleForDay_(day).includes(time)) return false;
+  const closures=readClosureSet_();
+  if(closures.dates.has(date)||closures.slots.has(date+'|'+time)) return false;
+  expireStaleRequests_();
+  return !objectsWithRows_(tab_(CORE.TABS.BOOKINGS)).some(x=>{
+    if(String(x.obj['Request ID']||'')===String(excludeRequestId||'')) return false;
+    const status=String(x.obj.Status||'');
+    const active=[CORE.STATUS.REQUEST_PENDING,CORE.STATUS.PAYMENT_PENDING,CORE.STATUS.RECEIPT_REVIEW,CORE.STATUS.CONFIRMED,CORE.STATUS.CANCEL_REQUESTED,CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.MANAGER_RESCHEDULE_OFFERED].includes(status);
+    if(!active) return false;
+    if(normalizeDate_(x.obj['Appointment Date'])===date&&normalizeTime_(x.obj['Appointment Time'])===time) return true;
+    return status===CORE.STATUS.RESCHEDULE_REQUESTED&&normalizeDate_(x.obj['Requested Reschedule Date'])===date&&normalizeTime_(x.obj['Requested Reschedule Time'])===time;
+  });
+}
+function activeSlotSet_() {
   const set=new Set();
   readObjects_(staging_(),[CORE.TABS.BOOKINGS]).forEach(r=>{
     if([CORE.STATUS.REQUEST_PENDING,CORE.STATUS.PAYMENT_PENDING,CORE.STATUS.RECEIPT_REVIEW,CORE.STATUS.CONFIRMED,CORE.STATUS.CANCEL_REQUESTED,CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.MANAGER_RESCHEDULE_OFFERED].includes(String(r.Status||''))) set.add(normalizeDate_(r['Appointment Date'])+'|'+normalizeTime_(r['Appointment Time']));

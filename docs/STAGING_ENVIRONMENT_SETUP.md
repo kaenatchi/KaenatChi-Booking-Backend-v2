@@ -66,11 +66,24 @@ Use synthetic test records only. A blank spreadsheet is not ready until all requ
 
 The staging branch configuration has now been updated with the two IDs above. Keep `STAGING_MODE: true` and keep the IDs different. Do not edit the production branch, Worker, production CMS, or live Apps Script deployment.
 
+## Safe booking-tab initializer
+
+`initializeBookingStagingTabs_()` has been added to `Code.gs` on this staging branch. It is a manual, one-time helper and has **not** been executed.
+
+Important limitations and safeguards:
+- It opens only the configured booking staging spreadsheet; it does not open the VIP staging spreadsheet.
+- It checks `STAGING_MODE: true` and distinct non-empty booking/VIP IDs before accessing the booking sheet.
+- It creates the nine required booking tabs and writes headers only to tabs that are completely empty.
+- It preserves existing tabs with content and reports them for review; it does not replace existing headers or rows.
+- It does not copy production data, send Telegram messages, upload files to Drive, deploy code, or change the live app.
+
+To use it, first create a **separate Apps Script staging project** and place the reviewed staging-branch code there. Do not paste or run this helper in the existing live Apps Script project. Then run `initializeBookingStagingTabs_()` manually in that staging project and inspect its returned summary. If any existing tab is non-empty, review it before proceeding. This helper prepares the booking spreadsheet only; it does not create or initialize VIP tabs.
+
 ## Verification sequence
 
 1. Run CI tests; the shared-ID runtime guard tests must pass.
 2. Verify the two configured IDs are different and are the newly created staging resources.
-3. Verify required tab names and headers against the code before calling healthCheck_.
+3. In a separate staging Apps Script project only, run `initializeBookingStagingTabs_()` and inspect its summary; verify required tab names and headers before calling `healthCheck_`.
 4. Only then perform a staging-only backend smoke test with synthetic records.
 5. Keep Telegram, Drive receipt uploads, payment approval, and live deployment disabled until each is separately reviewed.
 

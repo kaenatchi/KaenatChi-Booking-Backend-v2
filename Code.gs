@@ -51,6 +51,7 @@ const CONFIG = {
     BOOKING_CREATED: 'BOOKING_CREATED',
     SLOT_HELD: 'SLOT_HELD',
     PAYMENT_SUBMITTED: 'PAYMENT_SUBMITTED',
+    PAYMENT_REVIEW_HOLD: 'PAYMENT_REVIEW_HOLD',
     ADMIN_APPROVED: 'ADMIN_APPROVED',
     ADMIN_REJECTED: 'ADMIN_REJECTED',
     SLOT_RELEASED: 'SLOT_RELEASED',
@@ -950,10 +951,34 @@ function editTelegramMessageReplyMarkup_(chatId, messageId, replyMarkup) {
 function getBookingTelegramAdminKeyboard_(bookingId, mode) {
   var id = String(bookingId || '').trim();
   var requestMode = mode === 'request';
-  return {inline_keyboard:[[
-    {text:requestMode?'✅ تأیید اولیه':'✅ تأیید پرداخت',callback_data:(requestMode?'kaenatchi:request_approve:':'kaenatchi:approve:')+id},
-    {text:requestMode?'❌ رد درخواست':'❌ رد فیش',callback_data:(requestMode?'kaenatchi:request_reject:':'kaenatchi:reject:')+id}
-  ]]};
+
+  var keyboard = [
+    [
+      {
+        text: requestMode ? '✅ تأیید اولیه' : '✅ تأیید پرداخت',
+        callback_data: (requestMode
+          ? 'kaenatchi:request_approve:'
+          : 'kaenatchi:approve:') + id
+      },
+      {
+        text: requestMode ? '❌ رد درخواست' : '❌ رد فیش',
+        callback_data: (requestMode
+          ? 'kaenatchi:request_reject:'
+          : 'kaenatchi:reject:') + id
+      }
+    ]
+  ];
+
+  if (!requestMode) {
+    keyboard.push([
+      {
+        text: '🕒 نگه‌داشتن برای بررسی بانکی',
+        callback_data: 'kaenatchi:hold_review:' + id
+      }
+    ]);
+  }
+
+  return { inline_keyboard: keyboard };
 }
 
 function getBookingTelegramResultKeyboard_(status) {
@@ -991,75 +1016,156 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   var queryId = String(callbackQuery && callbackQuery.id || '').trim();
   var data = String(callbackQuery && callbackQuery.data || '').trim();
   var message = callbackQuery && callbackQuery.message;
-
   if (!queryId || !message) {
     return {ok:false,error:'TELEGRAM_CALLBACK_INVALID'};
   }
-
   var chatId = String(
     message.chat && message.chat.id || ''
   ).trim();
   var chatType = String(message.chat && message.chat.type || '').trim();
-  var actorId = String(callbackQuery.from && callbackQuery.from.id || '').trim();
-
+  var actorId = String(
+    callbackQuery.from && callbackQuery.from.id || ''
+  ).trim();
   /* Validate both the configured chat and the user pressing the button. */
   var expectedAdminUserId = config.adminUserId ||
     (chatType === 'private' ? config.adminChatId : '');
   if (!config.adminChatId || chatId !== config.adminChatId ||
-      !actorId || !expectedAdminUserId || actorId !== expectedAdminUserId) {
+      !actorId || !expectedAdminUserId ||
+      actorId !== expectedAdminUserId) {
     answerTelegramCallbackQuery_(
       queryId,
       'این عملیات فقط برای ادمین مجاز است.',
       true
     );
-
     return {
       ok:false,
       error:'TELEGRAM_ADMIN_ONLY'
     };
   }
-
   if (data === 'kaenatchi:noop') {
     answerTelegramCallbackQuery_(
       queryId,
       'این نوبت قبلاً تعیین تکلیف شده است.',
       false
     );
-
     return {ok:true,noop:true};
   }
-
   var match = data.match(
-    /^kaenatchi:(request_approve|request_reject|approve|reject):([^:]+)$/
+    /^kaenatchi:(request_approve|request_reject|approve|reject|hold_review):([^:]+)$/
   );
-
   if (!match) {
     answerTelegramCallbackQuery_(
       queryId,
       'عملیات نامعتبر است.',
       true
     );
-
     return {
       ok:false,
       error:'TELEGRAM_CALLBACK_INVALID_ACTION'
     };
   }
-
   var action = match[1];
   var bookingId = String(match[2] || '').trim();
-  var result;
-
-  if (action === 'request_approve') {
-    result = approveBookingRequest_({bookingId:bookingId,adminId:actorId});
-  } else if (action === 'request_reject') {
-    result = rejectBookingRequest_({bookingId:bookingId,adminId:actorId,reason:'رد درخواست نوبت توسط ادمین از طریق تلگرام'});
-  } else if (action === 'approve') {
-    result = approveBooking_({bookingId:bookingId,adminId:actorId});
-  } else {
-    result = rejectBooking_({bookingId:bookingId,adminId:actorId,reason:'رد فیش توسط ادمین از طریق تلگرام'});
+  /*
+   * Hold for bank review:
+   * audit-only action; it must not change booking/payment status,
+   * release the slot, or modify the existing hold deadline.
+   */
+  if (action === 'hold_review') {
+    var holdAction =
+      CONFIG.LOG_ACTIONS.PAYMENT_REVIEW_HOLD ||
+      'PAYMENT_REVIEW_HOLD';
+    var holdResult;
+    try {
+      holdResult = withBookingLock_(function() {
+        var priorHoldLogs = getSheetObjects_(
+          CONFIG.SHEETS.BOOKING_LOGS
+        ).filter(function(row) {
+          return String(row['Booking ID'] || '') === bookingId &&
+            String(row.Action || '') === holdAction;
+        });
+        if (priorHoldLogs.length > 0) {
+          return {
+            ok:true,
+            duplicate:true
+          };
+        }
+        appendBookingLog_({
+          action:holdAction,
+          bookingId:bookingId,
+          slotKey:'',
+          details:'ادمین فیش را برای بررسی بانکی نگه داشت؛ وضعیت رزرو و پرداخت تغییر نکرد.'
+        });
+        return {
+          ok:true,
+          duplicate:false
+        };
+      });
+    } catch (auditError) {
+      answerTelegramCallbackQuery_(
+        queryId,
+        'ثبت تاریخچه انجام نشد؛ هیچ تغییری در رزرو یا پرداخت اعمال نشده است.',
+        true
+      );
+      return {
+        ok:false,
+        error:'PAYMENT_REVIEW_AUDIT_FAILED',
+        bookingId:bookingId,
+        unchanged:true
+      };
+    }
+    if (holdResult.duplicate) {
+      answerTelegramCallbackQuery_(
+        queryId,
+        'این مورد قبلاً برای بررسی بانکی ثبت شده است؛ وضعیت نوبت تغییری نکرد.',
+        false
+      );
+      return {
+        ok:true,
+        action:action,
+        bookingId:bookingId,
+        unchanged:true,
+        audited:true,
+        duplicate:true
+      };
+    }
+    answerTelegramCallbackQuery_(
+      queryId,
+      'فیش برای بررسی بانکی نگه داشته شد؛ وضعیت نوبت تغییری نکرد.',
+      false
+    );
+    return {
+      ok:true,
+      action:action,
+      bookingId:bookingId,
+      unchanged:true,
+      audited:true
+    };
   }
-
+  var result;
+  if (action === 'request_approve') {
+    result = approveBookingRequest_({
+      bookingId:bookingId,
+      adminId:actorId
+    });
+  } else if (action === 'request_reject') {
+    result = rejectBookingRequest_({
+      bookingId:bookingId,
+      adminId:actorId,
+      reason:'رد درخواست نوبت توسط ادمین از طریق تلگرام'
+    });
+  } else if (action === 'approve') {
+    result = approveBooking_({
+      bookingId:bookingId,
+      adminId:actorId
+    });
+  } else {
+    result = rejectBooking_({
+      bookingId:bookingId,
+      adminId:actorId,
+      reason:'رد فیش توسط ادمین از طریق تلگرام'
+    });
+  }
   if (!result || result.ok !== true) {
     answerTelegramCallbackQuery_(
       queryId,
@@ -1069,31 +1175,28 @@ function handleTelegramCallbackQuery_(callbackQuery) {
       ),
       true
     );
-
     return result || {
       ok:false,
       error:'TELEGRAM_CALLBACK_ACTION_FAILED'
     };
   }
-
-  var finalStatus = action === 'request_approve' ? 'request_approved' :
+  var finalStatus =
+    action === 'request_approve' ? 'request_approved' :
     action === 'request_reject' ? 'request_rejected' :
     action === 'approve' ? 'approved' : 'rejected';
-
   editTelegramMessageReplyMarkup_(
     chatId,
     message.message_id,
     getBookingTelegramResultKeyboard_(finalStatus)
   );
-
   answerTelegramCallbackQuery_(
     queryId,
     action === 'request_approve' ? 'درخواست تأیید شد؛ مشتری می‌تواند پرداخت کند.' :
     action === 'request_reject' ? 'درخواست نوبت رد شد.' :
-    action === 'approve' ? 'پرداخت تأیید و نوبت نهایی شد.' : 'فیش پرداخت رد شد.',
+    action === 'approve' ? 'پرداخت تأیید و نوبت نهایی شد.' :
+    'فیش پرداخت رد شد.',
     false
   );
-
   return {
     ok:true,
     action:action,

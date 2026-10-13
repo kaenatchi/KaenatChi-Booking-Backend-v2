@@ -28,7 +28,7 @@ const sandbox = {
     waitLock: ms => { assert.equal(ms,30000); lockAcquires++; if (failLock) throw new Error('simulated lock timeout'); },
     releaseLock: () => { lockReleases++; }
   })},
-  getTelegramConfig_: () => ({adminChatId:"admin-1"}),
+  getTelegramConfig_: () => ({adminChatId:"admin-1",adminUserId:"user-7"}),
   getSheetObjects_: name => { assert.equal(name,"BookingLogs"); return priorLogs; },
   appendBookingLog_: entry => { if (failAudit) throw new Error("simulated audit storage failure"); logs.push(entry); priorLogs.push({"Booking ID":entry.bookingId,Action:entry.action}); },
   answerTelegramCallbackQuery_: (...args) => answers.push(args),
@@ -41,12 +41,19 @@ vm.runInNewContext(
   sandbox,
   {timeout:1000}
 );
-const callback = chat => ({id:"callback-1",data:"kaenatchi:hold_review:B-100",message:{chat:{id:chat},message_id:44}});
+const callback = (chat, user = "user-7") => ({id:"callback-1",data:"kaenatchi:hold_review:B-100",from:user === null ? undefined : {id:user},message:{chat:{id:chat},message_id:44}});
 const result = sandbox.handleTelegramCallbackQuery_(callback("admin-1"));
 assert.equal(result.ok, true);
 assert.equal(result.unchanged, true);
 assert.equal(result.audited, true);
 assert.equal(logs.length, 1);
+
+const wrongUser = sandbox.handleTelegramCallbackQuery_(callback("admin-1", "other-user"));
+assert.equal(wrongUser.error, "TELEGRAM_ADMIN_ONLY");
+assert.equal(logs.length, 1, "unauthorized group member must not create audit record");
+const missingUser = sandbox.handleTelegramCallbackQuery_(callback("admin-1", null));
+assert.equal(missingUser.error, "TELEGRAM_ADMIN_ONLY");
+assert.equal(logs.length, 1, "missing clicker identity must fail closed");
 assert.equal(logs[0].action, "PAYMENT_REVIEW_HOLD");
 assert.equal(logs[0].bookingId, "B-100");
 assert.equal(bookingWrites, 0);

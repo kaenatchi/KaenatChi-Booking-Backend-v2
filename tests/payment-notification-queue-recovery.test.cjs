@@ -115,19 +115,33 @@ function makeSandbox(action) {
 
 {
   const sendSource = extractFunction("sendBookingTelegramNotifications_");
+  let adminAttempts = 0, customerAttempts = 0;
   const sandbox = {
-    getTelegramConfig_: () => ({adminChatId:"ADMIN",}),
+    getTelegramConfig_: () => ({adminChatId:"ADMIN"}),
     buildBookingTelegramText_: () => "payment status",
     getBookingTelegramAdminKeyboard_: () => ({}),
-    sendTelegramMessage_: chatId => ({ok:chatId !== "ADMIN"}),
+    sendTelegramMessage_: chatId => {
+      if (chatId === "ADMIN") return {ok:++adminAttempts > 1};
+      customerAttempts++;
+      return {ok:true};
+    },
     String
   };
   vm.runInNewContext(sendSource, sandbox, {timeout:1000});
-  const result = sandbox.sendBookingTelegramNotifications_({"Booking ID":"B-SEND-1","Telegram ID":"CUSTOMER"}, "approved");
-  assert.equal(result.results.length, 2);
-  assert.equal(result.results[0].ok, false, "admin delivery intentionally fails");
-  assert.equal(result.results[1].ok, true, "customer delivery intentionally succeeds");
-  assert.equal(result.ok, false, "customer success must not mask admin notification failure");
+  const booking = {"Booking ID":"B-SEND-1","Telegram ID":"CUSTOMER"};
+  const queueItem = {bookingId:"B-SEND-1",eventType:"approved",attempts:0};
+  const first = sandbox.sendBookingTelegramNotifications_(booking, "approved", queueItem);
+  assert.equal(first.results.length, 2);
+  assert.equal(first.results[0].ok, false, "admin delivery intentionally fails on first attempt");
+  assert.equal(first.results[1].ok, true, "customer delivery intentionally succeeds");
+  assert.equal(first.ok, false, "customer success must not mask admin notification failure");
+  assert.equal(queueItem.customerDelivered, true, "successful customer delivery is persisted on queue item");
+
+  const retry = sandbox.sendBookingTelegramNotifications_(booking, "approved", queueItem);
+  assert.equal(retry.ok, true, "second admin delivery succeeds");
+  assert.equal(retry.results.length, 1, "successful customer recipient must be skipped on retry");
+  assert.equal(adminAttempts, 2);
+  assert.equal(customerAttempts, 1, "customer must not receive a duplicate on queue retry");
 }
 
 console.log("PASS approval/rejection queue-save failure is visible; payment state and admin audit persist; retry recovers one notification without duplicate audit/queue entries");

@@ -83,7 +83,7 @@ function makeSandbox(action) {
   vm.runInNewContext(extractFunction("queueBookingTelegramNotification_"), sandbox, {timeout:1000});
   vm.runInNewContext(extractFunction(action), sandbox, {timeout:1000});
   return {
-    sandbox, booking, payment, logs,
+    sandbox, booking, payment, logs, properties,
     queued: () => JSON.parse(properties["KAENATCHI_TELEGRAM_QUEUE"] || "[]")
   };
 }
@@ -103,6 +103,10 @@ function makeSandbox(action) {
   assert.equal(retry.notificationQueued, true, "retry must recover the missing approval notice");
   assert.equal(x.logs.filter(l => l.action === "ADMIN_APPROVED").length, 1, "admin audit must not duplicate on retry");
   assert.equal(x.queued().length, 1, "approval notification must be queued exactly once");
+  x.properties["KAENATCHI_TELEGRAM_SENT:"+encodeURIComponent("B-QUEUE-RECOVERY")+":"+encodeURIComponent("approved")]="1";
+  const duplicate=x.sandbox.queueBookingTelegramNotification_(x.booking,"approved");
+  assert.equal(duplicate.alreadySent,true,"repeating approval after successful delivery must not enqueue a second notice");
+  assert.equal(x.queued().length,1,"delivered approval notification must remain deduplicated");
 }
 
 {
@@ -120,6 +124,10 @@ function makeSandbox(action) {
   assert.equal(retry.notificationQueued, true, "retry must recover the missing rejection notice");
   assert.equal(x.logs.filter(l => l.action === "ADMIN_REJECTED").length, 1, "rejection audit must not duplicate on retry");
   assert.equal(x.queued().length, 1, "rejection notification must be queued exactly once");
+  x.properties["KAENATCHI_TELEGRAM_SENT:"+encodeURIComponent("B-QUEUE-RECOVERY")+":"+encodeURIComponent("rejected")]="1";
+  const duplicate=x.sandbox.queueBookingTelegramNotification_(x.booking,"rejected");
+  assert.equal(duplicate.alreadySent,true,"repeating rejection after successful delivery must not enqueue a second notice");
+  assert.equal(x.queued().length,1,"delivered rejection notification must remain deduplicated");
 }
 
 

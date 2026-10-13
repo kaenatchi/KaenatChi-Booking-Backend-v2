@@ -11,7 +11,8 @@
  *******************************************************/
 
 const CONFIG = {
-  SPREADSHEET_ID: '1cf6SFL80xJ8YrBPlr_Fp9TYhkKGkhu2U45D2WTSyNz0',
+  STAGING_MODE: true,
+  SPREADSHEET_ID: '1mFlfZgNxBoJIR42E388cuPxIgniTGMffWklVy0b3DH4',
 
   SHEETS: {
     BOOKINGS: 'Bookings',
@@ -25,7 +26,7 @@ const CONFIG = {
   },
 
   VIP: {
-    SPREADSHEET_ID: '1TpljGwyRpHcxyyR6Zm1mbT2CPJBvFeHCvD3QH34BuGs',
+    SPREADSHEET_ID: '1mFlfZgNxBoJIR42E388cuPxIgniTGMffWklVy0b3DH4',
     CUSTOMERS_SHEET: 'مشتریان',
     TOKENS_SHEET: 'توکن ها',
     ACTIVE_STATUS: 'فعال',
@@ -761,6 +762,8 @@ function setupTelegramWebhook() {
 }
 
 function sendTelegramMessage_(chatId, text, replyMarkup) {
+  if (CONFIG.STAGING_MODE) return {ok:true,skipped:true,reason:'STAGING_MODE'};
+
   chatId = String(chatId || '').trim();
   if (!chatId || !text) return {ok:false,skipped:true};
 
@@ -810,6 +813,8 @@ function sendTelegramMessage_(chatId, text, replyMarkup) {
 }
 
 function sendTelegramPhoto_(chatId, fileId, caption, replyMarkup) {
+  if (CONFIG.STAGING_MODE) return {ok:true,skipped:true,reason:'STAGING_MODE'};
+
   chatId = String(chatId || '').trim();
   fileId = String(fileId || '').trim();
   if (!chatId || !fileId || !caption) {
@@ -2264,115 +2269,25 @@ function getBlockedSlots_() {
    ===================================================== */
 
 function getAvailableDates_(request) {
+  // Locked booking rule: only tomorrow (Iran local time) is bookable.
+  const tomorrow = addJalaliDays_(getTodayJalali_(), 1);
+  const blocked = getSheetObjects_(CONFIG.SHEETS.BLOCKED_DATES).some(function(row) {
+    return normalizeJalaliDate_(row.Date) === tomorrow && isTruthy_(row.Active);
+  });
+  if (blocked) return {ok:true, dates:[]};
 
-  const settings = getBookingSettings_();
-
-  const minAdvance =
-    Number(settings.settings['Minimum Advance'] || 0);
-
-  const maxAdvance =
-    Number(settings.settings['Maximum Advance'] || 30);
-
-  if (maxAdvance < minAdvance) {
-    return {
-      ok: false,
-      error: 'INVALID_ADVANCE_RANGE',
-      message: 'بازه مجاز رزرو صحیح نیست.'
-    };
-  }
-
-  /*
-   * PERFORMANCE FIX:
-   * Read Schedule and BlockedDates once per request.
-   * Then evaluate all Jalali dates in memory.
-   *
-   * This preserves the existing availability rules while
-   * removing repeated Google Sheets reads from the date loop.
-   */
-  const scheduleRows =
-    getSheetObjects_(
-      CONFIG.SHEETS.SCHEDULE
-    );
-
-  const blockedDateRows =
-    getSheetObjects_(
-      CONFIG.SHEETS.BLOCKED_DATES
-    );
-
-  const todayJalali = getTodayJalali_();
-
-  const dates = [];
-
-  for (
-    let offset = minAdvance;
-    offset <= maxAdvance;
-    offset++
-  ) {
-
-    const jalali =
-      addJalaliDays_(
-        todayJalali,
-        offset
-      );
-
-    const blocked =
-      blockedDateRows.some(function(row) {
-
-        return (
-          normalizeJalaliDate_(row.Date) === jalali &&
-          isTruthy_(row.Active)
-        );
-
-      });
-
-    if (blocked) {
-      continue;
-    }
-
-    const dayName =
-      getPersianDayNameFromJalali_(jalali);
-
-    const hasActiveSchedule =
-      scheduleRows.some(function(row) {
-
-        const scheduleDay =
-          String(row.Day || '').trim();
-
-        const baseDay =
-          scheduleDay
-            .replace(/\s+(صبح|عصر)$/u, '')
-            .trim();
-
-        return (
-          normalizePersianDayName_(baseDay) ===
-            normalizePersianDayName_(dayName) &&
-          isTruthy_(row.Active)
-        );
-
-      });
-
-    if (hasActiveSchedule) {
-
-      dates.push({
-        date: jalali,
-        dayOfWeek: dayName,
-        available: true
-      });
-
-    }
-  }
+  const schedule = getScheduleForDate_(tomorrow);
+  if (!schedule.active) return {ok:true, dates:[]};
 
   return {
-    ok: true,
-    dates: dates
+    ok:true,
+    dates:[{
+      date:tomorrow,
+      dayOfWeek:getPersianDayNameFromJalali_(tomorrow),
+      available:true
+    }]
   };
 }
-
-
-/* =====================================================
-   11. AVAILABLE SLOTS
-   ===================================================== */
-
 function getAvailableSlots_(request) {
   const date = normalizeJalaliDate_(request.date);
 
@@ -3918,6 +3833,7 @@ function createBooking_(request){
     var date=normalizeJalaliDate_(request.date||request.appointmentDate);
     var time=normalizeTime_(request.time||request.appointmentTime);
     if(!date||!time)return fail_('DATE_TIME_REQUIRED','تاریخ و ساعت الزامی است.');
+    if(date!==addJalaliDays_(getTodayJalali_(),1))return fail_('DATE_OUT_OF_RANGE','در حال حاضر فقط امکان ثبت نوبت برای فردا وجود دارد.');
     var firstName=String(request.firstName||'').trim();
     var lastName=String(request.lastName||'').trim();
     var mobile=String(request.mobile||request.phone||'').trim();
@@ -4360,6 +4276,8 @@ function publicBooking_(b){
 }
 
 function saveReceiptToDrive_(data,fileName,mimeType,booking){
+  if (CONFIG.STAGING_MODE) return {id:'STAGING_RECEIPT_'+String(booking['Booking ID']||''),url:'',name:String(fileName||'staging-receipt')};
+
   var raw=String(data||''),mime=String(mimeType||'image/jpeg');
   if(raw.indexOf('data:')===0){var comma=raw.indexOf(',');if(comma<0)throw new Error('تصویر فیش نامعتبر است.');var meta=raw.substring(5,comma);raw=raw.substring(comma+1);var m=meta.match(/^([^;]+)/);if(m)mime=m[1];}
   var bytes=Utilities.base64Decode(raw);
@@ -4385,6 +4303,8 @@ function getVIPSheet_(sheetName){
 }
 
 function findVIPDiscountToken_(code){
+  if (CONFIG.STAGING_MODE) return null; // Never read or mutate production VIP data from staging.
+
   var cleanCode=String(code||'').trim().toUpperCase();
   if(!cleanCode)return null;
 
@@ -4449,6 +4369,8 @@ function markVIPTokenExpired_(token){
 }
 
 function consumeDiscountToken_(code,customerId,telegramId,trackingCode){
+  if (CONFIG.STAGING_MODE) { if (String(code||'').trim()) throw new Error('VIP توکن‌ها در محیط آزمایشی فعال نیستند.'); return; }
+
   if(!String(code||'').trim())return;
 
   var found=findVIPDiscountToken_(String(code).trim().toUpperCase());

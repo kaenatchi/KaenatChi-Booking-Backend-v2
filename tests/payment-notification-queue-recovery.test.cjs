@@ -144,4 +144,31 @@ function makeSandbox(action) {
   assert.equal(customerAttempts, 1, "customer must not receive a duplicate on queue retry");
 }
 
+
+{
+  const sendSource = extractFunction("sendBookingTelegramNotifications_");
+  let customerAttempts = 0, adminAttempts = 0;
+  const sandbox = {
+    getTelegramConfig_: () => ({adminChatId:"ADMIN"}),
+    buildBookingTelegramText_: () => "payment status",
+    getBookingTelegramAdminKeyboard_: () => ({}),
+    sendTelegramMessage_: chatId => {
+      if (chatId === "ADMIN") { adminAttempts++; return {ok:true}; }
+      customerAttempts++;
+      return {ok:customerAttempts > 1};
+    },
+    String
+  };
+  vm.runInNewContext(sendSource, sandbox, {timeout:1000});
+  const booking = {"Booking ID":"B-SEND-2","Telegram ID":"CUSTOMER"};
+  const queueItem = {bookingId:"B-SEND-2",eventType:"rejected",attempts:0};
+  const first = sandbox.sendBookingTelegramNotifications_(booking, "rejected", queueItem);
+  assert.equal(first.ok, false, "failed customer delivery must keep the queue item retryable");
+  assert.equal(queueItem.adminDelivered, true);
+  const retry = sandbox.sendBookingTelegramNotifications_(booking, "rejected", queueItem);
+  assert.equal(retry.ok, true, "retry should finish once the customer delivery succeeds");
+  assert.equal(adminAttempts, 1, "already-delivered admin message must not be duplicated");
+  assert.equal(customerAttempts, 2);
+}
+
 console.log("PASS approval/rejection queue-save failure is visible; payment state and admin audit persist; retry recovers one notification without duplicate audit/queue entries");

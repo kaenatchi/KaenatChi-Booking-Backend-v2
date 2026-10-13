@@ -521,6 +521,89 @@ function legacyBookingSubmit_(request) {
    3. HEALTH CHECK
    ===================================================== */
 
+
+/**
+ * One-time setup helper for the isolated BOOKING staging spreadsheet only.
+ * Run manually from the Apps Script editor after reviewing this function.
+ * Never creates/opens VIP sheets, copies production data, deploys, or sends messages.
+ * Existing non-empty tabs are never overwritten.
+ */
+function initializeBookingStagingTabs_() {
+  if (CONFIG.STAGING_MODE !== true) {
+    throw new Error('STAGING SETUP BLOCK: this helper only runs when STAGING_MODE is true.');
+  }
+
+  assertStagingSpreadsheetIsolation_();
+
+  var bookingId = String(CONFIG.SPREADSHEET_ID || '').trim();
+  var vipId = String(CONFIG.VIP && CONFIG.VIP.SPREADSHEET_ID || '').trim();
+  if (!bookingId || !vipId || bookingId === vipId) {
+    throw new Error('STAGING SETUP BLOCK: booking and VIP staging IDs must be present and different.');
+  }
+
+  var schemas = {
+    Bookings: ['Booking ID','Request ID','Created At','Telegram ID','Customer ID','First Name','Last Name','Mobile','Service ID','Service Name','Appointment Date','Appointment Time','Slot Key','Original Price','Discount Code','Discount Type','Discount Amount','Final Price','Payment Status','Appointment Status','Tracking Code','Hold Until','Transaction Number','Receipt Link','Receipt URL','Receipt File ID','Payment Submitted At','Admin Note','Initial Approved At','Initial Approved By','Rejected At','Rejected By','Approved At','Approved By','Cancelled At','Cancel Reason'],
+    Customers: ['Customer ID','Telegram ID','Telegram Username','Telegram First Name','Telegram Last Name','Booking First Name','Booking Last Name','Mobile','Last Booking At'],
+    Schedule: ['Day','Active','Start Time','End Time','Slot Duration'],
+    BlockedDates: ['Date','Active','Reason'],
+    BlockedSlots: ['Date','Time','Active','Reason'],
+    Payments: ['Payment ID','Booking ID','Customer ID','Amount','Receipt Link','Receipt URL','Receipt File ID','Transaction Number','Tracking Code','Payment Status','Submitted At','Approved At','Approved By','Rejected At','Rejected By'],
+    BookingSettings: ['Setting','Value'],
+    BookingLogs: ['Log ID','Booking ID','Action','Slot Key','Details','Created At'],
+    Services: ['Service ID','Service Name','Category','Description','Price','Duration','Active']
+  };
+
+  var spreadsheet = SpreadsheetApp.openById(bookingId);
+  var created = [];
+  var initialized = [];
+  var preserved = [];
+  var blocked = [];
+
+  Object.keys(schemas).forEach(function(name) {
+    var sheet = spreadsheet.getSheetByName(name);
+
+    if (!sheet && name === 'Bookings' && spreadsheet.getSheets().length === 1) {
+      var onlySheet = spreadsheet.getSheets()[0];
+      if (onlySheet.getName() === 'Sheet1' && onlySheet.getLastRow() === 0 && onlySheet.getLastColumn() === 0) {
+        onlySheet.setName('Bookings');
+        sheet = onlySheet;
+      }
+    }
+
+    if (!sheet) {
+      sheet = spreadsheet.insertSheet(name);
+      created.push(name);
+    }
+
+    if (sheet.getLastRow() === 0 && sheet.getLastColumn() === 0) {
+      var headers = schemas[name];
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+      sheet.setFrozenRows(1);
+      initialized.push(name);
+      return;
+    }
+
+    var existingHeaders = getHeaders_(sheet);
+    if (existingHeaders.length === 0) {
+      blocked.push(name + ': sheet has content but no readable header row; left unchanged');
+      return;
+    }
+
+    preserved.push(name);
+  });
+
+  return {
+    ok: blocked.length === 0,
+    spreadsheetName: spreadsheet.getName(),
+    spreadsheetId: spreadsheet.getId(),
+    createdTabs: created,
+    initializedTabs: initialized,
+    preservedExistingTabs: preserved,
+    blockedTabs: blocked,
+    note: 'Booking staging only. VIP spreadsheet was not opened or modified. Review header contract before any smoke test.'
+  };
+}
+
 function healthCheck_() {
 
   const spreadsheet = getSpreadsheet_();

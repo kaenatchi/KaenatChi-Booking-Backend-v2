@@ -29,3 +29,5 @@ jobs:
         run: node tests/staging-isolation.test.cjs
       - name: Test runtime spreadsheet safety guard
         run: node tests/staging-runtime-guard.test.cjs
+      - name: Test actual partial-payment failure path
+        run: node tests/payment-partial-failure.test.cjs

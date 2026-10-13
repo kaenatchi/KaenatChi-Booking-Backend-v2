@@ -4836,6 +4836,8 @@ function rejectBooking_(request){
       return fail_('BOOKING_ALREADY_FINAL','نوبت نهایی‌شده قابل رد کردن نیست.');
 
     if(request.paymentReview===true){
+      if(appointmentStatus!==CONFIG.STATUSES.BOOKING_PENDING)
+        return fail_('PAYMENT_NOT_AWAITING_REVIEW','این رزرو دیگر در وضعیت بررسی فیش نیست.');
       if(bookingPaymentStatus!==CONFIG.STATUSES.PAYMENT_RECEIVED)
         return fail_('PAYMENT_NOT_AWAITING_REVIEW','این فیش در انتظار بررسی نیست.');
       var matchingPayments=getSheetObjects_(CONFIG.SHEETS.PAYMENTS).filter(function(p){
@@ -4844,13 +4846,21 @@ function rejectBooking_(request){
       if(matchingPayments.length!==1)
         return fail_('PAYMENT_RECORD_MISMATCH','رکورد پرداخت یکتای این نوبت پیدا نشد؛ وضعیت تغییری نکرد.');
       var paymentRow=matchingPayments[0];
-      if(String(paymentRow['Payment Status']||'')!==CONFIG.STATUSES.PAYMENT_RECEIVED)
+      var paymentRowStatus=String(paymentRow['Payment Status']||'');
+      var paymentAlreadyRejected=paymentRowStatus===CONFIG.STATUSES.PAYMENT_REJECTED &&
+        !!paymentRow['Rejected At'] && !!String(paymentRow['Rejected By']||'').trim();
+      if(paymentRowStatus!==CONFIG.STATUSES.PAYMENT_RECEIVED && !paymentAlreadyRejected)
         return fail_('PAYMENT_RECORD_NOT_READY','رکورد پرداخت در انتظار بررسی نیست؛ وضعیت تغییری نکرد.');
-      updateRowFields_(CONFIG.SHEETS.PAYMENTS,paymentRow._row,{
-        'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
-        'Rejected At':new Date(),
-        'Rejected By':String(request.adminId||request.admin||'admin')
-      });
+      // If the payment row was rejected but the booking write failed previously,
+      // allow a verified retry to finish the booking transition without rewriting
+      // the already-audited payment decision.
+      if(!paymentAlreadyRejected){
+        updateRowFields_(CONFIG.SHEETS.PAYMENTS,paymentRow._row,{
+          'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
+          'Rejected At':new Date(),
+          'Rejected By':String(request.adminId||request.admin||'admin')
+        });
+      }
     }
 
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{

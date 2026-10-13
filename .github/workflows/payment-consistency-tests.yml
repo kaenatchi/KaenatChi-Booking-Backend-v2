@@ -1,0 +1,31 @@
+name: Isolated payment recovery tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "Code.gs"
+      - "tests/payment-approval-discount-token-recovery.test.cjs"
+      - "tests/payment-rejection-audit-recovery.test.cjs"
+      - "tests/telegram-approval-queue-audit-recovery.test.cjs"
+      - "tests/discount-token-idempotency.test.cjs"
+      - ".github/workflows/payment-consistency-tests.yml"
+
+jobs:
+  recovery-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test approval recovery after discount-token partial failure
+        run: node tests/payment-approval-discount-token-recovery.test.cjs
+      - name: Test rejection audit recovery after partial failure
+        run: node tests/payment-rejection-audit-recovery.test.cjs
+      - name: Test Telegram queue storage failure handling
+        run: node tests/telegram-approval-queue-audit-recovery.test.cjs
+      - name: Test discount-token idempotent retry
+        run: node tests/discount-token-idempotency.test.cjs

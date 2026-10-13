@@ -2728,10 +2728,8 @@ function getServiceDurationMinutes_(serviceId, serviceName, durationMap) {
     var service = findServiceRecord_(id, String(serviceName || ''));
     duration = service ? toNumber_(service.duration) : 0;
   }
-  if (!(duration > 0) && serviceName) {
-    var defaults = getBuiltInServiceDefaults_(serviceName);
-    if (defaults) duration = defaults.duration;
-  }
+  // If a historical booking's service no longer exists in the Services sheet,
+  // use the conservative legacy default instead of calling an unavailable helper.
   return duration > 0 ? duration : 30;
 }
 

@@ -106,7 +106,7 @@ function getPublicConfig_() {
 function getSlots_(date) {
   const tomorrow = tomorrowJalali_();
   if (String(date || tomorrow) !== tomorrow) return {ok:true,date:tomorrow,slots:[],message:'فقط برای فردا امکان ثبت درخواست وجود دارد.'};
-  expireStaleRequests_();\n  const day = new Date(Date.now() + 24*60*60*1000).getDay(); // Script project timezone must be Asia/Tehran
+  expireStaleRequests_();\n  const day = tehranTomorrowWeekday_();
   const schedule = scheduleForDay_(day);
   const closures = readClosureSet_();
   const booked = activeSlotSet_();
@@ -376,6 +376,31 @@ function tomorrowJalali_(){
   const parts=new Intl.DateTimeFormat('en-u-ca-persian',{timeZone:CORE.TZ,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(d);
   const p={};parts.forEach(x=>p[x.type]=x.value);return p.year+'/'+p.month+'/'+p.day;
 }
-function parseJalaliDateTime_(date,time){return Date.parse(date+' '+time);}
+function parseJalaliDateTime_(date,time){
+  const m=String(date||'').match(/^(\\d{4})[\\/-](\\d{1,2})[\\/-](\\d{1,2})$/);
+  const t=normalizeTime_(time).match(/^(\\d{2}):(\\d{2})$/);
+  if(!m||!t)return NaN;
+  const g=jalaliToGregorian_(Number(m[1]),Number(m[2]),Number(m[3]));
+  return new Date(Date.UTC(g.gy,g.gm-1,g.gd,Number(t[1])-3,Number(t[2])-30)).getTime();
+}
+function tehranTomorrowWeekday_(){
+  const now=new Date();
+  const p={};
+  new Intl.DateTimeFormat('en-CA',{timeZone:CORE.TZ,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now).forEach(x=>p[x.type]=x.value);
+  const d=new Date(Date.UTC(Number(p.year),Number(p.month)-1,Number(p.day)+1));
+  return d.getUTCDay();
+}
+function jalaliToGregorian_(jy,jm,jd){
+  jy+=1595;
+  let days=-355668+365*jy+Math.floor(jy/33)*8+Math.floor(((jy%33)+3)/4)+jd+(jm<7?(jm-1)*31:(jm-7)*30+186);
+  let gy=400*Math.floor(days/146097);days%=146097;
+  if(days>36524){gy+=100*Math.floor(--days/36524);days%=36524;if(days>=365)days++;}
+  gy+=4*Math.floor(days/1461);days%=1461;
+  if(days>365){gy+=Math.floor((days-1)/365);days=(days-1)%365;}
+  let gd=days+1;const leap=(gy%4===0&&gy%100!==0)||gy%400===0;
+  const md=[0,31,leap?29:28,31,30,31,30,31,31,30,31,30,31];let gm=1;
+  while(gm<=12&&gd>md[gm]){gd-=md[gm];gm++;}
+  return {gy,gm,gd};
+}
 function fail_(code,message){const e=new Error(message);e.code=code;e.publicMessage=message;throw e;}
 function out_(obj){return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);}

@@ -47,6 +47,7 @@ const sandbox = {
   updateRowFields_:(sheet,row,fields)=>{writes.push({sheet,fields:{...fields}});Object.assign(sheet==="Payments"?payment:booking,fields);},
   consumeDiscountToken_:()=>{if(tokenFailures-- > 0) throw new Error("simulated token-sheet failure");},
   appendBookingLog_:entry=>logs.push(entry),
+  ensureBookingLogOnce_:entry=>{if(!logs.some(x=>x.bookingId===entry.bookingId&&x.action===entry.action))logs.push(entry);},
   queueBookingTelegramNotificationWithAudit_:(...args)=>queued.push(args),
   fail_:(error,message)=>({ok:false,error,message}), Date, String
 };

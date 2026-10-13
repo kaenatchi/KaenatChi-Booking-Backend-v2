@@ -232,7 +232,19 @@ function adminDecision_(b) {
       updatePaymentStatus_(id,'REJECTED',actor);
       return {ok:true,status:row.Status};
     }
-    if (decision === 'approveReschedule') {\n      if (row.Status !== CORE.STATUS.RESCHEDULE_REQUESTED) fail_('INVALID_STATE','درخواست تغییر زمان در صف بررسی نیست.');\n      const d=String(row['Requested Reschedule Date']||'');const t=normalizeTime_(row['Requested Reschedule Time']);\n      const slot=getSlots_(d).slots.find(s=>s.time===t);\n      if(!slot||slot.status!=='AVAILABLE') fail_('SLOT_UNAVAILABLE','زمان پیشنهادی دیگر در دسترس نیست؛ نوبت قبلی حفظ شده است.');\n      row['Appointment Date']=d;row['Appointment Time']=t;row['Requested Reschedule Date']='';row['Requested Reschedule Time']='';row.Status=CORE.STATUS.CONFIRMED;row['Updated At']=new Date();writeObject_(ref.sheet,ref.row,row);\n      log_(id,'RESCHEDULE_APPROVED',CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.CONFIRMED,actor,{newDate:d,newTime:t,oldSlotReleased:true});\n      return {ok:true,status:row.Status,date:d,time:t,appointmentCode:row['Appointment Code']};\n    }\n    if (decision === 'rejectReschedule') {\n      if (row.Status !== CORE.STATUS.RESCHEDULE_REQUESTED) fail_('INVALID_STATE','درخواست تغییر زمان در صف بررسی نیست.');\n      row['Requested Reschedule Date']='';row['Requested Reschedule Time']='';row.Status=CORE.STATUS.CONFIRMED;row['Updated At']=new Date();writeObject_(ref.sheet,ref.row,row);\n      log_(id,'RESCHEDULE_REJECTED',CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.CONFIRMED,actor,{oldSlotRetained:true});\n      return {ok:true,status:row.Status,message:'درخواست تغییر زمان رد شد؛ نوبت قبلی حفظ شد.'};\n    }\n    if (decision === 'holdForReview') {
+    if (decision === 'approveReschedule') {\n      if (row.Status !== CORE.STATUS.RESCHEDULE_REQUESTED) fail_('INVALID_STATE','درخواست تغییر زمان در صف بررسی نیست.');\n      const d=String(row['Requested Reschedule Date']||'');const t=normalizeTime_(row['Requested Reschedule Time']);\n      const slot=getSlots_(d).slots.find(s=>s.time===t);\n      if(!slot||slot.status!=='AVAILABLE') fail_('SLOT_UNAVAILABLE','زمان پیشنهادی دیگر در دسترس نیست؛ نوبت قبلی حفظ شده است.');\n      row['Appointment Date']=d;row['Appointment Time']=t;row['Appointment Code']='KC-'+Utilities.getUuid().replace(/-/g,'').slice(0,10).toUpperCase();row['Requested Reschedule Date']='';row['Requested Reschedule Time']='';row.Status=CORE.STATUS.CONFIRMED;row['Updated At']=new Date();writeObject_(ref.sheet,ref.row,row);\n      log_(id,'RESCHEDULE_APPROVED',CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.CONFIRMED,actor,{newDate:d,newTime:t,oldSlotReleased:true});\n      return {ok:true,status:row.Status,date:d,time:t,appointmentCode:row['Appointment Code']};\n    }\n    if (decision === 'rejectReschedule') {\n      if (row.Status !== CORE.STATUS.RESCHEDULE_REQUESTED) fail_('INVALID_STATE','درخواست تغییر زمان در صف بررسی نیست.');\n      row['Requested Reschedule Date']='';row['Requested Reschedule Time']='';row.Status=CORE.STATUS.CONFIRMED;row['Updated At']=new Date();writeObject_(ref.sheet,ref.row,row);\n      log_(id,'RESCHEDULE_REJECTED',CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.CONFIRMED,actor,{oldSlotRetained:true});\n      return {ok:true,status:row.Status,message:'درخواست تغییر زمان رد شد؛ نوبت قبلی حفظ شد.'};\n    }\n    if (decision === 'approveCancel') {
+      if (row.Status !== CORE.STATUS.CANCEL_REQUESTED) fail_('INVALID_STATE','درخواست لغو در صف بررسی نیست.');
+      transition_(ref,CORE.STATUS.CANCELLED,actor,'CANCELLATION_APPROVED');
+      row['Decision At']=new Date();row['Decision By']=actor;row['Updated At']=new Date();writeObject_(ref.sheet,ref.row,row);
+      return {ok:true,status:row.Status,refundRequiresManualProcessing:true,message:'لغو ثبت شد؛ بازپرداخت کارت‌به‌کارت باید دستی انجام شود.'};
+    }
+    if (decision === 'rejectCancel') {
+      if (row.Status !== CORE.STATUS.CANCEL_REQUESTED) fail_('INVALID_STATE','درخواست لغو در صف بررسی نیست.');
+      row.Status=CORE.STATUS.CONFIRMED;row['Decision At']=new Date();row['Decision By']=actor;row['Updated At']=new Date();writeObject_(ref.sheet,ref.row,row);
+      log_(id,'CANCELLATION_REJECTED',CORE.STATUS.CANCEL_REQUESTED,CORE.STATUS.CONFIRMED,actor,{});
+      return {ok:true,status:row.Status,message:'درخواست لغو رد شد؛ نوبت حفظ شد.'};
+    }
+    if (decision === 'holdForReview') {
       if (row.Status !== CORE.STATUS.RECEIPT_REVIEW) fail_('INVALID_STATE','فیشی برای نگه‌داشتن در صف بررسی وجود ندارد.');
       log_(id,'PAYMENT_HELD_FOR_REVIEW',row.Status,row.Status,actor,{});
       return {ok:true,status:row.Status,autoRelease:false};
@@ -370,7 +382,7 @@ function handleTelegramCallback_(q, params) {
   if(!expected || supplied!==expected) return {ok:false,error:'UNAUTHORIZED',message:'Telegram callback secret mismatch.'};
   const parts=String(q.data||'').split(':');
   const decision=parts[0], requestId=parts.slice(1).join(':');
-  const allowed=['accept','reject','approvePayment','rejectPayment','holdForReview','approveReschedule','rejectReschedule'];
+  const allowed=['accept','reject','approvePayment','rejectPayment','holdForReview','approveReschedule','rejectReschedule','approveCancel','rejectCancel'];
   if(!allowed.includes(decision)||!requestId) return {ok:false,error:'INVALID_CALLBACK'};
   try {
     const result=adminDecision_({requestId,decision,actor:'telegram-admin',adminSecret:prop_(CORE.ADMIN_SECRET_PROP)});

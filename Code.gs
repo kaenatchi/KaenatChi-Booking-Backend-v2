@@ -1074,6 +1074,7 @@ function sendBookingTelegramNotifications_(booking, eventType) {
   var config=getTelegramConfig_();
   var text=buildBookingTelegramText_(booking,eventType);
   var results=[];
+  var adminResult=null;
 
   /*
    * Only payment_received needs admin action buttons.
@@ -1087,13 +1088,12 @@ function sendBookingTelegramNotifications_(booking, eventType) {
       : null;
 
   if(config.adminChatId){
-    results.push(
-      sendTelegramMessage_(
-        config.adminChatId,
-        text,
-        replyMarkup
-      )
+    adminResult=sendTelegramMessage_(
+      config.adminChatId,
+      text,
+      replyMarkup
     );
+    results.push(adminResult);
   } else {
     results.push({
       ok:false,
@@ -1113,7 +1113,12 @@ function sendBookingTelegramNotifications_(booking, eventType) {
   }
 
   return {
-    ok: results.some(function(item){ return item && item.ok === true; }),
+    /*
+     * Queue completion depends on delivery to the admin, who must act on
+     * payment notifications. A successful customer delivery cannot hide an
+     * admin delivery failure or missing admin-chat configuration.
+     */
+    ok: !!(adminResult && adminResult.ok === true),
     results: results
   };
 }
@@ -3728,9 +3733,24 @@ function approveBooking_(request){
     // Queue Telegram notification outside the booking request path.
     // The notification worker runs from a time-based Apps Script trigger,
     // so Telegram latency can never delay or break approval.
-    queueBookingTelegramNotification_(b, 'approved');
+    var notificationQueueResult=queueBookingTelegramNotification_(b, 'approved');
 
-    return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_CONFIRMED,message:'نوبت تأیید شد.'};
+    /*
+     * Payment approval is already committed at this point. Never report the
+     * financial action as failed merely because notification persistence
+     * failed; return an explicit warning so the admin can retry this
+     * idempotent action and recover the missing queue item.
+     */
+    return {
+      ok:true,
+      bookingId:b['Booking ID'],
+      status:CONFIG.STATUSES.BOOKING_CONFIRMED,
+      notificationQueued:!!(notificationQueueResult && notificationQueueResult.ok===true),
+      notificationError:notificationQueueResult && notificationQueueResult.ok===true ? '' : 'TELEGRAM_QUEUE_SAVE_FAILED',
+      message:notificationQueueResult && notificationQueueResult.ok===true
+        ? 'نوبت تأیید شد.'
+        : 'نوبت تأیید شد، اما ذخیره اعلان تلگرام ناموفق بود؛ برای بازیابی، همین اقدام را دوباره اجرا کنید.'
+    };
   });
 }
 
@@ -3746,9 +3766,23 @@ function rejectBooking_(request){
     ensureBookingLogOnce_({action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.note||request.reason||'')});
 
     // Queue the rejection notification outside the booking request path.
-    queueBookingTelegramNotification_(b, 'rejected');
+    var notificationQueueResult=queueBookingTelegramNotification_(b, 'rejected');
 
-    return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_REJECTED};
+    /*
+     * Rejection and its audit record are committed before notification
+     * persistence. Surface queue failure without pretending the rejection
+     * rolled back; repeating the action safely retries the missing notice.
+     */
+    return {
+      ok:true,
+      bookingId:b['Booking ID'],
+      status:CONFIG.STATUSES.BOOKING_REJECTED,
+      notificationQueued:!!(notificationQueueResult && notificationQueueResult.ok===true),
+      notificationError:notificationQueueResult && notificationQueueResult.ok===true ? '' : 'TELEGRAM_QUEUE_SAVE_FAILED',
+      message:notificationQueueResult && notificationQueueResult.ok===true
+        ? 'پرداخت رد شد.'
+        : 'رد پرداخت ثبت شد، اما ذخیره اعلان تلگرام ناموفق بود؛ برای بازیابی، همین اقدام را دوباره اجرا کنید.'
+    };
   });
 }
 

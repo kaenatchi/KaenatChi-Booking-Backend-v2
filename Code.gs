@@ -2442,7 +2442,13 @@ function getSlotStatus_(
       status === CONFIG.STATUSES.BOOKING_PENDING
     ) {
 
-      if (String(booking['Payment Status'] || '') === CONFIG.STATUSES.PAYMENT_AWAITING_ACCEPTANCE) {
+      var paymentStatus = String(booking['Payment Status'] || '');
+      if (
+        paymentStatus === CONFIG.STATUSES.PAYMENT_AWAITING_ACCEPTANCE ||
+        paymentStatus === CONFIG.STATUSES.PAYMENT_RECEIVED
+      ) {
+        // Requests awaiting review and receipts awaiting manual bank verification
+        // keep the slot reserved regardless of the old timed-hold setting.
         return CONFIG.SLOT_STATUS.HELD;
       }
       if (

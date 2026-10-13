@@ -43,7 +43,7 @@ function doGet(e) {
     const action = String(p.action || 'health').trim();
     if (action === 'health') return out_({ok:true, service:'KaenatChi Booking Core', mode:'staging-rebuild', cmsWrites:false});
     if (action === 'getConfig') return out_(getPublicConfig_());
-    if (action === 'getSlots') return out_(getSlots_(p.date));
+    if (action === 'getSlots') return out_(getSlots_(p.date, String(p.serviceIds||'').split(',').filter(Boolean)));
     if (action === 'getStatus') return out_(getStatus_(p.trackingCode, p.phone));
     return out_({ok:false,error:'UNKNOWN_ACTION',message:'عملیات شناخته نشد.'});
   } catch (err) {
@@ -106,7 +106,7 @@ function getPublicConfig_() {
 }
 
 /** Slot generation follows the approved weekly schedule; CMS closures are overlaid read-only. */
-function getSlots_(date) {
+function getSlots_(date, serviceIds) {
   const tomorrow = tomorrowJalali_();
   if (String(date || tomorrow) !== tomorrow) return {ok:true,date:tomorrow,slots:[],message:'فقط برای فردا امکان ثبت درخواست وجود دارد.'};
   expireStaleRequests_();\n  const day = tehranTomorrowWeekday_();
@@ -134,7 +134,7 @@ function createRequest_(b) {
     const date = String(b.date || '');
     const time = normalizeTime_(b.time);
     if (date !== tomorrowJalali_()) fail_('DATE_NOT_ALLOWED','فقط برای فردا می‌توان درخواست ثبت کرد.');
-    const slot = getSlots_(date).slots.find(s => s.time === time);
+    const slot = getSlots_(date, ids).slots.find(s => s.time === time);
     if (!slot || slot.status !== 'AVAILABLE') fail_('SLOT_UNAVAILABLE','این زمان دیگر در دسترس نیست؛ زمان دیگری انتخاب کن.');
     const ids = Array.isArray(b.serviceIds) ? [...new Set(b.serviceIds.map(String))] : [];
     if (!ids.length) fail_('SERVICE_REQUIRED','حداقل یک خدمت انتخاب کن.');
@@ -311,6 +311,12 @@ function validateDiscountReadOnly_(code,subtotal) {
   return {code:clean,percent,amount:Math.round(subtotal*percent/100)};
 }
 
+function therapySlots_() {
+  const out=[];
+  ['11','12','13','16','17','18'].forEach(h=>{out.push(h+':00');out.push(h+':30');});
+  out.push('13:30');
+  return out.filter((t,i,a)=>a.indexOf(t)===i).filter(t=>t>='11:00'&&t<='13:30'||t>='16:00'&&t<='18:30').sort();
+}
 function scheduleForDay_(day) {
   // JS weekday: 0 Sun, 1 Mon, ... 6 Sat
   if(day===5) return [];
@@ -357,7 +363,11 @@ function updatePaymentStatus_(id,status,actor) {
 function notifyAdmin_(id,title,row) {
   const token=prop_(CORE.BOT_TOKEN_PROP),chat=prop_(CORE.ADMIN_CHAT_PROP);if(!token||!chat)return;
   const text=title+'\nالاسم: '+row['First Name']+' '+row['Last Name']+'\nخدمت: '+row['Service Names']+'\nزمان: '+row['Appointment Date']+' '+row['Appointment Time']+'\nمبلغ: '+row.Total+'\nکد پیگیری: '+row['Tracking Code']+'\nشناسه درخواست: '+id;
-  telegram_('sendMessage',{chat_id:chat,text,reply_markup:{inline_keyboard:[[{text:'پذیرش درخواست',callback_data:'accept:'+id},{text:'رد درخواست',callback_data:'reject:'+id}]]}});
+  let buttons;
+  if(row.Status===CORE.STATUS.RESCHEDULE_REQUESTED) buttons=[[{text:'تأیید تغییر زمان',callback_data:'approveReschedule:'+id},{text:'رد تغییر زمان',callback_data:'rejectReschedule:'+id}]];
+  else if(row.Status===CORE.STATUS.CANCEL_REQUESTED) buttons=[[{text:'پذیرش لغو',callback_data:'approveCancel:'+id},{text:'رد لغو',callback_data:'rejectCancel:'+id}]];
+  else buttons=[[{text:'پذیرش درخواست',callback_data:'accept:'+id},{text:'رد درخواست',callback_data:'reject:'+id}]];
+  telegram_('sendMessage',{chat_id:chat,text,reply_markup:{inline_keyboard:buttons}});
 }
 function notifyReceipt_(row,blob) {
   const token=prop_(CORE.BOT_TOKEN_PROP),chat=prop_(CORE.ADMIN_CHAT_PROP);if(!token||!chat)return;

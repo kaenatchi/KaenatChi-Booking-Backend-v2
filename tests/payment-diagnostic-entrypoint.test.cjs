@@ -4,7 +4,8 @@ const vm = require("node:vm");
 const assert = require("node:assert/strict");
 
 const source = fs.readFileSync(path.join(process.cwd(), "Code.gs"), "utf8");
-function extract(name) {
+
+function extractFunction(name) {
   const start = source.indexOf("function " + name + "(");
   assert.notEqual(start, -1, "missing " + name);
   const brace = source.indexOf("{", start);
@@ -20,40 +21,68 @@ function extract(name) {
   }
   throw new Error("unterminated " + name);
 }
-const routeStart = source.indexOf("function routeRequest_");
-const routeEnd = source.indexOf("\nfunction ", routeStart + 10);
-const routeText = source.slice(routeStart, routeEnd < 0 ? source.length : routeEnd);
-assert.ok(!routeText.includes("getPaymentConsistencyDiagnosticReport_"), "diagnostic must not be exposed through public action router");
 
-let reads = [];
-let writes = 0, telegram = 0;
+const routerStart = source.indexOf("function routeRequest_");
+assert.notEqual(routerStart, -1, "public router must exist");
+const nextFunction = source.indexOf("\nfunction ", routerStart + 10);
+const routerText = source.slice(routerStart, nextFunction < 0 ? source.length : nextFunction);
+assert.ok(!routerText.includes("getPaymentConsistencyDiagnosticReport_"),
+  "diagnostic entry point must not be exposed through public action router");
+
+const functions = [
+  "normalizePaymentConsistencyStatusPure_",
+  "classifyPaymentSubmissionConsistencyPure_",
+  "buildPaymentConsistencyRecoveryPlanPure_",
+  "buildPaymentConsistencyDiagnosticReportPure_",
+  "getPaymentConsistencyDiagnosticReport_"
+].map(extractFunction).join("\n");
+
+const bookingRows = [
+  {"Booking ID":"B-ORPHAN","Tracking Code":"T-ORPHAN","Payment Status":"در انتظار پرداخت","Appointment Status":"REQUEST_APPROVED"},
+  {"Booking ID":"B-MISSING","Payment Status":"فیش دریافت شد"},
+  {"Booking ID":"B-ALIGNED","Payment Status":"فیش دریافت شد"}
+];
+const paymentRows = [
+  {"Booking ID":"B-ORPHAN","Payment ID":"P-ORPHAN","Payment Status":"فیش دریافت شد","Receipt URL":"PRIVATE-RECEIPT-URL"},
+  {"Booking ID":"B-ALIGNED","Payment ID":"P-ALIGNED","Payment Status":"فیش دریافت شد"}
+];
+const reads = [];
+let writes = 0;
+let telegramSends = 0;
 const sandbox = {
-  CONFIG: { SHEETS: { BOOKINGS:"Bookings", PAYMENTS:"Payments" } },
+  CONFIG: {SHEETS:{BOOKINGS:"Bookings",PAYMENTS:"Payments"}},
   getSheetObjects_(name) {
     reads.push(name);
-    if (name === "Bookings") return [{"Booking ID":"B1","Payment Status":"در انتظار پرداخت"}];
-    if (name === "Payments") return [{"Booking ID":"B1","Payment ID":"P1","Payment Status":"فیش دریافت شد","Receipt URL":"SECRET"}];
-    throw new Error("unexpected sheet");
-  },
-  buildPaymentConsistencyDiagnosticReportPure_(bookings,payments) {
-    return {ok:true,cases:[{bookingId:"B1",state:"PAYMENT_ROW_RECEIVED_BOOKING_NOT_UPDATED",safeToAutoRepair:false}],safeToAutoRepair:false,noWrites:true,noTelegramSent:true,noReceiptLinksExposed:true};
+    if (name === "Bookings") return bookingRows;
+    if (name === "Payments") return paymentRows;
+    throw new Error("unexpected sheet read: " + name);
   },
   updateRowFields_(){writes++;},
   appendObjectRow_(){writes++;},
-  sendTelegramMessage_(){telegram++;}
+  appendBookingLog_(){writes++;},
+  sendTelegramMessage_(){telegramSends++;},
+  queueBookingTelegramNotificationWithAudit_(){telegramSends++;}
 };
-vm.runInNewContext(extract("getPaymentConsistencyDiagnosticReport_"),sandbox,{timeout:1000});
-const report=sandbox.getPaymentConsistencyDiagnosticReport_();
-assert.deepEqual(reads,["Bookings","Payments"]);
-assert.equal(report.cases[0].state,"PAYMENT_ROW_RECEIVED_BOOKING_NOT_UPDATED");
-assert.equal(report.safeToAutoRepair,false);
-assert.equal(report.noWrites,true);
-assert.equal(report.noTelegramSent,true);
-assert.equal(report.noReceiptLinksExposed,true);
-assert.equal(writes,0);
-assert.equal(telegram,0);
-console.log("PASS read-only report reads only booking/payment tables");
-console.log("PASS report marks recovery as manual and never auto-repairs");
-console.log("PASS no writes, Telegram sends, or receipt URL exposure");
-console.log("PASS report entry point is not in public action router");
-console.log("PASS total: 4/4");
+
+vm.runInNewContext(functions, sandbox, {timeout:1000});
+const report = sandbox.getPaymentConsistencyDiagnosticReport_();
+
+assert.deepEqual(reads, ["Bookings","Payments"], "report may read only booking and payment tables");
+assert.equal(report.report, "PAYMENT_CONSISTENCY_READ_ONLY");
+assert.equal(report.caseCount, 2, "only inconsistent cases should be listed");
+assert.equal(report.cases[0].state, "BOOKING_PAYMENT_WITHOUT_PAYMENT_ROW");
+assert.equal(report.cases[1].state, "PAYMENT_ROW_RECEIVED_BOOKING_NOT_UPDATED");
+assert.equal(report.safeToAutoRepair, false);
+assert.equal(report.noWrites, true);
+assert.equal(report.noTelegramSent, true);
+assert.equal(report.noReceiptLinksExposed, true);
+assert.equal(JSON.stringify(report).includes("PRIVATE-RECEIPT-URL"), false);
+assert.equal(writes, 0, "report must not write any records");
+assert.equal(telegramSends, 0, "report must not send or queue Telegram notifications");
+
+console.log("PASS real report entry point invokes actual classifier and recovery planner");
+console.log("PASS both opposite mismatch states are reported; aligned record is omitted");
+console.log("PASS receipt URL is not exposed");
+console.log("PASS no writes or Telegram calls");
+console.log("PASS diagnostic remains outside public action router");
+console.log("PASS total: 5/5");

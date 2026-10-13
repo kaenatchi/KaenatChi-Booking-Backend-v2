@@ -59,6 +59,27 @@ for (const name of [
   "hasBookingOverlap_"
 ]) vm.runInNewContext(extractFunction(name), sandbox, { timeout: 1000 });
 
+// Exercise the real service lookup to ensure duration reaches booking guards.
+const serviceRow = {
+  "Service ID": "therapy",
+  "Service Name": "Therapy",
+  "Price": "700000",
+  "Duration": "45"
+};
+sandbox.getSpreadsheet_ = () => ({ getSheetByName: () => ({}) });
+sandbox.getSheetObjects_ = () => [serviceRow];
+sandbox.firstField_ = (row, fields) => {
+  for (const field of fields) {
+    if (row[field] !== undefined && row[field] !== null && row[field] !== "") return row[field];
+  }
+  return "";
+};
+sandbox.toNumber_ = value => Number(value) || 0;
+vm.runInNewContext(extractFunction("findServiceRecord_"), sandbox, { timeout: 1000 });
+const lookedUpService = sandbox.findServiceRecord_("therapy", "");
+assert.equal(lookedUpService.duration, 45, "service lookup must return the configured service duration");
+assert.equal(lookedUpService.price, 700000, "service lookup must preserve the configured price");
+
 const now = Date.now();
 const date = "1405/07/21";
 const durations = { "id:energy": 30, "id:candle": 20, "id:therapy": 45 };
@@ -116,6 +137,7 @@ assert.match(
   /PAYMENT_RECEIVED/,
   "slot availability must preserve the receipt-backed hold"
 );
+console.log("PASS service lookup returns configured duration and price");
 console.log("PASS cross-service interval overlap");
 console.log("PASS receipt remains blocking after hold expiry");
 console.log("PASS expired unpaid and rejected requests do not block");

@@ -4744,6 +4744,10 @@ function approveBooking_(request){
     if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
     var ps=String(b['Payment Status']||'');
     if(ps!==CONFIG.STATUSES.PAYMENT_RECEIVED&&ps!==CONFIG.STATUSES.PAYMENT_APPROVED)return fail_('PAYMENT_NOT_READY','ابتدا باید فیش پرداخت دریافت شود.');
+    var appointmentStatus=String(b['Appointment Status']||'');
+    if(appointmentStatus!==CONFIG.STATUSES.BOOKING_PENDING &&
+       appointmentStatus!==CONFIG.STATUSES.BOOKING_CONFIRMED)
+      return fail_('BOOKING_NOT_APPROVABLE','درخواست لغو یا ردشده قابل تأیید نهایی نیست.');
     var date=normalizeJalaliDate_(b['Appointment Date']),time=normalizeTime_(b['Appointment Time']);
     var slotKey=String(b['Slot Key']||buildSlotKey_(date,time));
     var status=getSlotStatus_(slotKey,date,time);

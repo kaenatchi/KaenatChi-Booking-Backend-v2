@@ -28,7 +28,7 @@ assert.ok(!source.slice(routeStart, routeEnd < 0 ? source.length : routeEnd).inc
 
 let sends = [], answers = [], writes = 0, reportReads = 0;
 const sandbox = {
-  getTelegramConfig_: () => ({adminChatId:"ADMIN-1",adminUserId:"USER-7"}),
+  getTelegramConfig_: () => ({adminChatId:"ADMIN-1",adminUserId:"7"}),
   answerTelegramCallbackQuery_: (...args) => { answers.push(args); return {ok:true}; },
   getPaymentConsistencyDiagnosticReport_: () => {
     reportReads++;

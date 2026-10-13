@@ -22,7 +22,7 @@ function extract(name) {
 }
 
 const cases = Array.from({length:40}, (_,i) => ({
-  bookingId: "B-"+i+" <script>PRIVATE-URL</script>",
+  bookingId: "B-"+i+" <script>INJECTED</script>",
   state: "MISMATCH & <private>",
   appointmentStatus: "STATUS",
   bookingPaymentStatus: "PAYMENT",
@@ -43,6 +43,8 @@ assert.equal(result.ok,true);
 assert.ok(sentMessage.length <= 3500,"report must stay under conservative Telegram message budget");
 assert.ok(!sentMessage.includes("<script>"),"dynamic report fields must be HTML escaped");
 assert.ok(!sentMessage.includes("PRIVATE-URL"),"receipt URL must never be included");
+assert.ok(!sentMessage.includes("<script>"),"HTML tags must not survive escaping");
+assert.ok(sentMessage.includes("&lt;script&gt;"),"untrusted booking ID should be escaped");
 assert.ok(sentMessage.includes("تعداد موارد") || sentMessage.includes("موارد:"),"report should show a count");
 console.log("PASS long diagnostic is bounded for Telegram");
 console.log("PASS dynamic fields are HTML escaped");

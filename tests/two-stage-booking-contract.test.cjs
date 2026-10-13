@@ -92,7 +92,7 @@ const receiptBooking = {
   "Hold Until":new Date(Date.now()-3*60*60*1000)
 };
 const slotSandbox = {
-  CONFIG:{STATUSES:S,SLOT_STATUS:{FREE:"free",HELD:"held",CONFIRMED:"confirmed",BLOCKED:"blocked"}},
+  CONFIG:{STATUSES:S,SHEETS:{BOOKINGS:"Bookings"},SLOT_STATUS:{FREE:"free",HELD:"held",CONFIRMED:"confirmed",BLOCKED:"blocked"}},
   isBlockedSlot_:()=>false,
   getSheetObjects_:()=>[receiptBooking],
   parseDateValue_:()=>new Date(Date.now()-3*60*60*1000),

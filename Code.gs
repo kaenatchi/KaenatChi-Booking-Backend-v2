@@ -1009,23 +1009,27 @@ function handleTelegramCallbackQuery_(callbackQuery) {
   var action = match[1];
   var bookingId = String(match[2] || '').trim();
 
-  // Idempotency: repeated clicks must not create duplicate audit entries.
-  // This is a read-only check; booking/payment status is never modified here.
+  // Atomic idempotency: serialize the duplicate check and audit append so
+  // simultaneous admin clicks cannot create duplicate hold-review log entries.
+  // This action never modifies booking or payment state.
   if (action === 'hold_review') {
-    var priorHoldLogs = getSheetObjects_(CONFIG.SHEETS.BOOKING_LOGS).filter(function(row) {
-      return String(row['Booking ID'] || '') === bookingId &&
-        String(row.Action || '') === String(CONFIG.LOG_ACTIONS.PAYMENT_REVIEW_HOLD || 'PAYMENT_REVIEW_HOLD');
-    });
-    if (priorHoldLogs.length > 0) {
-      answerTelegramCallbackQuery_(queryId,'این مورد قبلاً برای بررسی بانکی ثبت شده است؛ وضعیت نوبت تغییری نکرد.',false);
-      return {ok:true,action:action,bookingId:bookingId,unchanged:true,audited:true,duplicate:true};
-    }
+    var holdResult;
     try {
-      appendBookingLog_({
-        action:CONFIG.LOG_ACTIONS.PAYMENT_REVIEW_HOLD,
-        bookingId:bookingId,
-        slotKey:'',
-        details:'ادمین فیش را برای بررسی بانکی نگه داشت؛ وضعیت رزرو و پرداخت تغییر نکرد.'
+      holdResult = withBookingLock_(function() {
+        var priorHoldLogs = getSheetObjects_(CONFIG.SHEETS.BOOKING_LOGS).filter(function(row) {
+          return String(row['Booking ID'] || '') === bookingId &&
+            String(row.Action || '') === String(CONFIG.LOG_ACTIONS.PAYMENT_REVIEW_HOLD || 'PAYMENT_REVIEW_HOLD');
+        });
+        if (priorHoldLogs.length > 0) {
+          return {ok:true,duplicate:true};
+        }
+        appendBookingLog_({
+          action:CONFIG.LOG_ACTIONS.PAYMENT_REVIEW_HOLD,
+          bookingId:bookingId,
+          slotKey:'',
+          details:'ادمین فیش را برای بررسی بانکی نگه داشت؛ وضعیت رزرو و پرداخت تغییر نکرد.'
+        });
+        return {ok:true,duplicate:false};
       });
     } catch (auditError) {
       answerTelegramCallbackQuery_(
@@ -1039,6 +1043,10 @@ function handleTelegramCallbackQuery_(callbackQuery) {
         bookingId:bookingId,
         unchanged:true
       };
+    }
+    if (holdResult.duplicate) {
+      answerTelegramCallbackQuery_(queryId,'این مورد قبلاً برای بررسی بانکی ثبت شده است؛ وضعیت نوبت تغییری نکرد.',false);
+      return {ok:true,action:action,bookingId:bookingId,unchanged:true,audited:true,duplicate:true};
     }
     answerTelegramCallbackQuery_(queryId,'فیش برای بررسی بانکی نگه داشته شد؛ وضعیت نوبت تغییری نکرد.',false);
     return {ok:true,action:action,bookingId:bookingId,unchanged:true,audited:true};

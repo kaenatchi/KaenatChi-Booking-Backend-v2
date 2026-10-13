@@ -1012,30 +1012,34 @@ function handleTelegramCallbackQuery_(callbackQuery) {
       answerTelegramCallbackQuery_(queryId,'گزارش مغایرت‌ها در دسترس نیست؛ هیچ تغییری اعمال نشده است.',true);
       return {ok:false,error:'PAYMENT_DIAGNOSTIC_FAILED',noWrites:true};
     }
-    var lines = ['<b>گزارش فقط‌خواندنی مغایرت پرداخت</b>','موارد: '+diagnostic.caseCount,''];
-    (diagnostic.cases || []).slice(0,15).forEach(function(item) {
-      lines.push('رزرو: '+String(item.bookingId || '-').replace(/[&<>]/g,''));
-      lines.push('وضعیت: '+String(item.state || '-').replace(/[&<>]/g,''));
-      lines.push('وضعیت رزرو: '+String(item.appointmentStatus || '-').replace(/[&<>]/g,''));
-      lines.push('وضعیت پرداخت: '+String(item.bookingPaymentStatus || '-').replace(/[&<>]/g,''));
-      lines.push('اقدام: بررسی دستی؛ اصلاح خودکار غیرفعال');
-      lines.push('');
+    var escapeHtml = function(value) {
+      return String(value == null || value === '' ? '-' : value)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    };
+    var reportLines = ['<b>گزارش فقط‌خواندنی مغایرت پرداخت</b>','موارد: '+diagnostic.caseCount,''];
+    var shown = 0;
+    (diagnostic.cases || []).forEach(function(item) {
+      if (shown >= 15) return;
+      var block = [
+        'رزرو: '+escapeHtml(item.bookingId),
+        'وضعیت: '+escapeHtml(item.state),
+        'وضعیت رزرو: '+escapeHtml(item.appointmentStatus),
+        'وضعیت پرداخت: '+escapeHtml(item.bookingPaymentStatus),
+        'اقدام: بررسی دستی؛ اصلاح خودکار غیرفعال',
+        ''
+      ];
+      var candidate = reportLines.concat(block).join('\n');
+      if (candidate.length > 3300) return;
+      reportLines = reportLines.concat(block);
+      shown++;
     });
-    if (!diagnostic.caseCount) lines.push('مغایرتی در داده‌های بررسی‌شده پیدا نشد.');
-    if (diagnostic.caseCount > 15) lines.push('برای کوتاه ماندن پیام، فقط ۱۵ مورد اول نمایش داده شد.');
-    // Telegram message text is limited; trim whole lines so the report never
-    // exceeds a conservative budget and never cuts through escaped HTML fields.
-    var reportText = lines.join('\n');
-    while (reportText.length > 3500 && lines.length > 3) {
-      lines.pop();
-      reportText = lines.join('\n');
+    if (!diagnostic.caseCount) reportLines.push('مغایرتی در داده‌های بررسی‌شده پیدا نشد.');
+    if (diagnostic.caseCount > shown) {
+      reportLines.push('توجه: '+(diagnostic.caseCount-shown)+' مورد دیگر در این پیام نمایش داده نشد.');
     }
-    if (reportText.length > 3400) {
-      reportText = reportText.slice(0,3400);
-    }
-    if (diagnostic.caseCount > 0 && reportText.indexOf('پیام کوتاه شد') === -1 &&
-        (diagnostic.cases || []).length > 0 && reportText.length >= 3400) {
-      reportText += '\nادامهٔ گزارش به‌دلیل محدودیت طول پیام نمایش داده نشد.';
+    var reportText = reportLines.join('\n');
+    if (reportText.length > 3500) {
+      reportText = '<b>گزارش فقط‌خواندنی مغایرت پرداخت</b>\nتعداد موارد: '+diagnostic.caseCount+'\nجزئیات به‌دلیل محدودیت طول پیام نمایش داده نشد.';
     }
     var sent = sendTelegramMessage_(chatId,reportText);
     answerTelegramCallbackQuery_(queryId,sent && sent.ok ? 'گزارش فقط‌خواندنی ارسال شد.' : 'گزارش آماده شد اما ارسال آن تأیید نشد.',!(sent && sent.ok));

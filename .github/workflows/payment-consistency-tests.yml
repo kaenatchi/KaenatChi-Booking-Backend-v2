@@ -1,0 +1,64 @@
+name: Payment consistency pure tests
+
+on:
+  push:
+    branches:
+      - staging/payment-review-hold-isolated
+      - staging/overlap-duration-payment-safe
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  pure-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run isolated payment consistency tests
+        run: node tests/payment-consistency.test.cjs
+      - name: Check payment flow and hold safety invariants
+        run: node tests/payment-flow-safety.test.cjs
+      - name: Block shared CMS/VIP spreadsheet in staging
+        run: node tests/staging-isolation.test.cjs
+      - name: Test runtime spreadsheet safety guard
+        run: node tests/staging-runtime-guard.test.cjs
+      - name: Test staging blocks Telegram network access
+        run: node tests/staging-telegram-no-network.test.cjs
+      - name: Test actual partial-payment failure path
+        run: node tests/payment-partial-failure.test.cjs
+      - name: Test private read-only diagnostic entry point
+        run: node tests/payment-diagnostic-entrypoint.test.cjs
+      - name: Test admin-only Telegram diagnostic access
+        run: node tests/payment-diagnostic-telegram-access.test.cjs
+      - name: Test Telegram diagnostic message bounds and escaping
+        run: node tests/payment-diagnostic-message-bounds.test.cjs
+      - name: Test Telegram hold-review audit logging
+        run: node tests/telegram-hold-review-audit.test.cjs
+      - name: Test shared lock integration invariants
+        run: node tests/telegram-hold-review-lock-integration.test.cjs
+      - name: Test booking state without payment row
+        run: node tests/payment-booking-without-row.test.cjs
+      - name: Test expired hold release runtime behavior
+        run: node tests/expired-hold-runtime.test.cjs
+      - name: Test duration-aware cross-service overlap guards
+        run: node tests/cross-service-overlap-runtime.test.cjs
+      - name: Test final payment approval state guard
+        run: node tests/payment-approval-state-guard.test.cjs
+      - name: Test payment rejection recovery after partial write
+        run: node tests/payment-rejection-recovery.test.cjs
+      - name: Test Telegram notification worker recovery
+        run: node tests/telegram-notification-worker-recovery.test.cjs
+      - name: Test approval recovery after discount-token partial failure
+        run: node tests/payment-approval-discount-token-recovery.test.cjs
+      - name: Test rejection audit recovery after partial failure
+        run: node tests/payment-rejection-audit-recovery.test.cjs
+      - name: Test Telegram queue storage failure handling
+        run: node tests/telegram-approval-queue-audit-recovery.test.cjs

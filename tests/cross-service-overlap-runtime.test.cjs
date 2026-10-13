@@ -106,6 +106,7 @@ sandbox.getSheetObjects_ = () => [];
 sandbox.buildServiceDurationMap_ = () => ({ "id:therapy": 45 });
 sandbox.hasBookingOverlap_ = () => false;
 sandbox.fail_ = (code, message) => ({ ok: false, error: code, message });
+sandbox.CONFIG.SHEETS = { BOOKINGS: "Bookings" };
 sandbox.CONFIG.SLOT_STATUS = { FREE: "FREE" };
 for (const name of ["createBooking_"]) {
   vm.runInNewContext(extractFunction(name), sandbox, { timeout: 1000 });

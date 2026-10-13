@@ -45,7 +45,7 @@ const sandbox = {
   getSlotStatus_:()=>booking["Appointment Status"]===S.BOOKING_CONFIRMED?S.SLOT_STATUS.CONFIRMED:S.SLOT_STATUS.FREE,
   getSheetObjects_:()=>[{...payment}],
   updateRowFields_:(sheet,row,fields)=>{writes.push({sheet,fields:{...fields}});Object.assign(sheet==="Payments"?payment:booking,fields);},
-  consumeDiscountToken_:()=>{if(tokenFailures-- > 0) throw new Error("simulated token-sheet failure");},
+  consumeDiscountToken_:()=>{if(tokenFailures>0){tokenFailures--;throw new Error("simulated token-sheet failure");}},
   appendBookingLog_:entry=>logs.push(entry),
   ensureBookingLogOnce_:entry=>{if(!logs.some(x=>x.bookingId===entry.bookingId&&x.action===entry.action))logs.push(entry);},
   queueBookingTelegramNotification_:(...args)=>queued.push(args),

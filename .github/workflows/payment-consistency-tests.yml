@@ -32,3 +32,5 @@ jobs:
         run: node tests/payment-notification-queue-recovery.test.cjs
       - name: Test discount-token idempotent retry
         run: node tests/discount-token-idempotency.test.cjs
+      - name: Test Telegram callback retry after queue-save failure
+        run: node tests/telegram-callback-queue-retry.test.cjs

@@ -11,9 +11,10 @@
  *******************************************************/
 
 const CONFIG = {
-  // Isolated staging only. Never use production CMS, VIP, Drive receipts, or Telegram.
+  // FAIL-CLOSED: configure only after independently verifying dedicated staging spreadsheets.
+  // Do not paste a production CMS/VIP ID here. Empty IDs intentionally block spreadsheet access.
   STAGING_MODE: true,
-  SPREADSHEET_ID: '1mFlfZgNxBoJIR42E388cuPxIgniTGMffWklVy0b3DH4',
+  SPREADSHEET_ID: '',
 
   SHEETS: {
     BOOKINGS: 'Bookings',
@@ -28,7 +29,7 @@ const CONFIG = {
   },
 
   VIP: {
-    SPREADSHEET_ID: '1w8sJ9NdZHNdh7DQp_9OsJv_VMCJHY18wxVngc7HNDIM',
+    SPREADSHEET_ID: '',
     CUSTOMERS_SHEET: 'مشتریان',
     TOKENS_SHEET: 'توکن ها',
     ACTIVE_STATUS: 'فعال',

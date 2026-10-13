@@ -19,6 +19,16 @@ assert.ok(stagingMode, "staging branch must keep STAGING_MODE enabled");
 assert.notEqual(guardStart, -1, "runtime staging isolation guard must exist");
 assert.ok(guardCall > -1 && openById > guardCall, "guard must execute before opening any spreadsheet");
 
+const guardBody = source.slice(guardStart, source.indexOf("\\n}", guardStart) + 2);
+assert.ok(
+  guardBody.includes("1cf6SFL80xJ8YrBPlr_Fp9TYhkKGkhu2U45D2WTSyNz0"),
+  "guard must deny the known production CMS spreadsheet ID"
+);
+assert.ok(
+  guardBody.includes("1TpljGwyRpHcxyyR6Zm1mbT2CPJBvFeHCvD3QH34BuGs"),
+  "guard must deny the known production VIP spreadsheet ID"
+);
+
 if (!bookingSheetId || !vipSheetId) {
   console.log("BLOCKED AS EXPECTED: missing staging spreadsheet ID must fail closed");
 } else if (bookingSheetId === vipSheetId) {
@@ -28,4 +38,4 @@ if (!bookingSheetId || !vipSheetId) {
 }
 console.log("PASS staging mode enabled");
 console.log("PASS runtime guard exists and runs before openById");
-console.log("PASS total: 3/3 static safety assertions");
+console.log("PASS total: 5/5 static safety assertions");

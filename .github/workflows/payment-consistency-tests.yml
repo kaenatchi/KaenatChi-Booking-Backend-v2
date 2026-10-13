@@ -39,3 +39,5 @@ jobs:
         run: node tests/reject-already-confirmed-booking.test.cjs
       - name: Test transient Telegram queue re-persist recovery
         run: node tests/telegram-queue-repersist-recovery.test.cjs
+      - name: Test reminder failure isolation from booking notifications
+        run: node tests/telegram-reminder-failure-isolation.test.cjs

@@ -33,8 +33,8 @@ jobs:
             'const result = runBookingCoreSelfTests();',
             'console.log(JSON.stringify(result, null, 2));',
             "if (!result.ok) throw new Error('Booking core self-tests failed');"
-          ].join('\\n');
-          vm.runInContext(fs.readFileSync('Code.gs', 'utf8') + '\\n' + appended, context, { timeout: 5000 });
+          ].join('\n');
+          vm.runInContext(fs.readFileSync('Code.gs', 'utf8') + '\n' + appended, context, { timeout: 5000 });
           NODE
       - name: Guard against hardcoded live spreadsheet IDs
         shell: bash

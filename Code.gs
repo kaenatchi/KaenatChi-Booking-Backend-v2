@@ -433,9 +433,10 @@ function runBookingCoreSelfTests() {
   test('12-hour initial review TTL',CORE.REQUEST_TTL_MS===43200000);
   test('30-minute payment TTL',CORE.PAYMENT_TTL_MS===1800000);
   test('12-hour minimum reschedule notice',CORE.RESCHEDULE_MIN_NOTICE_MS===43200000);
-  test('Reschedule window allows exactly 12 hours',rescheduleWindowOpen_(Date.now()+43200000,Date.now()));
-  test('Reschedule window rejects less than 12 hours',!rescheduleWindowOpen_(Date.now()+43199999,Date.now()));
-  test('Reschedule window rejects past appointment',!rescheduleWindowOpen_(Date.now()-1,Date.now()));
+  const rescheduleTestNow=1700000000000;
+  test('Reschedule window allows exactly 12 hours',rescheduleWindowOpen_(rescheduleTestNow+43200000,rescheduleTestNow));
+  test('Reschedule window rejects less than 12 hours',!rescheduleWindowOpen_(rescheduleTestNow+43199999,rescheduleTestNow));
+  test('Reschedule window rejects past appointment',!rescheduleWindowOpen_(rescheduleTestNow-1,rescheduleTestNow));
   test('Pending request expires at deadline',expirationReason_(CORE.STATUS.REQUEST_PENDING,1000,0,1000)==='REQUEST_WINDOW_EXPIRED');
   test('Payment pending expires at deadline',expirationReason_(CORE.STATUS.PAYMENT_PENDING,0,1000,1000)==='PAYMENT_WINDOW_EXPIRED');
   test('Receipt review never auto-expires',expirationReason_(CORE.STATUS.RECEIPT_REVIEW,1000,1000,999999)==='');

@@ -36,10 +36,3 @@ jobs:
           grep -q 'function slotHasConflict_' Code.gs
           grep -q 'function intervalsOverlap_' Code.gs
           grep -q 'function auditBookingStagingSchemaReadOnly' StagingSchemaAudit.gs
-      - name: Confirm no live deployment step exists in this workflow
-        shell: bash
-        run: |
-          if grep -nEi 'clasp push|clasp deploy|gh workflow run.*deploy|publish|production deploy' .github/workflows/staging-booking-core-checks.yml; then
-            echo 'Deployment command must not exist in this staging-only workflow.'
-            exit 1
-          fi

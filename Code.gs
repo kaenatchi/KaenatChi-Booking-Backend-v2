@@ -418,6 +418,10 @@ function runBookingCoreSelfTests() {
   test('Jalali conversion known date',JSON.stringify(jalaliToGregorian_(1405,7,16))===JSON.stringify({gy:2026,gm:10,gd:8}));
   test('12-hour initial review TTL',CORE.REQUEST_TTL_MS===43200000);
   test('30-minute payment TTL',CORE.PAYMENT_TTL_MS===1800000);
+  test('Pending request expires at deadline',expirationReason_(CORE.STATUS.REQUEST_PENDING,1000,0,1000)==='REQUEST_WINDOW_EXPIRED');
+  test('Payment pending expires at deadline',expirationReason_(CORE.STATUS.PAYMENT_PENDING,0,1000,1000)==='PAYMENT_WINDOW_EXPIRED');
+  test('Receipt review never auto-expires',expirationReason_(CORE.STATUS.RECEIPT_REVIEW,1000,1000,999999)==='');
+  test('Confirmed booking never auto-expires',expirationReason_(CORE.STATUS.CONFIRMED,1000,1000,999999)==='');
   test('Overlap detects partial intersection',intervalsOverlap_(600,660,630,690)===true);
   test('Overlap allows adjacent appointments',intervalsOverlap_(600,630,630,660)===false);
   test('Overlap detects contained interval',intervalsOverlap_(600,720,630,660)===true);
@@ -483,14 +487,20 @@ function closureTime_(value) {
   const m=s.match(/(?:T|\s)(\d{1,2}:\d{2})(?::\d{2})?/);
   return normalizeTime_(m?m[1]:s);
 }
+function expirationReason_(status,requestExpiry,paymentExpiry,now) {
+  const current=Number(now);
+  const requestAt=Number(requestExpiry),paymentAt=Number(paymentExpiry);
+  if(status===CORE.STATUS.REQUEST_PENDING && Number.isFinite(requestAt) && requestAt>0 && requestAt<=current) return 'REQUEST_WINDOW_EXPIRED';
+  if(status===CORE.STATUS.PAYMENT_PENDING && Number.isFinite(paymentAt) && paymentAt>0 && paymentAt<=current) return 'PAYMENT_WINDOW_EXPIRED';
+  // RECEIPT_REVIEW is intentionally excluded: a submitted receipt must remain
+  // held until a manager finishes bank verification, regardless of elapsed time.
+  return '';
+}
 function expireStaleRequests_() {
   const now=Date.now();
   objectsWithRows_(tab_(CORE.TABS.BOOKINGS)).forEach(ref=>{
-    const status=String(ref.obj.Status||'');
-    const requestExpiry=new Date(ref.obj['Request Expires At']).getTime();
-    const paymentExpiry=new Date(ref.obj['Payment Expires At']).getTime();
-    if(status===CORE.STATUS.REQUEST_PENDING && Number.isFinite(requestExpiry) && requestExpiry>0 && requestExpiry<=now) transition_(ref,CORE.STATUS.EXPIRED,'system','REQUEST_WINDOW_EXPIRED');
-    else if(status===CORE.STATUS.PAYMENT_PENDING && Number.isFinite(paymentExpiry) && paymentExpiry>0 && paymentExpiry<=now) transition_(ref,CORE.STATUS.EXPIRED,'system','PAYMENT_WINDOW_EXPIRED');
+    const reason=expirationReason_(String(ref.obj.Status||''),new Date(ref.obj['Request Expires At']).getTime(),new Date(ref.obj['Payment Expires At']).getTime(),now);
+    if(reason) transition_(ref,CORE.STATUS.EXPIRED,'system',reason);
   });
 }
 function isSlotAvailableFor_(date,time,serviceIds,excludeRequestId) {

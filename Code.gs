@@ -148,7 +148,6 @@ function getPublicConfig_() {
 function getSlots_(date, serviceIds, excludeRequestId) {
   const tomorrow = tomorrowJalali_();
   if (String(date || tomorrow) !== tomorrow) return {ok:true,date:tomorrow,slots:[],message:'فقط برای فردا امکان ثبت درخواست وجود دارد.'};
-  expireStaleRequests_();
   const day=tehranTomorrowWeekday_();
   const ids=Array.isArray(serviceIds)?[...new Set(serviceIds.map(String))]:[];
   let schedule=scheduleForDay_(day),duration=30,serviceMode='energy';
@@ -179,6 +178,7 @@ function getSlots_(date, serviceIds, excludeRequestId) {
 
 function createRequest_(b) {
   return withLock_(() => {
+    expireStaleRequests_();
     const firstName = String(b.firstName || '').trim();
     const lastName = String(b.lastName || '').trim();
     const phone = String(b.phone || '');
@@ -292,6 +292,7 @@ function adminDecision_(b) {
       return {ok:true,status:row.Status};
     }
     if (decision === 'approveReschedule') {
+      expireStaleRequests_();
       if (row.Status !== CORE.STATUS.RESCHEDULE_REQUESTED) fail_('INVALID_STATE','درخواست تغییر زمان در صف بررسی نیست.');
       const d=String(row['Requested Reschedule Date']||'');const t=normalizeTime_(row['Requested Reschedule Time']);
       if(!isSlotAvailableFor_(d,t,String(row['Service IDs']||'').split(',').filter(Boolean),id)) fail_('SLOT_UNAVAILABLE','زمان پیشنهادی دیگر در دسترس نیست؛ نوبت قبلی حفظ شده است.');
@@ -340,6 +341,7 @@ function requestCancel_(b) {
 
 function requestReschedule_(b) {
   return withLock_(() => {
+    expireStaleRequests_();
     const ref=findBooking_(String(b.trackingCode||''),String(b.phone||''));
     if(!ref) fail_('NOT_FOUND','درخواست پیدا نشد.');
     if(ref.obj.Status!==CORE.STATUS.CONFIRMED) fail_('INVALID_STATE','تغییر زمان فقط برای نوبت قطعی ممکن است.');
@@ -376,6 +378,7 @@ function managerRescheduleOffer_(b) {
 }
 function acceptManagerReschedule_(b) {
   return withLock_(()=>{
+    expireStaleRequests_();
     const ref=findBooking_(String(b.trackingCode||''),String(b.phone||''));
     if(!ref) fail_('NOT_FOUND','نوبت پیدا نشد.');
     if(ref.obj.Status!==CORE.STATUS.MANAGER_RESCHEDULE_OFFERED) fail_('INVALID_STATE','پیشنهاد تغییر زمان فعالی وجود ندارد.');
@@ -461,6 +464,12 @@ function runBookingCoreSelfTests() {
   test('Receipt review never auto-expires',expirationReason_(CORE.STATUS.RECEIPT_REVIEW,1000,1000,999999)==='');
   test('Confirmed booking never auto-expires',expirationReason_(CORE.STATUS.CONFIRMED,1000,1000,999999)==='');
   test('getSlots accepts optional excluded request id',getSlots_.toString().includes('excludeRequestId'));
+  test('getSlots is read-only with respect to expiration',!getSlots_.toString().includes('expireStaleRequests_'));
+  test('admin slot availability check is read-only with respect to expiration',!isSlotAvailableFor_.toString().includes('expireStaleRequests_'));
+  test('request creation expires stale requests under lock',createRequest_.toString().includes('return withLock_(() => {\n    expireStaleRequests_();'));
+  test('reschedule request expires stale requests under lock',requestReschedule_.toString().includes('return withLock_(() => {\n    expireStaleRequests_();'));
+  test('manager reschedule acceptance expires stale requests under lock',acceptManagerReschedule_.toString().includes('return withLock_(()=>{\n    expireStaleRequests_();'));
+  test('admin reschedule approval expires stale requests in decision path',adminDecision_.toString().includes("if (decision === 'approveReschedule') {\n      expireStaleRequests_();"));
   test('admin slot validation rejects unknown service IDs',isSlotAvailableFor_.toString().includes('selected.some(s=>!s)'));
   test('admin slot validation checks full service duration',isSlotAvailableFor_.toString().includes('slotWithinServiceWindow_(day,time,duration)'));
   test('Overlap detects partial intersection',intervalsOverlap_(600,660,630,690)===true);
@@ -578,7 +587,6 @@ function isSlotAvailableFor_(date,time,serviceIds,excludeRequestId) {
   if(!slotWithinServiceWindow_(day,time,duration)) return false;
   const closures=readClosureSet_();
   if(closures.dates.has(date)||closures.slots.has(date+'|'+time)) return false;
-  expireStaleRequests_();
   return !slotHasConflict_(date,time,duration,excludeRequestId);
 }
 function slotHasConflict_(date,time,duration,excludeRequestId) {

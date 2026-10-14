@@ -39,7 +39,8 @@ const CORE = Object.freeze({
     CANCELLED: 'CANCELLED'
   },
   REQUEST_TTL_MS: 12 * 60 * 60 * 1000,
-  PAYMENT_TTL_MS: 30 * 60 * 1000
+  PAYMENT_TTL_MS: 30 * 60 * 1000,
+  RESCHEDULE_MIN_NOTICE_MS: 12 * 60 * 60 * 1000
 });
 
 function doGet(e) {
@@ -323,6 +324,10 @@ function requestReschedule_(b) {
     const ref=findBooking_(String(b.trackingCode||''),String(b.phone||''));
     if(!ref) fail_('NOT_FOUND','درخواست پیدا نشد.');
     if(ref.obj.Status!==CORE.STATUS.CONFIRMED) fail_('INVALID_STATE','تغییر زمان فقط برای نوبت قطعی ممکن است.');
+    const currentAppointmentAt=parseJalaliDateTime_(ref.obj['Appointment Date'],ref.obj['Appointment Time']);
+    if(!rescheduleWindowOpen_(currentAppointmentAt,Date.now())) {
+      fail_('RESCHEDULE_WINDOW_CLOSED','درخواست تغییر زمان باید حداقل ۱۲ ساعت پیش از نوبت ثبت شود.');
+    }
     const targetDate=String(b.date||'');const targetTime=normalizeTime_(b.time);
     if(targetDate!==tomorrowJalali_()) fail_('DATE_NOT_ALLOWED','فقط زمان‌های فردا قابل انتخاب‌اند.');
     const slot=getSlots_(targetDate,String(ref.obj['Service IDs']||'').split(',').filter(Boolean)).slots.find(s=>s.time===targetTime);
@@ -427,6 +432,10 @@ function runBookingCoreSelfTests() {
   test('Jalali conversion known date',JSON.stringify(jalaliToGregorian_(1405,7,16))===JSON.stringify({gy:2026,gm:10,gd:8}));
   test('12-hour initial review TTL',CORE.REQUEST_TTL_MS===43200000);
   test('30-minute payment TTL',CORE.PAYMENT_TTL_MS===1800000);
+  test('12-hour minimum reschedule notice',CORE.RESCHEDULE_MIN_NOTICE_MS===43200000);
+  test('Reschedule window allows exactly 12 hours',rescheduleWindowOpen_(Date.now()+43200000,Date.now()));
+  test('Reschedule window rejects less than 12 hours',!rescheduleWindowOpen_(Date.now()+43199999,Date.now()));
+  test('Reschedule window rejects past appointment',!rescheduleWindowOpen_(Date.now()-1,Date.now()));
   test('Pending request expires at deadline',expirationReason_(CORE.STATUS.REQUEST_PENDING,1000,0,1000)==='REQUEST_WINDOW_EXPIRED');
   test('Payment pending expires at deadline',expirationReason_(CORE.STATUS.PAYMENT_PENDING,0,1000,1000)==='PAYMENT_WINDOW_EXPIRED');
   test('Receipt review never auto-expires',expirationReason_(CORE.STATUS.RECEIPT_REVIEW,1000,1000,999999)==='');
@@ -508,6 +517,10 @@ function closureTime_(value) {
   const s=String(value||'').trim();
   const m=s.match(/(?:T|\s)(\d{1,2}:\d{2})(?::\d{2})?/);
   return normalizeTime_(m?m[1]:s);
+}
+function rescheduleWindowOpen_(appointmentAt,now) {
+  const target=Number(appointmentAt),current=Number(now);
+  return Number.isFinite(target)&&Number.isFinite(current)&&target-current>=CORE.RESCHEDULE_MIN_NOTICE_MS;
 }
 function expirationReason_(status,requestExpiry,paymentExpiry,now) {
   const current=Number(now);

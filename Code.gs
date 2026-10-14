@@ -7,8 +7,8 @@ const CORE = Object.freeze({
   TZ: 'Asia/Tehran',
   CMS_ID: '1cf6SFL80xJ8YrBPlr_Fp9TYhkKGkhu2U45D2WTSyNz0',
   VIP_ID: '1TpljGwyRpHcxyyR6Zm1mbT2CPJBvFeHCvD3QH34BuGs',
-  STAGING_PROP: 'KAENATCHI_BOOKING_STAGING_SHEET_ID',
-  ADMIN_SECRET_PROP: 'KAENATCHI_BOOKING_ADMIN_SECRET',
+  STAGING_PROP: 'STAGING_SPREADSHEET_ID',
+  ADMIN_SECRET_PROP: 'ADMIN_KEY',
   BOT_TOKEN_PROP: 'KAENATCHI_TELEGRAM_BOT_TOKEN',
   WEBHOOK_SECRET_PROP: 'KAENATCHI_TELEGRAM_WEBHOOK_SECRET',
   ADMIN_CHAT_PROP: 'KAENATCHI_TELEGRAM_ADMIN_CHAT_ID',
@@ -292,9 +292,14 @@ function requestReschedule_(b) {
     if(targetDate!==tomorrowJalali_()) fail_('DATE_NOT_ALLOWED','فقط زمان‌های فردا قابل انتخاب‌اند.');
     const slot=getSlots_(targetDate,String(ref.obj['Service IDs']||'').split(',').filter(Boolean)).slots.find(s=>s.time===targetTime);
     if(!slot||slot.status!=='AVAILABLE') fail_('SLOT_UNAVAILABLE','زمان جدید در دسترس نیست.');
+    // Keep the confirmed appointment intact until Maya approves the customer's request.
     ref.obj['Reschedule From']=ref.obj['Appointment Date']+' '+ref.obj['Appointment Time'];
-    ref.obj['Appointment Date']=targetDate;ref.obj['Appointment Time']=targetTime;ref.obj.Status=CORE.STATUS.RESCHEDULE_REQUESTED;ref.obj['Updated At']=new Date();
-    writeObject_(ref.sheet,ref.row,ref.obj);log_(ref.obj['Request ID'],'RESCHEDULE_REQUESTED',CORE.STATUS.CONFIRMED,CORE.STATUS.RESCHEDULE_REQUESTED,'customer',{targetDate,targetTime});
+    ref.obj['Requested Reschedule Date']=targetDate;
+    ref.obj['Requested Reschedule Time']=targetTime;
+    ref.obj.Status=CORE.STATUS.RESCHEDULE_REQUESTED;
+    ref.obj['Updated At']=new Date();
+    writeObject_(ref.sheet,ref.row,ref.obj);
+    log_(ref.obj['Request ID'],'RESCHEDULE_REQUESTED',CORE.STATUS.CONFIRMED,CORE.STATUS.RESCHEDULE_REQUESTED,'customer',{targetDate,targetTime,oldSlotRetained:true});
     notifyAdmin_(ref.obj['Request ID'],'درخواست تغییر زمان',ref.obj);
     return {ok:true,status:CORE.STATUS.RESCHEDULE_REQUESTED,message:'درخواست تغییر زمان بدون جریمه برای بررسی مایا ثبت شد؛ پرداخت مجدد لازم نیست.'};
   });

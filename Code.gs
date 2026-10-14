@@ -367,6 +367,10 @@ function getStatus_(trackingCode,phone) {
 
 function validateDiscountReadOnly_(code,subtotal) {
   if(!code) return {code:'',amount:0};
+  // Fail closed until the request carries server-verified Telegram initData
+  // and token ownership is bound to that verified identity. A client-supplied
+  // telegramId is not proof of ownership and must never authorize a VIP discount.
+  fail_('DISCOUNT_IDENTITY_UNVERIFIED','اعمال کد تخفیف موقتاً غیرفعال است تا هویت تلگرام و مالکیت توکن به‌صورت امن تأیید شود.');
   const clean=String(code).trim().toUpperCase();
   const vipId=prop_(CORE.VIP_ID_PROP);
   if(!vipId) fail_('DISCOUNT_UNAVAILABLE','اتصال VIP در تنظیمات خصوصی Staging پیکربندی نشده است.');

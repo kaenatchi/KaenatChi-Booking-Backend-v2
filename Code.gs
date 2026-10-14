@@ -715,3 +715,65 @@ function jalaliToGregorian_(jy,jm,jd){
 }
 function fail_(code,message){const e=new Error(message);e.code=code;e.publicMessage=message;throw e;}
 function out_(obj){return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);}
+
+
+/**
+ * Read-only preflight for an existing STAGING spreadsheet.
+ * Does not create sheets, write headers, mutate Script Properties, call Telegram,
+ * or contact CMS/VIP. Use this before any schema setup or migration.
+ */
+function auditStagingSchema() {
+  const required = Object.keys(CORE.HEADERS).reduce((out, name) => {
+    out[name] = CORE.HEADERS[name].slice();
+    return out;
+  }, {});
+  required[CORE.TABS.CLOSURES] = ['closure_id','start_datetime','end_datetime','reason','source','active','created_at','updated_at'];
+  const report = {
+    ok: false,
+    readOnly: true,
+    spreadsheetName: '',
+    properties: {},
+    sheets: {},
+    blockers: []
+  };
+  ['STAGING_SPREADSHEET_ID','ADMIN_KEY','CMS_API_URL','VIP_SPREADSHEET_ID',
+   'KAENATCHI_TELEGRAM_BOT_TOKEN','KAENATCHI_TELEGRAM_WEBHOOK_SECRET',
+   'KAENATCHI_TELEGRAM_ADMIN_CHAT_ID'].forEach(key => {
+    report.properties[key] = Boolean(prop_(key));
+  });
+  let ss;
+  try {
+    const id = prop_(CORE.STAGING_PROP);
+    if (!id) fail_('STAGING_ID_MISSING','STAGING_SPREADSHEET_ID is not configured.');
+    ss = SpreadsheetApp.openById(id);
+    report.spreadsheetName = ss.getName();
+  } catch (err) {
+    report.blockers.push('STAGING_SPREADSHEET_UNAVAILABLE');
+    report.ok = false;
+    return report;
+  }
+  Object.keys(required).forEach(name => {
+    const sh = ss.getSheetByName(name);
+    if (!sh) {
+      report.sheets[name] = {exists:false, missingHeaders:required[name]};
+      report.blockers.push('MISSING_SHEET:' + name);
+      return;
+    }
+    const width = Math.max(1, sh.getLastColumn());
+    const headers = sh.getLastRow()
+      ? sh.getRange(1,1,1,width).getDisplayValues()[0].map(v => String(v || '').trim()).filter(Boolean)
+      : [];
+    const missing = required[name].filter(h => headers.indexOf(h) < 0);
+    report.sheets[name] = {
+      exists:true,
+      lastRow:sh.getLastRow(),
+      headers,
+      missingHeaders:missing
+    };
+    if (missing.length) report.blockers.push('SCHEMA_MISMATCH:' + name);
+  });
+  if (!report.properties.CMS_API_URL) report.blockers.push('MISSING_PROPERTY:CMS_API_URL');
+  if (!report.properties.ADMIN_KEY) report.blockers.push('MISSING_PROPERTY:ADMIN_KEY');
+  report.ok = report.blockers.length === 0;
+  return report;
+}

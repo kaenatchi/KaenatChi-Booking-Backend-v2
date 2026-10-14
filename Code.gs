@@ -567,7 +567,7 @@ function intervalsOverlap_(aStart,aEnd,bStart,bEnd) {
   return Number.isFinite(aStart)&&Number.isFinite(aEnd)&&Number.isFinite(bStart)&&Number.isFinite(bEnd)&&aStart<bEnd&&bStart<aEnd;
 }
 function minutes_(value) {
-  const t=normalizeTime_(value).match(/^(\\d{2}):(\\d{2})$/);
+  const t=normalizeTime_(value).match(/^(\d{2}):(\d{2})$/);
   return t?Number(t[1])*60+Number(t[2]):-1;
 }
 function activeSlotSet_() {

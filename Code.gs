@@ -441,6 +441,8 @@ function runBookingCoreSelfTests() {
   test('Receipt review never auto-expires',expirationReason_(CORE.STATUS.RECEIPT_REVIEW,1000,1000,999999)==='');
   test('Confirmed booking never auto-expires',expirationReason_(CORE.STATUS.CONFIRMED,1000,1000,999999)==='');
   test('getSlots accepts optional excluded request id',getSlots_.toString().includes('excludeRequestId'));
+  test('admin slot validation rejects unknown service IDs',isSlotAvailableFor_.toString().includes('selected.some(s=>!s)'));
+  test('admin slot validation checks full service duration',isSlotAvailableFor_.toString().includes('slotWithinServiceWindow_(day,time,duration)'));
   test('Overlap detects partial intersection',intervalsOverlap_(600,660,630,690)===true);
   test('Overlap allows adjacent appointments',intervalsOverlap_(600,630,630,660)===false);
   test('Overlap detects contained interval',intervalsOverlap_(600,720,630,660)===true);
@@ -542,16 +544,21 @@ function expireStaleRequests_() {
 function isSlotAvailableFor_(date,time,serviceIds,excludeRequestId) {
   if(date!==tomorrowJalali_()) return false;
   const day=tehranTomorrowWeekday_(),ids=Array.isArray(serviceIds)?serviceIds:[];
-  const catalog=ids.length?getPublicConfig_().services:[];
-  const selected=ids.map(id=>catalog.find(s=>s.id===id)).filter(Boolean);
-  const therapy=selected.some(s=>/درمان|therapy|psychotherap|روان.?درمان|شمع.?درمان/i.test(s.category+' '+s.name));
-  const energy=selected.some(s=>!/درمان|therapy|psychotherap|روان.?درمان|شمع.?درمان/i.test(s.category+' '+s.name));
+  if(!ids.length) return false;
+  const catalog=getPublicConfig_().services;
+  const selected=ids.map(id=>catalog.find(s=>s.id===id));
+  // Reject unknown service IDs rather than silently treating them as a shorter booking.
+  if(selected.some(s=>!s)) return false;
+  const isTherapy=s=>/درمان|therapy|psychotherap|روان.?درمان|شمع.?درمان/i.test((s.category||'')+' '+(s.name||''));
+  const therapy=selected.some(isTherapy);
+  const energy=selected.some(s=>!isTherapy(s));
   if(therapy&&energy) return false;
+  const duration=selected.reduce((sum,s)=>sum+Math.max(1,num_(s.duration)||30),0);
   if(therapy ? day!==4 || !therapySlots_().includes(time) : !scheduleForDay_(day).includes(time)) return false;
+  if(!slotWithinServiceWindow_(day,time,duration)) return false;
   const closures=readClosureSet_();
   if(closures.dates.has(date)||closures.slots.has(date+'|'+time)) return false;
   expireStaleRequests_();
-  const duration=selected.length?selected.reduce((sum,s)=>sum+Math.max(1,num_(s.duration)||30),0):30;
   return !slotHasConflict_(date,time,duration,excludeRequestId);
 }
 function slotHasConflict_(date,time,duration,excludeRequestId) {

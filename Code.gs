@@ -18,7 +18,8 @@ const CORE = Object.freeze({
   TABS: {
     BOOKINGS: 'Bookings',
     PAYMENTS: 'Payments',
-    LOGS: 'BookingLogs'
+    LOGS: 'BookingLogs',
+    CLOSURES: 'Closures'
   },
   HEADERS: {
     Bookings: ['Request ID','Tracking Code','Appointment Code','Status','First Name','Last Name','Phone','Appointment Date','Appointment Time','Service IDs','Service Names','Subtotal','Discount Code','Discount Amount','Total','Created At','Request Expires At','Payment Expires At','Receipt File ID','Receipt MIME Type','Transaction Ref','Decision At','Decision By','Reschedule From','Requested Reschedule Date','Requested Reschedule Time','Updated At'],
@@ -422,21 +423,54 @@ function scheduleForDay_(day) {
   return [];
 }
 function readClosureSet_() {
+  // Booking closures are operational data in the isolated booking spreadsheet.
+  // This function is read-only and never opens or writes to the CMS spreadsheet.
   const dates=new Set(),slots=new Set();
-  const ss=cms_();
-  readObjects_(ss,['BlockedDates','blockedDates']).forEach(r=>{
-    if(active_(first_(r,['Active','فعال','Status']))) {
-      const d=normalizeDate_(first_(r,['Date','تاریخ','Blocked Date']));
-      if(d) dates.add(d);
+  const ss=staging_(),sh=ss.getSheetByName(CORE.TABS.CLOSURES);
+  if(!sh) fail_('CLOSURES_TAB_MISSING','شیت Closures در Staging موجود نیست؛ تا اصلاح ساختار، رزرو متوقف شد.');
+  const rows=readObjects_(ss,[CORE.TABS.CLOSURES]);
+  const target=tomorrowJalali_();
+  rows.forEach(r=>{
+    if(!active_(first_(r,['active','Active','فعال','Status']))) return;
+    const rawStart=first_(r,['start_datetime','Start Datetime','start','Start']);
+    const rawEnd=first_(r,['end_datetime','End Datetime','end','End']);
+    const startDate=closureDate_(rawStart),endDate=closureDate_(rawEnd);
+    if(!startDate||!endDate) fail_('CLOSURE_DATE_INVALID','یک بازهٔ مسدود در Staging تاریخ معتبر ندارد؛ برای جلوگیری از رزرو ناامن، بررسی متوقف شد.');
+    if(target<startDate||target>endDate) return;
+    const startTime=closureTime_(rawStart),endTime=closureTime_(rawEnd);
+    if(startDate!==endDate||!startTime||!endTime||startTime>=endTime) {
+      dates.add(target);
+      return;
     }
-  });
-  readObjects_(ss,['BlockedSlots','blockedSlots']).forEach(r=>{
-    if(active_(first_(r,['Active','فعال','Status']))) {
-      const d=normalizeDate_(first_(r,['Date','تاریخ']));const t=normalizeTime_(first_(r,['Time','زمان','Start Time']));
-      if(d&&t) slots.add(d+'|'+t);
+    let cursor=minutes_(startTime),finish=minutes_(endTime);
+    while(cursor<finish) {
+      slots.add(target+'|'+('0'+Math.floor(cursor/60)).slice(-2)+':'+('0'+(cursor%60)).slice(-2));
+      cursor+=30;
     }
   });
   return {dates,slots};
+}
+function closureDate_(value) {
+  if(value instanceof Date && Number.isFinite(value.getTime())) {
+    const parts=new Intl.DateTimeFormat('en-u-ca-persian',{timeZone:CORE.TZ,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(value);
+    const p={};parts.forEach(x=>p[x.type]=x.value);return p.year+'/'+p.month+'/'+p.day;
+  }
+  const s=String(value||'').trim();
+  const match=s.match(/\d{4}[\/-]\d{1,2}[\/-]\d{1,2}/);
+  const normalized=normalizeDate_(match?match[0]:'');
+  if(/^\d{4}\/\d{2}\/\d{2}$/.test(normalized)) return normalized;
+  const d=new Date(s);
+  if(!Number.isFinite(d.getTime())) return '';
+  const parts=new Intl.DateTimeFormat('en-u-ca-persian',{timeZone:CORE.TZ,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(d);
+  const p={};parts.forEach(x=>p[x.type]=x.value);return p.year+'/'+p.month+'/'+p.day;
+}
+function closureTime_(value) {
+  if(value instanceof Date && Number.isFinite(value.getTime())) {
+    return new Intl.DateTimeFormat('en-GB',{timeZone:CORE.TZ,hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(value);
+  }
+  const s=String(value||'').trim();
+  const m=s.match(/(?:T|\s)(\d{1,2}:\d{2})(?::\d{2})?/);
+  return normalizeTime_(m?m[1]:s);
 }
 function expireStaleRequests_() {
   const now=Date.now();

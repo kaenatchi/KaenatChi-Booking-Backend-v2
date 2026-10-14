@@ -5,8 +5,10 @@
  */
 const CORE = Object.freeze({
   TZ: 'Asia/Tehran',
-  CMS_ID: '1cf6SFL80xJ8YrBPlr_Fp9TYhkKGkhu2U45D2WTSyNz0',
-  VIP_ID: '1TpljGwyRpHcxyyR6Zm1mbT2CPJBvFeHCvD3QH34BuGs',
+  // IDs are injected only through this STAGING script's private properties.
+  // Never hardcode live CMS/VIP spreadsheet IDs into source.
+  CMS_ID_PROP: 'CMS_SPREADSHEET_ID',
+  VIP_ID_PROP: 'VIP_SPREADSHEET_ID',
   STAGING_PROP: 'STAGING_SPREADSHEET_ID',
   ADMIN_SECRET_PROP: 'ADMIN_KEY',
   BOT_TOKEN_PROP: 'KAENATCHI_TELEGRAM_BOT_TOKEN',
@@ -342,7 +344,9 @@ function getStatus_(trackingCode,phone) {
 function validateDiscountReadOnly_(code,subtotal) {
   if(!code) return {code:'',amount:0};
   const clean=String(code).trim().toUpperCase();
-  const vip=SpreadsheetApp.openById(CORE.VIP_ID);
+  const vipId=prop_(CORE.VIP_ID_PROP);
+  if(!vipId) fail_('DISCOUNT_UNAVAILABLE','اتصال VIP در تنظیمات خصوصی Staging پیکربندی نشده است.');
+  const vip=SpreadsheetApp.openById(vipId);
   const ts=vip.getSheetByName('توکن ها');
   const cs=vip.getSheetByName('مشتریان');
   if(!ts||!cs) fail_('DISCOUNT_UNAVAILABLE','امکان بررسی کد تخفیف در حال حاضر وجود ندارد.');
@@ -515,7 +519,11 @@ function appendObject_(sh,obj){const h=sh.getRange(1,1,1,sh.getLastColumn()).get
 function writeObject_(sh,row,obj){const h=sh.getRange(1,1,1,sh.getLastColumn()).getDisplayValues()[0];sh.getRange(row,1,1,h.length).setValues([h.map(k=>obj[k]===undefined?'':obj[k])]);}
 function tab_(name){const sh=staging_().getSheetByName(name);if(!sh)fail_('MISSING_TAB','شیت '+name+' در فایل Staging وجود ندارد. ابتدا initializeStagingSchema را اجرا کن.');return sh;}
 function staging_(){const id=prop_(CORE.STAGING_PROP);if(!id)fail_('STAGING_ID_MISSING','Script Property '+CORE.STAGING_PROP+' تنظیم نشده است.');return SpreadsheetApp.openById(id);}
-function cms_(){return SpreadsheetApp.openById(CORE.CMS_ID);}
+function cms_(){
+  const id=prop_(CORE.CMS_ID_PROP);
+  if(!id) fail_('CMS_UNAVAILABLE','شناسه CMS در تنظیمات خصوصی Staging پیکربندی نشده است.');
+  return SpreadsheetApp.openById(id);
+}
 function prop_(key){return String(PropertiesService.getScriptProperties().getProperty(key)||'').trim();}
 function withLock_(fn){const lock=LockService.getScriptLock();lock.waitLock(20000);try{return fn();}finally{lock.releaseLock();}}
 function active_(v){const s=String(v===undefined?'':v).trim().toLowerCase();return !s||['true','yes','1','active','فعال','روشن','بله'].includes(s);}

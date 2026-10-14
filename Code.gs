@@ -418,6 +418,11 @@ function runBookingCoreSelfTests() {
   test('Jalali conversion known date',JSON.stringify(jalaliToGregorian_(1405,7,16))===JSON.stringify({gy:2026,gm:10,gd:8}));
   test('12-hour initial review TTL',CORE.REQUEST_TTL_MS===43200000);
   test('30-minute payment TTL',CORE.PAYMENT_TTL_MS===1800000);
+  test('Overlap detects partial intersection',intervalsOverlap_(600,660,630,690)===true);
+  test('Overlap allows adjacent appointments',intervalsOverlap_(600,630,630,660)===false);
+  test('Overlap detects contained interval',intervalsOverlap_(600,720,630,660)===true);
+  test('Overlap allows separated appointments',intervalsOverlap_(600,630,645,675)===false);
+  test('Closure date rejects malformed value',closureDate_('not-a-date')==='');
   return {ok:checks.every(x=>x.ok),executed:true,noSpreadsheetWrites:true,noTelegramCalls:true,checks};
 }
 function scheduleForDay_(day) {
@@ -522,9 +527,12 @@ function slotHasConflict_(date,time,duration,excludeRequestId) {
     if(String(x.obj.Status)===CORE.STATUS.RESCHEDULE_REQUESTED&&normalizeDate_(x.obj['Requested Reschedule Date'])===date)candidates.push(x.obj['Requested Reschedule Time']);
     return candidates.some(existingTime=>{
       const existingStart=minutes_(existingTime);
-      return existingStart>=0&&start<existingStart+durationFor(x.obj)&&existingStart<end;
+      return existingStart>=0&&intervalsOverlap_(start,end,existingStart,existingStart+durationFor(x.obj));
     });
   });
+}
+function intervalsOverlap_(aStart,aEnd,bStart,bEnd) {
+  return Number.isFinite(aStart)&&Number.isFinite(aEnd)&&Number.isFinite(bStart)&&Number.isFinite(bEnd)&&aStart<bEnd&&bStart<aEnd;
 }
 function minutes_(value) {
   const t=normalizeTime_(value).match(/^(\\d{2}):(\\d{2})$/);

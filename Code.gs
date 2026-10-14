@@ -113,14 +113,33 @@ function getPublicConfig_() {
   let payload;
   try { payload=JSON.parse(response.getContentText()); } catch(err) { fail_('CMS_UNAVAILABLE','پاسخ API کائنات‌چی JSON معتبر نیست.'); }
   if(!payload||payload.success!==true||!Array.isArray(payload.services)) fail_('CMS_CONTRACT_MISMATCH','ساختار دادهٔ خدمات CMS با قرارداد Staging هماهنگ نیست.');
-  const mapped=payload.services.map(r=>({
-    id:String(first_(r,['شناسه','شناسه خدمت','Service ID','ServiceId','ID','Id','id','slug'])||''),
-    name:String(first_(r,['نام خدمت','عنوان','نام','Service Name','Name','Title','title'])||''),
-    category:String(first_(r,['دسته','دسته‌بندی','Category','Service Category','category'])||''),
-    description:String(first_(r,['توضیح کوتاه','Description','Short Description','توضیحات','description'])||''),
-    price:num_(first_(r,['قیمت','هزینه','Price','Base Price','Original Price','مبلغ','price'])),
-    duration:num_(first_(r,['مدت','مدت زمان','Duration','duration']))||30
-  })).filter(s=>s.id&&s.name&&s.price>=0);
+  const mapped=payload.services.map((r,index)=>{
+    const name=String(first_(r,['نام خدمت','عنوان','نام','Service Name','Name','Title','title'])||'').trim();
+    const explicitId=String(first_(r,['شناسه','شناسه خدمت','Service ID','ServiceId','ID','Id','id','slug'])||'').trim();
+    const rawPrice=first_(r,['قیمت','هزینه','Price','Base Price','Original Price','مبلغ','price']);
+    const rawDuration=first_(r,['مدت','مدت زمان','Duration','duration']);
+    const active=String(first_(r,['فعال','وضعیت','Active','active','Status','status'])||'').trim().toLocaleLowerCase('fa');
+    const normalizedName=name.replace(/[\u200c\u200f\u200e\s_-]+/g,'').toLocaleLowerCase('fa');
+    const isPsychotherapy=/سایکو.?تراپی|روان.?درمان|psychotherap|مشاوره/i.test(name);
+    const isCandle=/شمع.?تراپی|candle/i.test(name);
+    const duration=num_(rawDuration)||(isPsychotherapy?45:isCandle?20:30);
+    return {
+      // Match the Mini App's deterministic fallback ID, using the original CMS row index.
+      id:explicitId||('booking-'+bookingSlug_(name)+'-'+(index+1)),
+      name,
+      category:String(first_(r,['دسته','دسته‌بندی','Category','Service Category','category'])||''),
+      description:String(first_(r,['توضیح کوتاه','Description','Short Description','توضیحات','description'])||''),
+      price:num_(rawPrice),
+      duration,
+      _hasPrice:rawPrice!==undefined&&rawPrice!==null&&String(rawPrice).trim()!=='',
+      _active:!active||['بله','فعال','true','yes','1','active'].includes(active),
+      _normalizedName:normalizedName
+    };
+  }).filter(s=>{
+    // Mirror the Mini App's active/price guard: category-summary rows without a price are not bookable.
+    const aggregate=['انرژیخوانی','شمعتراپی','سایکوتراپی'].includes(s._normalizedName);
+    return s.id&&s.name&&s._active&&s._hasPrice&&!aggregate;
+  }).map(({_hasPrice,_active,_normalizedName,...service})=>service);
   if(!mapped.length) fail_('CMS_SERVICES_EMPTY','API کائنات‌چی هیچ خدمت قابل رزروی برنگرداند.');
   return {ok:true,services:mapped,availableDates:[tomorrowJalali_()],bookingRules:{requestReviewHours:12,paymentMinutes:30,timezone:CORE.TZ}};
 }
@@ -137,7 +156,7 @@ function getSlots_(date, serviceIds, excludeRequestId) {
     const catalog=getPublicConfig_().services;
     const selected=ids.map(id=>catalog.find(s=>s.id===id));
     if(selected.some(s=>!s)) return {ok:true,date:tomorrow,slots:[],message:'یکی از خدمات انتخاب‌شده معتبر نیست.'};
-    const isTherapy=s=>/درمان|therapy|psychotherap|روان.?درمان|شمع.?درمان/i.test((s.category||'')+' '+(s.name||''));
+    const isTherapy=s=>/درمان|therapy|psychotherap|روان.?درمان|شمع.?درمان|شمع.?تراپی|سایکو.?تراپی|candle/i.test((s.category||'')+' '+(s.name||''));
     const therapy=selected.some(isTherapy),energy=selected.some(s=>!isTherapy(s));
     if(therapy&&energy) return {ok:true,date:tomorrow,slots:[],message:'خدمات درمانی و انرژی در یک نوبت قابل ترکیب نیستند.'};
     serviceMode=therapy?'therapy':'energy';
@@ -550,7 +569,7 @@ function isSlotAvailableFor_(date,time,serviceIds,excludeRequestId) {
   const selected=ids.map(id=>catalog.find(s=>s.id===id));
   // Reject unknown service IDs rather than silently treating them as a shorter booking.
   if(selected.some(s=>!s)) return false;
-  const isTherapy=s=>/درمان|therapy|psychotherap|روان.?درمان|شمع.?درمان/i.test((s.category||'')+' '+(s.name||''));
+  const isTherapy=s=>/درمان|therapy|psychotherap|روان.?درمان|شمع.?درمان|شمع.?تراپی|سایکو.?تراپی|candle/i.test((s.category||'')+' '+(s.name||''));
   const therapy=selected.some(isTherapy);
   const energy=selected.some(s=>!isTherapy(s));
   if(therapy&&energy) return false;
@@ -678,6 +697,12 @@ function cms_(){
 function prop_(key){return String(PropertiesService.getScriptProperties().getProperty(key)||'').trim();}
 function withLock_(fn){const lock=LockService.getScriptLock();lock.waitLock(20000);try{return fn();}finally{lock.releaseLock();}}
 function active_(v){const s=String(v===undefined?'':v).trim().toLowerCase();return !s||['true','yes','1','active','فعال','روشن','بله'].includes(s);}
+function bookingSlug_(value){
+  return String(value||'').trim().toLowerCase()
+    .replace(/[آأإ]/g,'ا')
+    .replace(/[^a-z0-9\u0600-\u06ff]+/g,'-')
+    .replace(/^-+|-+$/g,'')||'item';
+}
 function first_(o,keys){for(const k of keys)if(o[k]!==undefined&&String(o[k]).trim()!=='')return o[k];return '';}
 function num_(v){const n=Number(String(v||'').replace(/[,٬\s]/g,''));return Number.isFinite(n)?n:0;}
 function normalizeTime_(v){const s=String(v||'').trim().replace('.',':');const m=s.match(/^(\d{1,2}):(\d{1,2})$/);return m?('0'+m[1]).slice(-2)+':'+('0'+m[2]).slice(-2):'';}

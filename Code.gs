@@ -16,15 +16,15 @@ const CORE = Object.freeze({
   WEBHOOK_SECRET_PROP: 'KAENATCHI_TELEGRAM_WEBHOOK_SECRET',
   ADMIN_CHAT_PROP: 'KAENATCHI_TELEGRAM_ADMIN_CHAT_ID',
   TABS: {
-    BOOKINGS: 'Bookings',
-    PAYMENTS: 'Payments',
-    LOGS: 'BookingLogs',
+    BOOKINGS: 'CoreBookings',
+    PAYMENTS: 'CorePayments',
+    LOGS: 'CoreBookingLogs',
     CLOSURES: 'Closures'
   },
   HEADERS: {
-    Bookings: ['Request ID','Tracking Code','Appointment Code','Status','First Name','Last Name','Phone','Appointment Date','Appointment Time','Service IDs','Service Names','Subtotal','Discount Code','Discount Amount','Total','Created At','Request Expires At','Payment Expires At','Receipt File ID','Receipt MIME Type','Transaction Ref','Decision At','Decision By','Reschedule From','Requested Reschedule Date','Requested Reschedule Time','Updated At'],
-    Payments: ['Payment ID','Request ID','Tracking Code','Amount','Transaction Ref','Receipt File ID','Receipt MIME Type','Status','Submitted At','Reviewed At','Reviewed By','Notes'],
-    BookingLogs: ['Event ID','Request ID','Event','From Status','To Status','Actor','At','Details']
+    CoreBookings: ['Request ID','Tracking Code','Appointment Code','Status','First Name','Last Name','Phone','Appointment Date','Appointment Time','Service IDs','Service Names','Subtotal','Discount Code','Discount Amount','Total','Created At','Request Expires At','Payment Expires At','Receipt File ID','Receipt MIME Type','Transaction Ref','Decision At','Decision By','Reschedule From','Requested Reschedule Date','Requested Reschedule Time','Updated At'],
+    CorePayments: ['Payment ID','Request ID','Tracking Code','Amount','Transaction Ref','Receipt File ID','Receipt MIME Type','Status','Submitted At','Reviewed At','Reviewed By','Notes'],
+    CoreBookingLogs: ['Event ID','Request ID','Event','From Status','To Status','Actor','At','Details']
   },
   STATUS: {
     REQUEST_PENDING: 'REQUEST_PENDING',

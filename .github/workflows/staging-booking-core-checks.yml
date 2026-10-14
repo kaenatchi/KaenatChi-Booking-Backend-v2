@@ -1,0 +1,53 @@
+name: Staging Booking Core Static Checks
+on:
+  pull_request:
+    branches:
+      - staging/booking-core-rebuild
+    paths:
+      - 'Code.gs'
+      - 'StagingSchemaAudit.gs'
+      - '.github/workflows/staging-booking-core-checks.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          node --check < Code.gs
+          node --check < StagingSchemaAudit.gs
+      - name: Run pure booking core self-tests without Apps Script services
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const vm = require('vm');
+          const context = { console };
+          vm.createContext(context);
+          const appended = [
+            'const result = runBookingCoreSelfTests();',
+            'console.log(JSON.stringify(result, null, 2));',
+            "if (!result.ok) throw new Error('Booking core self-tests failed');"
+          ].join('\n');
+          vm.runInContext(fs.readFileSync('Code.gs', 'utf8') + '\n' + appended, context, { timeout: 5000 });
+          NODE
+      - name: Guard against hardcoded live spreadsheet IDs
+        shell: bash
+        run: |
+          if grep -nE '1cf6SFL80xJ8YrBPlr_Fp9TYhkKGkhu2U45D2WTSyNz0|1TpljGwyRpHcxyyR6Zm1mbT2CPJBvFeHCvD3QH34BuGs' Code.gs StagingSchemaAudit.gs; then
+            echo 'Unexpected hardcoded live spreadsheet ID found.'
+            exit 1
+          fi
+      - name: Verify required safety guards are present
+        shell: bash
+        run: |
+          grep -q 'DISCOUNT_IDENTITY_UNVERIFIED' Code.gs
+          grep -q 'DISCOUNT_FINALIZATION_UNAVAILABLE' Code.gs
+          grep -q 'function slotHasConflict_' Code.gs
+          grep -q 'function intervalsOverlap_' Code.gs
+          grep -q 'function auditBookingStagingSchemaReadOnly' StagingSchemaAudit.gs

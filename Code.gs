@@ -5,22 +5,26 @@
  */
 const CORE = Object.freeze({
   TZ: 'Asia/Tehran',
-  CMS_ID: '1cf6SFL80xJ8YrBPlr_Fp9TYhkKGkhu2U45D2WTSyNz0',
-  VIP_ID: '1TpljGwyRpHcxyyR6Zm1mbT2CPJBvFeHCvD3QH34BuGs',
-  STAGING_PROP: 'KAENATCHI_BOOKING_STAGING_SHEET_ID',
-  ADMIN_SECRET_PROP: 'KAENATCHI_BOOKING_ADMIN_SECRET',
+  // IDs are injected only through this STAGING script's private properties.
+  // Never hardcode live CMS/VIP spreadsheet IDs into source.
+  CMS_API_URL_PROP: 'CMS_API_URL',
+  CMS_ID_PROP: 'CMS_SPREADSHEET_ID',
+  VIP_ID_PROP: 'VIP_SPREADSHEET_ID',
+  STAGING_PROP: 'STAGING_SPREADSHEET_ID',
+  ADMIN_SECRET_PROP: 'ADMIN_KEY',
   BOT_TOKEN_PROP: 'KAENATCHI_TELEGRAM_BOT_TOKEN',
   WEBHOOK_SECRET_PROP: 'KAENATCHI_TELEGRAM_WEBHOOK_SECRET',
   ADMIN_CHAT_PROP: 'KAENATCHI_TELEGRAM_ADMIN_CHAT_ID',
   TABS: {
-    BOOKINGS: 'Bookings',
-    PAYMENTS: 'Payments',
-    LOGS: 'BookingLogs'
+    BOOKINGS: 'CoreBookings',
+    PAYMENTS: 'CorePayments',
+    LOGS: 'CoreBookingLogs',
+    CLOSURES: 'Closures'
   },
   HEADERS: {
-    Bookings: ['Request ID','Tracking Code','Appointment Code','Status','First Name','Last Name','Phone','Appointment Date','Appointment Time','Service IDs','Service Names','Subtotal','Discount Code','Discount Amount','Total','Created At','Request Expires At','Payment Expires At','Receipt File ID','Receipt MIME Type','Transaction Ref','Decision At','Decision By','Reschedule From','Requested Reschedule Date','Requested Reschedule Time','Updated At'],
-    Payments: ['Payment ID','Request ID','Tracking Code','Amount','Transaction Ref','Receipt File ID','Receipt MIME Type','Status','Submitted At','Reviewed At','Reviewed By','Notes'],
-    BookingLogs: ['Event ID','Request ID','Event','From Status','To Status','Actor','At','Details']
+    CoreBookings: ['Request ID','Tracking Code','Appointment Code','Status','First Name','Last Name','Phone','Appointment Date','Appointment Time','Service IDs','Service Names','Subtotal','Discount Code','Discount Amount','Total','Created At','Request Expires At','Payment Expires At','Receipt File ID','Receipt MIME Type','Transaction Ref','Decision At','Decision By','Reschedule From','Requested Reschedule Date','Requested Reschedule Time','Updated At'],
+    CorePayments: ['Payment ID','Request ID','Tracking Code','Amount','Transaction Ref','Receipt File ID','Receipt MIME Type','Status','Submitted At','Reviewed At','Reviewed By','Notes'],
+    CoreBookingLogs: ['Event ID','Request ID','Event','From Status','To Status','Actor','At','Details']
   },
   STATUS: {
     REQUEST_PENDING: 'REQUEST_PENDING',
@@ -35,7 +39,8 @@ const CORE = Object.freeze({
     CANCELLED: 'CANCELLED'
   },
   REQUEST_TTL_MS: 12 * 60 * 60 * 1000,
-  PAYMENT_TTL_MS: 30 * 60 * 1000
+  PAYMENT_TTL_MS: 30 * 60 * 1000,
+  RESCHEDULE_MIN_NOTICE_MS: 12 * 60 * 60 * 1000
 });
 
 function doGet(e) {
@@ -95,37 +100,81 @@ function initializeStagingSchema() {
 }
 
 function getPublicConfig_() {
-  const cms = cms_();
-  const services = readObjects_(cms, ['Services','services']).filter(r => active_(first_(r,['Active','Is Active','فعال','Status','وضعیت'])));
-  const mapped = services.map(r => ({
-    id:String(first_(r,['Service ID','ServiceId','ID','Id','id','شناسه خدمت']) || ''),
-    name:String(first_(r,['نام خدمت','Service Name','Name','Title','عنوان']) || ''),
-    category:String(first_(r,['دسته','Category','Service Category']) || ''),
-    description:String(first_(r,['توضیح کوتاه','Description','Short Description','توضیحات']) || ''),
-    price:num_(first_(r,['قیمت','Price','Base Price','Original Price','مبلغ'])),
-    duration:num_(first_(r,['مدت','Duration','مدت زمان'])) || 30
-  })).filter(s => s.id && s.name && s.price >= 0);
+  // Read the published CMS data API. The booking core never writes to CMS.
+  const api=prop_(CORE.CMS_API_URL_PROP);
+  if(!api) fail_('CMS_UNAVAILABLE','نشانی API کائنات‌چی در تنظیمات خصوصی Staging پیکربندی نشده است.');
+  let response;
+  try {
+    response=UrlFetchApp.fetch(api+(api.indexOf('?')>=0?'&':'?')+'action=getMiniAppData',{muteHttpExceptions:true,followRedirects:true});
+  } catch(err) {
+    fail_('CMS_UNAVAILABLE','ارتباط با API کائنات‌چی برقرار نشد.');
+  }
+  if(response.getResponseCode()<200||response.getResponseCode()>=300) fail_('CMS_UNAVAILABLE','API کائنات‌چی پاسخ معتبر نداد.');
+  let payload;
+  try { payload=JSON.parse(response.getContentText()); } catch(err) { fail_('CMS_UNAVAILABLE','پاسخ API کائنات‌چی JSON معتبر نیست.'); }
+  if(!payload||payload.success!==true||!Array.isArray(payload.services)) fail_('CMS_CONTRACT_MISMATCH','ساختار دادهٔ خدمات CMS با قرارداد Staging هماهنگ نیست.');
+  const mapped=payload.services.map((r,index)=>{
+    const name=String(first_(r,['نام خدمت','عنوان','نام','Service Name','Name','Title','title'])||'').trim();
+    const explicitId=String(first_(r,['شناسه','شناسه خدمت','Service ID','ServiceId','ID','Id','id','slug'])||'').trim();
+    const rawPrice=first_(r,['قیمت','هزینه','Price','Base Price','Original Price','مبلغ','price']);
+    const rawDuration=first_(r,['مدت','مدت زمان','Duration','duration']);
+    const active=String(first_(r,['فعال','وضعیت','Active','active','Status','status'])||'').trim().toLocaleLowerCase('fa');
+    const normalizedName=name.replace(/[\u200c\u200f\u200e\s_-]+/g,'').toLocaleLowerCase('fa');
+    const isPsychotherapy=/سایکو.?تراپی|روان.?درمان|psychotherap|مشاوره/i.test(name);
+    const isCandle=/شمع.?تراپی|candle/i.test(name);
+    const duration=num_(rawDuration)||(isPsychotherapy?45:isCandle?20:30);
+    return {
+      // Match the Mini App's deterministic fallback ID, using the original CMS row index.
+      id:explicitId||('booking-'+bookingSlug_(name)+'-'+(index+1)),
+      name,
+      category:String(first_(r,['دسته','دسته‌بندی','Category','Service Category','category'])||''),
+      description:String(first_(r,['توضیح کوتاه','Description','Short Description','توضیحات','description'])||''),
+      price:num_(rawPrice),
+      duration,
+      _hasPrice:rawPrice!==undefined&&rawPrice!==null&&String(rawPrice).trim()!=='',
+      _active:!active||['بله','فعال','true','yes','1','active'].includes(active),
+      _normalizedName:normalizedName
+    };
+  }).filter(s=>{
+    // Mirror the Mini App's active/price guard: category-summary rows without a price are not bookable.
+    const aggregate=['انرژیخوانی','شمعتراپی','سایکوتراپی'].includes(s._normalizedName);
+    return s.id&&s.name&&s._active&&s._hasPrice&&!aggregate;
+  }).map(({_hasPrice,_active,_normalizedName,...service})=>service);
+  if(!mapped.length) fail_('CMS_SERVICES_EMPTY','API کائنات‌چی هیچ خدمت قابل رزروی برنگرداند.');
   return {ok:true,services:mapped,availableDates:[tomorrowJalali_()],bookingRules:{requestReviewHours:12,paymentMinutes:30,timezone:CORE.TZ}};
 }
 
 /** Slot generation follows the approved weekly schedule; CMS closures are overlaid read-only. */
-function getSlots_(date, serviceIds) {
+function getSlots_(date, serviceIds, excludeRequestId) {
   const tomorrow = tomorrowJalali_();
   if (String(date || tomorrow) !== tomorrow) return {ok:true,date:tomorrow,slots:[],message:'فقط برای فردا امکان ثبت درخواست وجود دارد.'};
   expireStaleRequests_();
-  const day = tehranTomorrowWeekday_();
-  const schedule = scheduleForDay_(day);
-  const closures = readClosureSet_();
-  const booked = activeSlotSet_();
-  const slots = schedule.map(time => {
-    const key = tomorrow + '|' + time;
-    const closed = closures.dates.has(tomorrow) || closures.slots.has(key);
-    const taken = booked.has(key);
-    return {date:tomorrow,time,period:(time < '15:00' ? 'صبح' : 'عصر'),status:closed?'BLOCKED':taken?'BOOKED':'AVAILABLE',
-      label:closed?'تعطیل':taken?'رزرو شده':time,
-      message:closed?'این زمان در این تاریخ قابل رزرو نیست.':taken?'این زمان قبلاً رزرو شده؛ زمان دیگری انتخاب کن.':''};
+  const day=tehranTomorrowWeekday_();
+  const ids=Array.isArray(serviceIds)?[...new Set(serviceIds.map(String))]:[];
+  let schedule=scheduleForDay_(day),duration=30,serviceMode='energy';
+  if(ids.length) {
+    const catalog=getPublicConfig_().services;
+    const selected=ids.map(id=>catalog.find(s=>s.id===id));
+    if(selected.some(s=>!s)) return {ok:true,date:tomorrow,slots:[],message:'یکی از خدمات انتخاب‌شده معتبر نیست.'};
+    const isTherapy=s=>/درمان|therapy|psychotherap|روان.?درمان|شمع.?درمان|شمع.?تراپی|سایکو.?تراپی|candle/i.test((s.category||'')+' '+(s.name||''));
+    const therapy=selected.some(isTherapy),energy=selected.some(s=>!isTherapy(s));
+    if(therapy&&energy) return {ok:true,date:tomorrow,slots:[],message:'خدمات درمانی و انرژی در یک نوبت قابل ترکیب نیستند.'};
+    serviceMode=therapy?'therapy':'energy';
+    duration=selected.reduce((sum,s)=>sum+Math.max(1,num_(s.duration)||30),0);
+    if(therapy) schedule=day===4?therapySlots_():[];
+  }
+  const closures=readClosureSet_();
+  const slots=schedule.map(time=>{
+    const key=tomorrow+'|'+time;
+    const closed=closures.dates.has(tomorrow)||closures.slots.has(key);
+    const withinHours=slotWithinServiceWindow_(day,time,duration);
+    const taken=!withinHours||slotHasConflict_(tomorrow,time,duration,excludeRequestId||'');
+    const status=closed?'BLOCKED':!withinHours?'BLOCKED':taken?'BOOKED':'AVAILABLE';
+    return {date:tomorrow,time,period:(time<'15:00'?'صبح':'عصر'),status,
+      label:closed?'تعطیل':!withinHours?'مدت خدمت خارج از ساعت کاری':taken?'رزرو شده':time,
+      message:closed?'این زمان در این تاریخ قابل رزرو نیست.':!withinHours?'مدت مجموع خدمات از ساعت کاری این بازه فراتر می‌رود.':taken?'این زمان با نوبت دیگری تداخل دارد؛ زمان دیگری انتخاب کن.':''};
   });
-  return {ok:true,date:tomorrow,slots};
+  return {ok:true,date:tomorrow,slots,serviceMode,durationMinutes:duration};
 }
 
 function createRequest_(b) {
@@ -222,6 +271,12 @@ function adminDecision_(b) {
     }
     if (decision === 'approvePayment') {
       if (row.Status !== CORE.STATUS.RECEIPT_REVIEW) fail_('INVALID_STATE','این فیش در انتظار بررسی نیست.');
+      // Never confirm a discounted booking until VIP token consumption is
+      // implemented atomically with payment approval. Otherwise a token could
+      // remain reusable after the booking is confirmed.
+      if (String(row['Discount Code']||'').trim()) {
+        fail_('DISCOUNT_FINALIZATION_UNAVAILABLE','تأیید نهایی این پرداخت تا تکمیل مصرف امن توکن VIP متوقف است؛ نوبت همچنان برای بررسی مدیر نگه داشته می‌شود.');
+      }
       row['Appointment Code'] = 'KC-' + Utilities.getUuid().replace(/-/g,'').slice(0,10).toUpperCase();
       row['Decision At']=new Date();row['Decision By']=actor;row['Updated At']=new Date();
       transition_(ref,CORE.STATUS.CONFIRMED,actor,'BANK_DEPOSIT_VERIFIED');
@@ -288,13 +343,22 @@ function requestReschedule_(b) {
     const ref=findBooking_(String(b.trackingCode||''),String(b.phone||''));
     if(!ref) fail_('NOT_FOUND','درخواست پیدا نشد.');
     if(ref.obj.Status!==CORE.STATUS.CONFIRMED) fail_('INVALID_STATE','تغییر زمان فقط برای نوبت قطعی ممکن است.');
+    const currentAppointmentAt=parseJalaliDateTime_(ref.obj['Appointment Date'],ref.obj['Appointment Time']);
+    if(!rescheduleWindowOpen_(currentAppointmentAt,Date.now())) {
+      fail_('RESCHEDULE_WINDOW_CLOSED','درخواست تغییر زمان باید حداقل ۱۲ ساعت پیش از نوبت ثبت شود.');
+    }
     const targetDate=String(b.date||'');const targetTime=normalizeTime_(b.time);
     if(targetDate!==tomorrowJalali_()) fail_('DATE_NOT_ALLOWED','فقط زمان‌های فردا قابل انتخاب‌اند.');
     const slot=getSlots_(targetDate,String(ref.obj['Service IDs']||'').split(',').filter(Boolean)).slots.find(s=>s.time===targetTime);
     if(!slot||slot.status!=='AVAILABLE') fail_('SLOT_UNAVAILABLE','زمان جدید در دسترس نیست.');
+    // Keep the confirmed appointment intact until Maya approves the customer's request.
     ref.obj['Reschedule From']=ref.obj['Appointment Date']+' '+ref.obj['Appointment Time'];
-    ref.obj['Appointment Date']=targetDate;ref.obj['Appointment Time']=targetTime;ref.obj.Status=CORE.STATUS.RESCHEDULE_REQUESTED;ref.obj['Updated At']=new Date();
-    writeObject_(ref.sheet,ref.row,ref.obj);log_(ref.obj['Request ID'],'RESCHEDULE_REQUESTED',CORE.STATUS.CONFIRMED,CORE.STATUS.RESCHEDULE_REQUESTED,'customer',{targetDate,targetTime});
+    ref.obj['Requested Reschedule Date']=targetDate;
+    ref.obj['Requested Reschedule Time']=targetTime;
+    ref.obj.Status=CORE.STATUS.RESCHEDULE_REQUESTED;
+    ref.obj['Updated At']=new Date();
+    writeObject_(ref.sheet,ref.row,ref.obj);
+    log_(ref.obj['Request ID'],'RESCHEDULE_REQUESTED',CORE.STATUS.CONFIRMED,CORE.STATUS.RESCHEDULE_REQUESTED,'customer',{targetDate,targetTime,oldSlotRetained:true});
     notifyAdmin_(ref.obj['Request ID'],'درخواست تغییر زمان',ref.obj);
     return {ok:true,status:CORE.STATUS.RESCHEDULE_REQUESTED,message:'درخواست تغییر زمان بدون جریمه برای بررسی مایا ثبت شد؛ پرداخت مجدد لازم نیست.'};
   });
@@ -317,7 +381,7 @@ function acceptManagerReschedule_(b) {
     if(ref.obj.Status!==CORE.STATUS.MANAGER_RESCHEDULE_OFFERED) fail_('INVALID_STATE','پیشنهاد تغییر زمان فعالی وجود ندارد.');
     const d=String(b.date||''),t=normalizeTime_(b.time);
     if(d!==tomorrowJalali_()) fail_('DATE_NOT_ALLOWED','فقط زمان‌های فردا قابل انتخاب‌اند.');
-    const slot=getSlots_(d,String(ref.obj['Service IDs']||'').split(',').filter(Boolean)).slots.find(s=>s.time===t);
+    const slot=getSlots_(d,String(ref.obj['Service IDs']||'').split(',').filter(Boolean),String(ref.obj['Request ID']||'')).slots.find(s=>s.time===t);
     if(!slot||slot.status!=='AVAILABLE') fail_('SLOT_UNAVAILABLE','زمان انتخابی در دسترس نیست؛ نوبت قبلی حفظ شده است.');
     const old=ref.obj['Appointment Date']+' '+ref.obj['Appointment Time'];
     ref.obj['Appointment Date']=d;ref.obj['Appointment Time']=t;ref.obj['Appointment Code']='KC-'+Utilities.getUuid().replace(/-/g,'').slice(0,10).toUpperCase();
@@ -336,8 +400,14 @@ function getStatus_(trackingCode,phone) {
 
 function validateDiscountReadOnly_(code,subtotal) {
   if(!code) return {code:'',amount:0};
+  // Fail closed until the request carries server-verified Telegram initData
+  // and token ownership is bound to that verified identity. A client-supplied
+  // telegramId is not proof of ownership and must never authorize a VIP discount.
+  fail_('DISCOUNT_IDENTITY_UNVERIFIED','اعمال کد تخفیف موقتاً غیرفعال است تا هویت تلگرام و مالکیت توکن به‌صورت امن تأیید شود.');
   const clean=String(code).trim().toUpperCase();
-  const vip=SpreadsheetApp.openById(CORE.VIP_ID);
+  const vipId=prop_(CORE.VIP_ID_PROP);
+  if(!vipId) fail_('DISCOUNT_UNAVAILABLE','اتصال VIP در تنظیمات خصوصی Staging پیکربندی نشده است.');
+  const vip=SpreadsheetApp.openById(vipId);
   const ts=vip.getSheetByName('توکن ها');
   const cs=vip.getSheetByName('مشتریان');
   if(!ts||!cs) fail_('DISCOUNT_UNAVAILABLE','امکان بررسی کد تخفیف در حال حاضر وجود ندارد.');
@@ -368,13 +438,50 @@ function runBookingCoreSelfTests() {
   test('Saturday energy slots',JSON.stringify(scheduleForDay_(6))===JSON.stringify(['11:00','12:00','13:00','16:00','17:00','18:00']));
   test('Sunday energy slots',JSON.stringify(scheduleForDay_(0))===JSON.stringify(['11:30','12:30','13:30','16:30','17:30','18:30']));
   test('Friday closed',scheduleForDay_(5).length===0);
+  test('Regular-day last morning slot fits 30 minutes',slotWithinServiceWindow_(6,'13:00',30));
+  test('Regular-day last morning slot rejects 60 minutes',!slotWithinServiceWindow_(6,'13:00',60));
+  test('Half-hour-day last morning slot fits 30 minutes',slotWithinServiceWindow_(0,'13:30',30));
+  test('Half-hour-day last evening slot fits 30 minutes',slotWithinServiceWindow_(2,'18:30',30));
+  test('Service crossing session break rejected',!slotWithinServiceWindow_(6,'13:00',60));
+  test('Thursday therapy final slot fits 30 minutes',slotWithinServiceWindow_(4,'18:00',30));
+  test('Thursday therapy cannot exceed closing time',!slotWithinServiceWindow_(4,'18:00',45));
   test('Thursday therapy slots',therapySlots_().includes('13:30')&&therapySlots_().includes('18:30')&&!therapySlots_().includes('14:00'));
   test('Strict ASCII phone accepted',/^09[0-9]{9}$/.test('09371234567'));
   test('Persian digits rejected in phone',!/^09[0-9]{9}$/.test('۰۹۳۷۱۲۳۴۵۶۷'));
   test('Jalali conversion known date',JSON.stringify(jalaliToGregorian_(1405,7,16))===JSON.stringify({gy:2026,gm:10,gd:8}));
   test('12-hour initial review TTL',CORE.REQUEST_TTL_MS===43200000);
   test('30-minute payment TTL',CORE.PAYMENT_TTL_MS===1800000);
+  test('12-hour minimum reschedule notice',CORE.RESCHEDULE_MIN_NOTICE_MS===43200000);
+  const rescheduleTestNow=1700000000000;
+  test('Reschedule window allows exactly 12 hours',rescheduleWindowOpen_(rescheduleTestNow+43200000,rescheduleTestNow));
+  test('Reschedule window rejects less than 12 hours',!rescheduleWindowOpen_(rescheduleTestNow+43199999,rescheduleTestNow));
+  test('Reschedule window rejects past appointment',!rescheduleWindowOpen_(rescheduleTestNow-1,rescheduleTestNow));
+  test('Pending request expires at deadline',expirationReason_(CORE.STATUS.REQUEST_PENDING,1000,0,1000)==='REQUEST_WINDOW_EXPIRED');
+  test('Payment pending expires at deadline',expirationReason_(CORE.STATUS.PAYMENT_PENDING,0,1000,1000)==='PAYMENT_WINDOW_EXPIRED');
+  test('Receipt review never auto-expires',expirationReason_(CORE.STATUS.RECEIPT_REVIEW,1000,1000,999999)==='');
+  test('Confirmed booking never auto-expires',expirationReason_(CORE.STATUS.CONFIRMED,1000,1000,999999)==='');
+  test('getSlots accepts optional excluded request id',getSlots_.toString().includes('excludeRequestId'));
+  test('admin slot validation rejects unknown service IDs',isSlotAvailableFor_.toString().includes('selected.some(s=>!s)'));
+  test('admin slot validation checks full service duration',isSlotAvailableFor_.toString().includes('slotWithinServiceWindow_(day,time,duration)'));
+  test('Overlap detects partial intersection',intervalsOverlap_(600,660,630,690)===true);
+  test('Overlap allows adjacent appointments',intervalsOverlap_(600,630,630,660)===false);
+  test('Overlap detects contained interval',intervalsOverlap_(600,720,630,660)===true);
+  test('Overlap allows separated appointments',intervalsOverlap_(600,630,645,675)===false);
+  test('Closure date rejects malformed value',closureDate_('not-a-date')==='');
   return {ok:checks.every(x=>x.ok),executed:true,noSpreadsheetWrites:true,noTelegramCalls:true,checks};
+}
+function slotWithinServiceWindow_(day,time,duration) {
+  const start=minutes_(time);
+  if(start<0||!Number.isFinite(Number(duration))||Number(duration)<=0)return false;
+  const end=start+Number(duration);
+  // Sunday and Tuesday use half-hour start times and their final listed starts
+  // (13:30 and 18:30) require the corresponding 14:00 / 19:00 session end.
+  const halfHourDay=day===0||day===2;
+  const morningEnd=halfHourDay?14*60:13*60+30;
+  const eveningEnd=halfHourDay?19*60:18*60+30;
+  const inMorning=start>=11*60&&end<=morningEnd;
+  const inEvening=start>=16*60&&end<=eveningEnd;
+  return inMorning||inEvening;
 }
 function scheduleForDay_(day) {
   // JS weekday: 0 Sun, 1 Mon, ... 6 Sat
@@ -385,52 +492,124 @@ function scheduleForDay_(day) {
   return [];
 }
 function readClosureSet_() {
+  // Booking closures are operational data in the isolated booking spreadsheet.
+  // This function is read-only and never opens or writes to the CMS spreadsheet.
   const dates=new Set(),slots=new Set();
-  const ss=cms_();
-  readObjects_(ss,['BlockedDates','blockedDates']).forEach(r=>{
-    if(active_(first_(r,['Active','فعال','Status']))) {
-      const d=normalizeDate_(first_(r,['Date','تاریخ','Blocked Date']));
-      if(d) dates.add(d);
+  const ss=staging_(),sh=ss.getSheetByName(CORE.TABS.CLOSURES);
+  if(!sh) fail_('CLOSURES_TAB_MISSING','شیت Closures در Staging موجود نیست؛ تا اصلاح ساختار، رزرو متوقف شد.');
+  const rows=readObjects_(ss,[CORE.TABS.CLOSURES]);
+  const target=tomorrowJalali_();
+  rows.forEach(r=>{
+    if(!active_(first_(r,['active','Active','فعال','Status']))) return;
+    const rawStart=first_(r,['start_datetime','Start Datetime','start','Start']);
+    const rawEnd=first_(r,['end_datetime','End Datetime','end','End']);
+    const startDate=closureDate_(rawStart),endDate=closureDate_(rawEnd);
+    if(!startDate||!endDate) fail_('CLOSURE_DATE_INVALID','یک بازهٔ مسدود در Staging تاریخ معتبر ندارد؛ برای جلوگیری از رزرو ناامن، بررسی متوقف شد.');
+    if(target<startDate||target>endDate) return;
+    const startTime=closureTime_(rawStart),endTime=closureTime_(rawEnd);
+    if(startDate!==endDate||!startTime||!endTime||startTime>=endTime) {
+      dates.add(target);
+      return;
     }
-  });
-  readObjects_(ss,['BlockedSlots','blockedSlots']).forEach(r=>{
-    if(active_(first_(r,['Active','فعال','Status']))) {
-      const d=normalizeDate_(first_(r,['Date','تاریخ']));const t=normalizeTime_(first_(r,['Time','زمان','Start Time']));
-      if(d&&t) slots.add(d+'|'+t);
+    let cursor=minutes_(startTime),finish=minutes_(endTime);
+    while(cursor<finish) {
+      slots.add(target+'|'+('0'+Math.floor(cursor/60)).slice(-2)+':'+('0'+(cursor%60)).slice(-2));
+      cursor+=30;
     }
   });
   return {dates,slots};
 }
+function closureDate_(value) {
+  if(value instanceof Date && Number.isFinite(value.getTime())) {
+    const parts=new Intl.DateTimeFormat('en-u-ca-persian',{timeZone:CORE.TZ,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(value);
+    const p={};parts.forEach(x=>p[x.type]=x.value);return p.year+'/'+p.month+'/'+p.day;
+  }
+  const s=String(value||'').trim();
+  const match=s.match(/\d{4}[\/-]\d{1,2}[\/-]\d{1,2}/);
+  const normalized=normalizeDate_(match?match[0]:'');
+  if(/^\d{4}\/\d{2}\/\d{2}$/.test(normalized)) return normalized;
+  const d=new Date(s);
+  if(!Number.isFinite(d.getTime())) return '';
+  const parts=new Intl.DateTimeFormat('en-u-ca-persian',{timeZone:CORE.TZ,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(d);
+  const p={};parts.forEach(x=>p[x.type]=x.value);return p.year+'/'+p.month+'/'+p.day;
+}
+function closureTime_(value) {
+  if(value instanceof Date && Number.isFinite(value.getTime())) {
+    return new Intl.DateTimeFormat('en-GB',{timeZone:CORE.TZ,hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(value);
+  }
+  const s=String(value||'').trim();
+  const m=s.match(/(?:T|\s)(\d{1,2}:\d{2})(?::\d{2})?/);
+  return normalizeTime_(m?m[1]:s);
+}
+function rescheduleWindowOpen_(appointmentAt,now) {
+  const target=Number(appointmentAt),current=Number(now);
+  return Number.isFinite(target)&&Number.isFinite(current)&&target-current>=CORE.RESCHEDULE_MIN_NOTICE_MS;
+}
+function expirationReason_(status,requestExpiry,paymentExpiry,now) {
+  const current=Number(now);
+  const requestAt=Number(requestExpiry),paymentAt=Number(paymentExpiry);
+  if(status===CORE.STATUS.REQUEST_PENDING && Number.isFinite(requestAt) && requestAt>0 && requestAt<=current) return 'REQUEST_WINDOW_EXPIRED';
+  if(status===CORE.STATUS.PAYMENT_PENDING && Number.isFinite(paymentAt) && paymentAt>0 && paymentAt<=current) return 'PAYMENT_WINDOW_EXPIRED';
+  // RECEIPT_REVIEW is intentionally excluded: a submitted receipt must remain
+  // held until a manager finishes bank verification, regardless of elapsed time.
+  return '';
+}
 function expireStaleRequests_() {
   const now=Date.now();
   objectsWithRows_(tab_(CORE.TABS.BOOKINGS)).forEach(ref=>{
-    const status=String(ref.obj.Status||'');
-    const requestExpiry=new Date(ref.obj['Request Expires At']).getTime();
-    const paymentExpiry=new Date(ref.obj['Payment Expires At']).getTime();
-    if(status===CORE.STATUS.REQUEST_PENDING && Number.isFinite(requestExpiry) && requestExpiry>0 && requestExpiry<=now) transition_(ref,CORE.STATUS.EXPIRED,'system','REQUEST_WINDOW_EXPIRED');
-    else if(status===CORE.STATUS.PAYMENT_PENDING && Number.isFinite(paymentExpiry) && paymentExpiry>0 && paymentExpiry<=now) transition_(ref,CORE.STATUS.EXPIRED,'system','PAYMENT_WINDOW_EXPIRED');
+    const reason=expirationReason_(String(ref.obj.Status||''),new Date(ref.obj['Request Expires At']).getTime(),new Date(ref.obj['Payment Expires At']).getTime(),now);
+    if(reason) transition_(ref,CORE.STATUS.EXPIRED,'system',reason);
   });
 }
 function isSlotAvailableFor_(date,time,serviceIds,excludeRequestId) {
   if(date!==tomorrowJalali_()) return false;
   const day=tehranTomorrowWeekday_(),ids=Array.isArray(serviceIds)?serviceIds:[];
-  const catalog=ids.length?getPublicConfig_().services:[];
-  const selected=ids.map(id=>catalog.find(s=>s.id===id)).filter(Boolean);
-  const therapy=selected.some(s=>/درمان|therapy|psychotherap|روان.?درمان|شمع.?درمان/i.test(s.category+' '+s.name));
-  const energy=selected.some(s=>!/درمان|therapy|psychotherap|روان.?درمان|شمع.?درمان/i.test(s.category+' '+s.name));
+  if(!ids.length) return false;
+  const catalog=getPublicConfig_().services;
+  const selected=ids.map(id=>catalog.find(s=>s.id===id));
+  // Reject unknown service IDs rather than silently treating them as a shorter booking.
+  if(selected.some(s=>!s)) return false;
+  const isTherapy=s=>/درمان|therapy|psychotherap|روان.?درمان|شمع.?درمان|شمع.?تراپی|سایکو.?تراپی|candle/i.test((s.category||'')+' '+(s.name||''));
+  const therapy=selected.some(isTherapy);
+  const energy=selected.some(s=>!isTherapy(s));
   if(therapy&&energy) return false;
+  const duration=selected.reduce((sum,s)=>sum+Math.max(1,num_(s.duration)||30),0);
   if(therapy ? day!==4 || !therapySlots_().includes(time) : !scheduleForDay_(day).includes(time)) return false;
+  if(!slotWithinServiceWindow_(day,time,duration)) return false;
   const closures=readClosureSet_();
   if(closures.dates.has(date)||closures.slots.has(date+'|'+time)) return false;
   expireStaleRequests_();
-  return !objectsWithRows_(tab_(CORE.TABS.BOOKINGS)).some(x=>{
-    if(String(x.obj['Request ID']||'')===String(excludeRequestId||'')) return false;
-    const status=String(x.obj.Status||'');
-    const active=[CORE.STATUS.REQUEST_PENDING,CORE.STATUS.PAYMENT_PENDING,CORE.STATUS.RECEIPT_REVIEW,CORE.STATUS.CONFIRMED,CORE.STATUS.CANCEL_REQUESTED,CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.MANAGER_RESCHEDULE_OFFERED].includes(status);
-    if(!active) return false;
-    if(normalizeDate_(x.obj['Appointment Date'])===date&&normalizeTime_(x.obj['Appointment Time'])===time) return true;
-    return status===CORE.STATUS.RESCHEDULE_REQUESTED&&normalizeDate_(x.obj['Requested Reschedule Date'])===date&&normalizeTime_(x.obj['Requested Reschedule Time'])===time;
+  return !slotHasConflict_(date,time,duration,excludeRequestId);
+}
+function slotHasConflict_(date,time,duration,excludeRequestId) {
+  const start=minutes_(time);
+  if(start<0)return true;
+  const end=start+Math.max(1,Number(duration)||30);
+  const active=[CORE.STATUS.REQUEST_PENDING,CORE.STATUS.PAYMENT_PENDING,CORE.STATUS.RECEIPT_REVIEW,CORE.STATUS.CONFIRMED,CORE.STATUS.CANCEL_REQUESTED,CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.MANAGER_RESCHEDULE_OFFERED];
+  const rows=objectsWithRows_(tab_(CORE.TABS.BOOKINGS)).filter(x=>active.includes(String(x.obj.Status||''))&&String(x.obj['Request ID']||'')!==String(excludeRequestId||''));
+  if(!rows.length)return false;
+  const catalog=getPublicConfig_().services;
+  const durationFor=row=>{
+    const ids=String(row['Service IDs']||'').split(',').filter(Boolean);
+    const services=ids.map(id=>catalog.find(s=>s.id===id)).filter(Boolean);
+    return services.length?services.reduce((sum,s)=>sum+Math.max(1,num_(s.duration)||30),0):30;
+  };
+  return rows.some(x=>{
+    const candidates=[];
+    if(normalizeDate_(x.obj['Appointment Date'])===date)candidates.push(x.obj['Appointment Time']);
+    if(String(x.obj.Status)===CORE.STATUS.RESCHEDULE_REQUESTED&&normalizeDate_(x.obj['Requested Reschedule Date'])===date)candidates.push(x.obj['Requested Reschedule Time']);
+    return candidates.some(existingTime=>{
+      const existingStart=minutes_(existingTime);
+      return existingStart>=0&&intervalsOverlap_(start,end,existingStart,existingStart+durationFor(x.obj));
+    });
   });
+}
+function intervalsOverlap_(aStart,aEnd,bStart,bEnd) {
+  return Number.isFinite(aStart)&&Number.isFinite(aEnd)&&Number.isFinite(bStart)&&Number.isFinite(bEnd)&&aStart<bEnd&&bStart<aEnd;
+}
+function minutes_(value) {
+  const t=normalizeTime_(value).match(/^(\d{2}):(\d{2})$/);
+  return t?Number(t[1])*60+Number(t[2]):-1;
 }
 function activeSlotSet_() {
   const set=new Set();
@@ -510,10 +689,20 @@ function appendObject_(sh,obj){const h=sh.getRange(1,1,1,sh.getLastColumn()).get
 function writeObject_(sh,row,obj){const h=sh.getRange(1,1,1,sh.getLastColumn()).getDisplayValues()[0];sh.getRange(row,1,1,h.length).setValues([h.map(k=>obj[k]===undefined?'':obj[k])]);}
 function tab_(name){const sh=staging_().getSheetByName(name);if(!sh)fail_('MISSING_TAB','شیت '+name+' در فایل Staging وجود ندارد. ابتدا initializeStagingSchema را اجرا کن.');return sh;}
 function staging_(){const id=prop_(CORE.STAGING_PROP);if(!id)fail_('STAGING_ID_MISSING','Script Property '+CORE.STAGING_PROP+' تنظیم نشده است.');return SpreadsheetApp.openById(id);}
-function cms_(){return SpreadsheetApp.openById(CORE.CMS_ID);}
+function cms_(){
+  const id=prop_(CORE.CMS_ID_PROP);
+  if(!id) fail_('CMS_UNAVAILABLE','شناسه CMS در تنظیمات خصوصی Staging پیکربندی نشده است.');
+  return SpreadsheetApp.openById(id);
+}
 function prop_(key){return String(PropertiesService.getScriptProperties().getProperty(key)||'').trim();}
 function withLock_(fn){const lock=LockService.getScriptLock();lock.waitLock(20000);try{return fn();}finally{lock.releaseLock();}}
 function active_(v){const s=String(v===undefined?'':v).trim().toLowerCase();return !s||['true','yes','1','active','فعال','روشن','بله'].includes(s);}
+function bookingSlug_(value){
+  return String(value||'').trim().toLowerCase()
+    .replace(/[آأإ]/g,'ا')
+    .replace(/[^a-z0-9\u0600-\u06ff]+/g,'-')
+    .replace(/^-+|-+$/g,'')||'item';
+}
 function first_(o,keys){for(const k of keys)if(o[k]!==undefined&&String(o[k]).trim()!=='')return o[k];return '';}
 function num_(v){const n=Number(String(v||'').replace(/[,٬\s]/g,''));return Number.isFinite(n)?n:0;}
 function normalizeTime_(v){const s=String(v||'').trim().replace('.',':');const m=s.match(/^(\d{1,2}):(\d{1,2})$/);return m?('0'+m[1]).slice(-2)+':'+('0'+m[2]).slice(-2):'';}
@@ -551,3 +740,117 @@ function jalaliToGregorian_(jy,jm,jd){
 }
 function fail_(code,message){const e=new Error(message);e.code=code;e.publicMessage=message;throw e;}
 function out_(obj){return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);}
+
+
+/**
+ * Read-only preflight for an existing STAGING spreadsheet.
+ * Does not create sheets, write headers, mutate Script Properties, call Telegram,
+ * or contact CMS/VIP. Use this before any schema setup or migration.
+ */
+function auditStagingSchema() {
+  const required = Object.keys(CORE.HEADERS).reduce((out, name) => {
+    out[name] = CORE.HEADERS[name].slice();
+    return out;
+  }, {});
+  required[CORE.TABS.CLOSURES] = ['closure_id','start_datetime','end_datetime','reason','source','active','created_at','updated_at'];
+  const report = {
+    ok: false,
+    readOnly: true,
+    spreadsheetName: '',
+    properties: {},
+    sheets: {},
+    blockers: []
+  };
+  ['STAGING_SPREADSHEET_ID','ADMIN_KEY','CMS_API_URL','VIP_SPREADSHEET_ID',
+   'KAENATCHI_TELEGRAM_BOT_TOKEN','KAENATCHI_TELEGRAM_WEBHOOK_SECRET',
+   'KAENATCHI_TELEGRAM_ADMIN_CHAT_ID'].forEach(key => {
+    report.properties[key] = Boolean(prop_(key));
+  });
+  let ss;
+  try {
+    const id = prop_(CORE.STAGING_PROP);
+    if (!id) fail_('STAGING_ID_MISSING','STAGING_SPREADSHEET_ID is not configured.');
+    ss = SpreadsheetApp.openById(id);
+    report.spreadsheetName = ss.getName();
+  } catch (err) {
+    report.blockers.push('STAGING_SPREADSHEET_UNAVAILABLE');
+    report.ok = false;
+    return report;
+  }
+  Object.keys(required).forEach(name => {
+    const sh = ss.getSheetByName(name);
+    if (!sh) {
+      report.sheets[name] = {exists:false, missingHeaders:required[name]};
+      report.blockers.push('MISSING_SHEET:' + name);
+      return;
+    }
+    const width = Math.max(1, sh.getLastColumn());
+    const headers = sh.getLastRow()
+      ? sh.getRange(1,1,1,width).getDisplayValues()[0].map(v => String(v || '').trim()).filter(Boolean)
+      : [];
+    const missing = required[name].filter(h => headers.indexOf(h) < 0);
+    report.sheets[name] = {
+      exists:true,
+      lastRow:sh.getLastRow(),
+      headers,
+      missingHeaders:missing
+    };
+    if (missing.length) report.blockers.push('SCHEMA_MISMATCH:' + name);
+  });
+  if (!report.properties.CMS_API_URL) report.blockers.push('MISSING_PROPERTY:CMS_API_URL');
+  if (!report.properties.ADMIN_KEY) report.blockers.push('MISSING_PROPERTY:ADMIN_KEY');
+  report.ok = report.blockers.length === 0;
+  return report;
+}
+
+
+/**
+ * Explicit, isolated STAGING schema initializer.
+ * It never alters existing legacy tabs. It validates all existing target tabs
+ * before creating any missing Core* tabs, then writes headers only to newly
+ * created tabs. Do not run until auditStagingSchema() has been reviewed.
+ */
+function initializeIsolatedStagingSchema() {
+  const ss = staging_();
+  const expected = {
+    CoreBookings: CORE.HEADERS.CoreBookings,
+    CorePayments: CORE.HEADERS.CorePayments,
+    CoreBookingLogs: CORE.HEADERS.CoreBookingLogs,
+    Closures: ['closure_id','start_datetime','end_datetime','reason','source','active','created_at','updated_at']
+  };
+  const plan = [];
+  const blockers = [];
+  Object.keys(expected).forEach(name => {
+    const sh = ss.getSheetByName(name);
+    if (!sh) {
+      plan.push({name, action:'create'});
+      return;
+    }
+    const headers = sh.getLastRow()
+      ? sh.getRange(1,1,1,Math.max(1,sh.getLastColumn())).getDisplayValues()[0].map(v => String(v||'').trim()).filter(Boolean)
+      : [];
+    if (!headers.length) {
+      plan.push({name, action:'initialize-empty-existing'});
+      return;
+    }
+    const missing = expected[name].filter(h => headers.indexOf(h) < 0);
+    if (missing.length) blockers.push({name, missing});
+    else plan.push({name, action:'keep-compatible-existing'});
+  });
+  if (blockers.length) {
+    return {ok:false, changed:false, error:'SCHEMA_MISMATCH', blockers,
+      message:'هیچ تغییری انجام نشد؛ ابتدا ناسازگاری شیت‌های Core موجود را بررسی کن.'};
+  }
+  // All target schemas were checked before the first write.
+  plan.filter(x => x.action==='create').forEach(x => {
+    const sh = ss.insertSheet(x.name);
+    sh.getRange(1,1,1,expected[x.name].length).setValues([expected[x.name]]);
+  });
+  plan.filter(x => x.action==='initialize-empty-existing').forEach(x => {
+    const sh = ss.getSheetByName(x.name);
+    sh.getRange(1,1,1,expected[x.name].length).setValues([expected[x.name]]);
+  });
+  return {ok:true, changed:plan.some(x=>x.action==='create'||x.action==='initialize-empty-existing'),
+    spreadsheet:ss.getName(), plan, legacyTabsPreserved:true,
+    message:'فقط شیت‌های Core خالی یا تازه ایجاد شدند؛ شیت‌های قدیمی دست‌نخورده ماندند.'};
+}

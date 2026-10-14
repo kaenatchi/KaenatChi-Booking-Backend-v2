@@ -126,7 +126,7 @@ function getPublicConfig_() {
 }
 
 /** Slot generation follows the approved weekly schedule; CMS closures are overlaid read-only. */
-function getSlots_(date, serviceIds) {
+function getSlots_(date, serviceIds, excludeRequestId) {
   const tomorrow = tomorrowJalali_();
   if (String(date || tomorrow) !== tomorrow) return {ok:true,date:tomorrow,slots:[],message:'فقط برای فردا امکان ثبت درخواست وجود دارد.'};
   expireStaleRequests_();
@@ -149,7 +149,7 @@ function getSlots_(date, serviceIds) {
     const key=tomorrow+'|'+time;
     const closed=closures.dates.has(tomorrow)||closures.slots.has(key);
     const withinHours=slotWithinServiceWindow_(day,time,duration);
-    const taken=!withinHours||slotHasConflict_(tomorrow,time,duration,'');
+    const taken=!withinHours||slotHasConflict_(tomorrow,time,duration,excludeRequestId||'');
     const status=closed?'BLOCKED':!withinHours?'BLOCKED':taken?'BOOKED':'AVAILABLE';
     return {date:tomorrow,time,period:(time<'15:00'?'صبح':'عصر'),status,
       label:closed?'تعطیل':!withinHours?'مدت خدمت خارج از ساعت کاری':taken?'رزرو شده':time,
@@ -362,7 +362,7 @@ function acceptManagerReschedule_(b) {
     if(ref.obj.Status!==CORE.STATUS.MANAGER_RESCHEDULE_OFFERED) fail_('INVALID_STATE','پیشنهاد تغییر زمان فعالی وجود ندارد.');
     const d=String(b.date||''),t=normalizeTime_(b.time);
     if(d!==tomorrowJalali_()) fail_('DATE_NOT_ALLOWED','فقط زمان‌های فردا قابل انتخاب‌اند.');
-    const slot=getSlots_(d,String(ref.obj['Service IDs']||'').split(',').filter(Boolean)).slots.find(s=>s.time===t);
+    const slot=getSlots_(d,String(ref.obj['Service IDs']||'').split(',').filter(Boolean),String(ref.obj['Request ID']||'')).slots.find(s=>s.time===t);
     if(!slot||slot.status!=='AVAILABLE') fail_('SLOT_UNAVAILABLE','زمان انتخابی در دسترس نیست؛ نوبت قبلی حفظ شده است.');
     const old=ref.obj['Appointment Date']+' '+ref.obj['Appointment Time'];
     ref.obj['Appointment Date']=d;ref.obj['Appointment Time']=t;ref.obj['Appointment Code']='KC-'+Utilities.getUuid().replace(/-/g,'').slice(0,10).toUpperCase();
@@ -440,6 +440,7 @@ function runBookingCoreSelfTests() {
   test('Payment pending expires at deadline',expirationReason_(CORE.STATUS.PAYMENT_PENDING,0,1000,1000)==='PAYMENT_WINDOW_EXPIRED');
   test('Receipt review never auto-expires',expirationReason_(CORE.STATUS.RECEIPT_REVIEW,1000,1000,999999)==='');
   test('Confirmed booking never auto-expires',expirationReason_(CORE.STATUS.CONFIRMED,1000,1000,999999)==='');
+  test('getSlots accepts optional excluded request id',getSlots_.toString().includes('excludeRequestId'));
   test('Overlap detects partial intersection',intervalsOverlap_(600,660,630,690)===true);
   test('Overlap allows adjacent appointments',intervalsOverlap_(600,630,630,660)===false);
   test('Overlap detects contained interval',intervalsOverlap_(600,720,630,660)===true);

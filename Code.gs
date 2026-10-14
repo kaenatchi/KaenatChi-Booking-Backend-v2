@@ -128,19 +128,30 @@ function getSlots_(date, serviceIds) {
   const tomorrow = tomorrowJalali_();
   if (String(date || tomorrow) !== tomorrow) return {ok:true,date:tomorrow,slots:[],message:'فقط برای فردا امکان ثبت درخواست وجود دارد.'};
   expireStaleRequests_();
-  const day = tehranTomorrowWeekday_();
-  const schedule = scheduleForDay_(day);
-  const closures = readClosureSet_();
-  const booked = activeSlotSet_();
-  const slots = schedule.map(time => {
-    const key = tomorrow + '|' + time;
-    const closed = closures.dates.has(tomorrow) || closures.slots.has(key);
-    const taken = booked.has(key);
-    return {date:tomorrow,time,period:(time < '15:00' ? 'صبح' : 'عصر'),status:closed?'BLOCKED':taken?'BOOKED':'AVAILABLE',
+  const day=tehranTomorrowWeekday_();
+  const ids=Array.isArray(serviceIds)?[...new Set(serviceIds.map(String))]:[];
+  let schedule=scheduleForDay_(day),duration=30,serviceMode='energy';
+  if(ids.length) {
+    const catalog=getPublicConfig_().services;
+    const selected=ids.map(id=>catalog.find(s=>s.id===id));
+    if(selected.some(s=>!s)) return {ok:true,date:tomorrow,slots:[],message:'یکی از خدمات انتخاب‌شده معتبر نیست.'};
+    const isTherapy=s=>/درمان|therapy|psychotherap|روان.?درمان|شمع.?درمان/i.test((s.category||'')+' '+(s.name||''));
+    const therapy=selected.some(isTherapy),energy=selected.some(s=>!isTherapy(s));
+    if(therapy&&energy) return {ok:true,date:tomorrow,slots:[],message:'خدمات درمانی و انرژی در یک نوبت قابل ترکیب نیستند.'};
+    serviceMode=therapy?'therapy':'energy';
+    duration=selected.reduce((sum,s)=>sum+Math.max(1,num_(s.duration)||30),0);
+    if(therapy) schedule=day===4?therapySlots_():[];
+  }
+  const closures=readClosureSet_();
+  const slots=schedule.map(time=>{
+    const key=tomorrow+'|'+time;
+    const closed=closures.dates.has(tomorrow)||closures.slots.has(key);
+    const taken=slotHasConflict_(tomorrow,time,duration,'');
+    return {date:tomorrow,time,period:(time<'15:00'?'صبح':'عصر'),status:closed?'BLOCKED':taken?'BOOKED':'AVAILABLE',
       label:closed?'تعطیل':taken?'رزرو شده':time,
-      message:closed?'این زمان در این تاریخ قابل رزرو نیست.':taken?'این زمان قبلاً رزرو شده؛ زمان دیگری انتخاب کن.':''};
+      message:closed?'این زمان در این تاریخ قابل رزرو نیست.':taken?'این زمان با نوبت دیگری تداخل دارد؛ زمان دیگری انتخاب کن.':''};
   });
-  return {ok:true,date:tomorrow,slots};
+  return {ok:true,date:tomorrow,slots,serviceMode,durationMinutes:duration};
 }
 
 function createRequest_(b) {
@@ -453,6 +464,33 @@ function isSlotAvailableFor_(date,time,serviceIds,excludeRequestId) {
     if(normalizeDate_(x.obj['Appointment Date'])===date&&normalizeTime_(x.obj['Appointment Time'])===time) return true;
     return status===CORE.STATUS.RESCHEDULE_REQUESTED&&normalizeDate_(x.obj['Requested Reschedule Date'])===date&&normalizeTime_(x.obj['Requested Reschedule Time'])===time;
   });
+}
+function slotHasConflict_(date,time,duration,excludeRequestId) {
+  const start=minutes_(time);
+  if(start<0)return true;
+  const end=start+Math.max(1,Number(duration)||30);
+  const active=[CORE.STATUS.REQUEST_PENDING,CORE.STATUS.PAYMENT_PENDING,CORE.STATUS.RECEIPT_REVIEW,CORE.STATUS.CONFIRMED,CORE.STATUS.CANCEL_REQUESTED,CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.MANAGER_RESCHEDULE_OFFERED];
+  const rows=objectsWithRows_(tab_(CORE.TABS.BOOKINGS)).filter(x=>active.includes(String(x.obj.Status||''))&&String(x.obj['Request ID']||'')!==String(excludeRequestId||''));
+  if(!rows.length)return false;
+  const catalog=getPublicConfig_().services;
+  const durationFor=row=>{
+    const ids=String(row['Service IDs']||'').split(',').filter(Boolean);
+    const services=ids.map(id=>catalog.find(s=>s.id===id)).filter(Boolean);
+    return services.length?services.reduce((sum,s)=>sum+Math.max(1,num_(s.duration)||30),0):30;
+  };
+  return rows.some(x=>{
+    const candidates=[];
+    if(normalizeDate_(x.obj['Appointment Date'])===date)candidates.push(x.obj['Appointment Time']);
+    if(String(x.obj.Status)===CORE.STATUS.RESCHEDULE_REQUESTED&&normalizeDate_(x.obj['Requested Reschedule Date'])===date)candidates.push(x.obj['Requested Reschedule Time']);
+    return candidates.some(existingTime=>{
+      const existingStart=minutes_(existingTime);
+      return existingStart>=0&&start<existingStart+durationFor(x.obj)&&existingStart<end;
+    });
+  });
+}
+function minutes_(value) {
+  const t=normalizeTime_(value).match(/^(\\d{2}):(\\d{2})$/);
+  return t?Number(t[1])*60+Number(t[2]):-1;
 }
 function activeSlotSet_() {
   const set=new Set();

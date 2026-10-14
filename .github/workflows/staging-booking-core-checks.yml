@@ -1,0 +1,45 @@
+name: Staging Booking Core Static Checks
+on:
+  pull_request:
+    branches:
+      - staging/booking-core-rebuild
+    paths:
+      - 'Code.gs'
+      - 'StagingSchemaAudit.gs'
+      - '.github/workflows/staging-booking-core-checks.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          node --check < Code.gs
+          node --check < StagingSchemaAudit.gs
+      - name: Guard against hardcoded live spreadsheet IDs
+        shell: bash
+        run: |
+          if grep -nE '1cf6SFL80xJ8YrBPlr_Fp9TYhkKGkhu2U45D2WTSyNz0|1TpljGwyRpHcxyyR6Zm1mbT2CPJBvFeHCvD3QH34BuGs' Code.gs StagingSchemaAudit.gs; then
+            echo 'Unexpected hardcoded live spreadsheet ID found.'
+            exit 1
+          fi
+      - name: Verify required safety guards are present
+        shell: bash
+        run: |
+          grep -q 'DISCOUNT_IDENTITY_UNVERIFIED' Code.gs
+          grep -q 'DISCOUNT_FINALIZATION_UNAVAILABLE' Code.gs
+          grep -q 'function slotHasConflict_' Code.gs
+          grep -q 'function intervalsOverlap_' Code.gs
+          grep -q 'function auditBookingStagingSchemaReadOnly' StagingSchemaAudit.gs
+      - name: Confirm no live deployment step exists in this workflow
+        shell: bash
+        run: |
+          if grep -nEi 'clasp push|clasp deploy|gh workflow run.*deploy|publish|production deploy' .github/workflows/staging-booking-core-checks.yml; then
+            echo 'Deployment command must not exist in this staging-only workflow.'
+            exit 1
+          fi

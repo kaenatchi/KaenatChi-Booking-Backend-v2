@@ -7,6 +7,7 @@ const CORE = Object.freeze({
   TZ: 'Asia/Tehran',
   // IDs are injected only through this STAGING script's private properties.
   // Never hardcode live CMS/VIP spreadsheet IDs into source.
+  CMS_API_URL_PROP: 'CMS_API_URL',
   CMS_ID_PROP: 'CMS_SPREADSHEET_ID',
   VIP_ID_PROP: 'VIP_SPREADSHEET_ID',
   STAGING_PROP: 'STAGING_SPREADSHEET_ID',
@@ -97,16 +98,28 @@ function initializeStagingSchema() {
 }
 
 function getPublicConfig_() {
-  const cms = cms_();
-  const services = readObjects_(cms, ['Services','services']).filter(r => active_(first_(r,['Active','Is Active','فعال','Status','وضعیت'])));
-  const mapped = services.map(r => ({
-    id:String(first_(r,['Service ID','ServiceId','ID','Id','id','شناسه خدمت']) || ''),
-    name:String(first_(r,['نام خدمت','Service Name','Name','Title','عنوان']) || ''),
-    category:String(first_(r,['دسته','Category','Service Category']) || ''),
-    description:String(first_(r,['توضیح کوتاه','Description','Short Description','توضیحات']) || ''),
-    price:num_(first_(r,['قیمت','Price','Base Price','Original Price','مبلغ'])),
-    duration:num_(first_(r,['مدت','Duration','مدت زمان'])) || 30
-  })).filter(s => s.id && s.name && s.price >= 0);
+  // Read the published CMS data API. The booking core never writes to CMS.
+  const api=prop_(CORE.CMS_API_URL_PROP);
+  if(!api) fail_('CMS_UNAVAILABLE','نشانی API کائنات‌چی در تنظیمات خصوصی Staging پیکربندی نشده است.');
+  let response;
+  try {
+    response=UrlFetchApp.fetch(api+(api.indexOf('?')>=0?'&':'?')+'action=getMiniAppData',{muteHttpExceptions:true,followRedirects:true});
+  } catch(err) {
+    fail_('CMS_UNAVAILABLE','ارتباط با API کائنات‌چی برقرار نشد.');
+  }
+  if(response.getResponseCode()<200||response.getResponseCode()>=300) fail_('CMS_UNAVAILABLE','API کائنات‌چی پاسخ معتبر نداد.');
+  let payload;
+  try { payload=JSON.parse(response.getContentText()); } catch(err) { fail_('CMS_UNAVAILABLE','پاسخ API کائنات‌چی JSON معتبر نیست.'); }
+  if(!payload||payload.success!==true||!Array.isArray(payload.services)) fail_('CMS_CONTRACT_MISMATCH','ساختار دادهٔ خدمات CMS با قرارداد Staging هماهنگ نیست.');
+  const mapped=payload.services.map(r=>({
+    id:String(first_(r,['شناسه','شناسه خدمت','Service ID','ServiceId','ID','Id','id','slug'])||''),
+    name:String(first_(r,['نام خدمت','عنوان','نام','Service Name','Name','Title','title'])||''),
+    category:String(first_(r,['دسته','دسته‌بندی','Category','Service Category','category'])||''),
+    description:String(first_(r,['توضیح کوتاه','Description','Short Description','توضیحات','description'])||''),
+    price:num_(first_(r,['قیمت','هزینه','Price','Base Price','Original Price','مبلغ','price'])),
+    duration:num_(first_(r,['مدت','مدت زمان','Duration','duration']))||30
+  })).filter(s=>s.id&&s.name&&s.price>=0);
+  if(!mapped.length) fail_('CMS_SERVICES_EMPTY','API کائنات‌چی هیچ خدمت قابل رزروی برنگرداند.');
   return {ok:true,services:mapped,availableDates:[tomorrowJalali_()],bookingRules:{requestReviewHours:12,paymentMinutes:30,timezone:CORE.TZ}};
 }
 

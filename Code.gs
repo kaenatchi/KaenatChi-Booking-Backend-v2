@@ -456,14 +456,8 @@ function isSlotAvailableFor_(date,time,serviceIds,excludeRequestId) {
   const closures=readClosureSet_();
   if(closures.dates.has(date)||closures.slots.has(date+'|'+time)) return false;
   expireStaleRequests_();
-  return !objectsWithRows_(tab_(CORE.TABS.BOOKINGS)).some(x=>{
-    if(String(x.obj['Request ID']||'')===String(excludeRequestId||'')) return false;
-    const status=String(x.obj.Status||'');
-    const active=[CORE.STATUS.REQUEST_PENDING,CORE.STATUS.PAYMENT_PENDING,CORE.STATUS.RECEIPT_REVIEW,CORE.STATUS.CONFIRMED,CORE.STATUS.CANCEL_REQUESTED,CORE.STATUS.RESCHEDULE_REQUESTED,CORE.STATUS.MANAGER_RESCHEDULE_OFFERED].includes(status);
-    if(!active) return false;
-    if(normalizeDate_(x.obj['Appointment Date'])===date&&normalizeTime_(x.obj['Appointment Time'])===time) return true;
-    return status===CORE.STATUS.RESCHEDULE_REQUESTED&&normalizeDate_(x.obj['Requested Reschedule Date'])===date&&normalizeTime_(x.obj['Requested Reschedule Time'])===time;
-  });
+  const duration=selected.length?selected.reduce((sum,s)=>sum+Math.max(1,num_(s.duration)||30),0):30;
+  return !slotHasConflict_(date,time,duration,excludeRequestId);
 }
 function slotHasConflict_(date,time,duration,excludeRequestId) {
   const start=minutes_(time);

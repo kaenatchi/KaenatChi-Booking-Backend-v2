@@ -147,10 +147,12 @@ function getSlots_(date, serviceIds) {
   const slots=schedule.map(time=>{
     const key=tomorrow+'|'+time;
     const closed=closures.dates.has(tomorrow)||closures.slots.has(key);
-    const taken=slotHasConflict_(tomorrow,time,duration,'');
-    return {date:tomorrow,time,period:(time<'15:00'?'صبح':'عصر'),status:closed?'BLOCKED':taken?'BOOKED':'AVAILABLE',
-      label:closed?'تعطیل':taken?'رزرو شده':time,
-      message:closed?'این زمان در این تاریخ قابل رزرو نیست.':taken?'این زمان با نوبت دیگری تداخل دارد؛ زمان دیگری انتخاب کن.':''};
+    const withinHours=slotWithinServiceWindow_(day,time,duration);
+    const taken=!withinHours||slotHasConflict_(tomorrow,time,duration,'');
+    const status=closed?'BLOCKED':!withinHours?'BLOCKED':taken?'BOOKED':'AVAILABLE';
+    return {date:tomorrow,time,period:(time<'15:00'?'صبح':'عصر'),status,
+      label:closed?'تعطیل':!withinHours?'مدت خدمت خارج از ساعت کاری':taken?'رزرو شده':time,
+      message:closed?'این زمان در این تاریخ قابل رزرو نیست.':!withinHours?'مدت مجموع خدمات از ساعت کاری این بازه فراتر می‌رود.':taken?'این زمان با نوبت دیگری تداخل دارد؛ زمان دیگری انتخاب کن.':''};
   });
   return {ok:true,date:tomorrow,slots,serviceMode,durationMinutes:duration};
 }
@@ -412,6 +414,13 @@ function runBookingCoreSelfTests() {
   test('Saturday energy slots',JSON.stringify(scheduleForDay_(6))===JSON.stringify(['11:00','12:00','13:00','16:00','17:00','18:00']));
   test('Sunday energy slots',JSON.stringify(scheduleForDay_(0))===JSON.stringify(['11:30','12:30','13:30','16:30','17:30','18:30']));
   test('Friday closed',scheduleForDay_(5).length===0);
+  test('Regular-day last morning slot fits 30 minutes',slotWithinServiceWindow_(6,'13:00',30));
+  test('Regular-day last morning slot rejects 60 minutes',!slotWithinServiceWindow_(6,'13:00',60));
+  test('Half-hour-day last morning slot fits 30 minutes',slotWithinServiceWindow_(0,'13:30',30));
+  test('Half-hour-day last evening slot fits 30 minutes',slotWithinServiceWindow_(2,'18:30',30));
+  test('Service crossing session break rejected',!slotWithinServiceWindow_(6,'13:00',60));
+  test('Thursday therapy final slot fits 30 minutes',slotWithinServiceWindow_(4,'18:00',30));
+  test('Thursday therapy cannot exceed closing time',!slotWithinServiceWindow_(4,'18:00',45));
   test('Thursday therapy slots',therapySlots_().includes('13:30')&&therapySlots_().includes('18:30')&&!therapySlots_().includes('14:00'));
   test('Strict ASCII phone accepted',/^09[0-9]{9}$/.test('09371234567'));
   test('Persian digits rejected in phone',!/^09[0-9]{9}$/.test('۰۹۳۷۱۲۳۴۵۶۷'));
@@ -428,6 +437,19 @@ function runBookingCoreSelfTests() {
   test('Overlap allows separated appointments',intervalsOverlap_(600,630,645,675)===false);
   test('Closure date rejects malformed value',closureDate_('not-a-date')==='');
   return {ok:checks.every(x=>x.ok),executed:true,noSpreadsheetWrites:true,noTelegramCalls:true,checks};
+}
+function slotWithinServiceWindow_(day,time,duration) {
+  const start=minutes_(time);
+  if(start<0||!Number.isFinite(Number(duration))||Number(duration)<=0)return false;
+  const end=start+Number(duration);
+  // Sunday and Tuesday use half-hour start times and their final listed starts
+  // (13:30 and 18:30) require the corresponding 14:00 / 19:00 session end.
+  const halfHourDay=day===0||day===2;
+  const morningEnd=halfHourDay?14*60:13*60+30;
+  const eveningEnd=halfHourDay?19*60:18*60+30;
+  const inMorning=start>=11*60&&end<=morningEnd;
+  const inEvening=start>=16*60&&end<=eveningEnd;
+  return inMorning||inEvening;
 }
 function scheduleForDay_(day) {
   // JS weekday: 0 Sun, 1 Mon, ... 6 Sat

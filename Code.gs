@@ -249,6 +249,12 @@ function adminDecision_(b) {
     }
     if (decision === 'approvePayment') {
       if (row.Status !== CORE.STATUS.RECEIPT_REVIEW) fail_('INVALID_STATE','این فیش در انتظار بررسی نیست.');
+      // Never confirm a discounted booking until VIP token consumption is
+      // implemented atomically with payment approval. Otherwise a token could
+      // remain reusable after the booking is confirmed.
+      if (String(row['Discount Code']||'').trim()) {
+        fail_('DISCOUNT_FINALIZATION_UNAVAILABLE','تأیید نهایی این پرداخت تا تکمیل مصرف امن توکن VIP متوقف است؛ نوبت همچنان برای بررسی مدیر نگه داشته می‌شود.');
+      }
       row['Appointment Code'] = 'KC-' + Utilities.getUuid().replace(/-/g,'').slice(0,10).toUpperCase();
       row['Decision At']=new Date();row['Decision By']=actor;row['Updated At']=new Date();
       transition_(ref,CORE.STATUS.CONFIRMED,actor,'BANK_DEPOSIT_VERIFIED');

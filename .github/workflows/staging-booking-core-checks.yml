@@ -21,6 +21,10 @@ jobs:
         run: |
           node --check < Code.gs
           node --check < StagingSchemaAudit.gs
+      - name: Run pure booking core self-tests without Apps Script services
+        shell: bash
+        run: |
+          node -e "const fs=require('fs'); const vm=require('vm'); const context={console}; vm.createContext(context); const source=fs.readFileSync('Code.gs','utf8') + '\\nconst result=runBookingCoreSelfTests(); console.log(JSON.stringify(result,null,2)); if (!result.ok) throw new Error('Booking core self-tests failed');'; vm.runInContext(source,context,{timeout:5000});"
       - name: Guard against hardcoded live spreadsheet IDs
         shell: bash
         run: |

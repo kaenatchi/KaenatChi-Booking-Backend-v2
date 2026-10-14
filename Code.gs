@@ -777,3 +777,55 @@ function auditStagingSchema() {
   report.ok = report.blockers.length === 0;
   return report;
 }
+
+
+/**
+ * Explicit, isolated STAGING schema initializer.
+ * It never alters existing legacy tabs. It validates all existing target tabs
+ * before creating any missing Core* tabs, then writes headers only to newly
+ * created tabs. Do not run until auditStagingSchema() has been reviewed.
+ */
+function initializeIsolatedStagingSchema() {
+  const ss = staging_();
+  const expected = {
+    CoreBookings: CORE.HEADERS.CoreBookings,
+    CorePayments: CORE.HEADERS.CorePayments,
+    CoreBookingLogs: CORE.HEADERS.CoreBookingLogs,
+    Closures: ['closure_id','start_datetime','end_datetime','reason','source','active','created_at','updated_at']
+  };
+  const plan = [];
+  const blockers = [];
+  Object.keys(expected).forEach(name => {
+    const sh = ss.getSheetByName(name);
+    if (!sh) {
+      plan.push({name, action:'create'});
+      return;
+    }
+    const headers = sh.getLastRow()
+      ? sh.getRange(1,1,1,Math.max(1,sh.getLastColumn())).getDisplayValues()[0].map(v => String(v||'').trim()).filter(Boolean)
+      : [];
+    if (!headers.length) {
+      plan.push({name, action:'initialize-empty-existing'});
+      return;
+    }
+    const missing = expected[name].filter(h => headers.indexOf(h) < 0);
+    if (missing.length) blockers.push({name, missing});
+    else plan.push({name, action:'keep-compatible-existing'});
+  });
+  if (blockers.length) {
+    return {ok:false, changed:false, error:'SCHEMA_MISMATCH', blockers,
+      message:'هیچ تغییری انجام نشد؛ ابتدا ناسازگاری شیت‌های Core موجود را بررسی کن.'};
+  }
+  // All target schemas were checked before the first write.
+  plan.filter(x => x.action==='create').forEach(x => {
+    const sh = ss.insertSheet(x.name);
+    sh.getRange(1,1,1,expected[x.name].length).setValues([expected[x.name]]);
+  });
+  plan.filter(x => x.action==='initialize-empty-existing').forEach(x => {
+    const sh = ss.getSheetByName(x.name);
+    sh.getRange(1,1,1,expected[x.name].length).setValues([expected[x.name]]);
+  });
+  return {ok:true, changed:plan.some(x=>x.action==='create'||x.action==='initialize-empty-existing'),
+    spreadsheet:ss.getName(), plan, legacyTabsPreserved:true,
+    message:'فقط شیت‌های Core خالی یا تازه ایجاد شدند؛ شیت‌های قدیمی دست‌نخورده ماندند.'};
+}

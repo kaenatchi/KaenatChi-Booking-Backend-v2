@@ -3448,15 +3448,15 @@ function getServices_(request) {
     if(!getSpreadsheet_().getSheetByName(names[i])) continue;
     var rows=getSheetObjects_(names[i]);
     var services=rows.filter(function(r){
-      var a=firstField_(r,['Active','Is Active','فعال','وضعیت','Status']);
+      var a=firstField_(r,['Active','active','Is Active','فعال','وضعیت','Status']);
       return a===''||isTruthy_(a);
     }).map(function(r){
       return {
-        id:String(firstField_(r,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||''),
-        name:String(firstField_(r,['نام خدمت','Service Name','Name','Title','عنوان'])||''),
+        id:String(firstField_(r,['Service ID','ServiceId','serviceId','service_id','ID','Id','id','شناسه خدمت'])||''),
+        name:String(firstField_(r,['نام خدمت','Service Name','service_name','Name','name','Title','title','عنوان'])||''),
         category:String(firstField_(r,['دسته','Category','Service Category'])||''),
-        description:String(firstField_(r,['توضیح کوتاه','Description','Short Description','توضیحات'])||''),
-        price:toNumber_(firstField_(r,['قیمت','Price','Base Price','Original Price','مبلغ'])),
+        description:String(firstField_(r,['توضیح کوتاه','Description','description','Short Description','توضیحات'])||''),
+        price:toNumber_(firstField_(r,['قیمت','Price','price','Base Price','base_price','service_price','Original Price','مبلغ'])),
         duration:toNumber_(firstField_(r,['مدت','Duration','مدت زمان']))
       };
     }).filter(function(s){return s.name;});
@@ -3784,22 +3784,22 @@ function findServiceRecord_(serviceId,serviceName){
 
     if(requestedId){
       found=rows.find(function(r){
-        var id=String(firstField_(r,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||'').trim();
+        var id=String(firstField_(r,['Service ID','ServiceId','serviceId','service_id','ID','Id','id','شناسه خدمت'])||'').trim();
         return id===requestedId;
       });
     }
 
     if(!found && requestedName){
       found=rows.find(function(r){
-        var name=String(firstField_(r,['نام خدمت','Service Name','Name','Title','عنوان'])||'').trim();
+        var name=String(firstField_(r,['نام خدمت','Service Name','service_name','Name','name','Title','title','عنوان'])||'').trim();
         return name===requestedName;
       });
     }
 
     if(found)return {
-      id:String(firstField_(found,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||requestedId||''),
-      name:String(firstField_(found,['نام خدمت','Service Name','Name','Title','عنوان'])||requestedName||''),
-      price:toNumber_(firstField_(found,['قیمت','Price','Base Price','Original Price','مبلغ']))
+      id:String(firstField_(found,['Service ID','ServiceId','serviceId','service_id','ID','Id','id','شناسه خدمت'])||requestedId||''),
+      name:String(firstField_(found,['نام خدمت','Service Name','service_name','Name','name','Title','title','عنوان'])||requestedName||''),
+      price:toNumber_(firstField_(found,['قیمت','Price','price','Base Price','base_price','service_price','Original Price','مبلغ']))
     };
   }
   return null;
@@ -4710,15 +4710,15 @@ function testPaymentFlowSubmitOnly() {
     var services = getSheetObjects_('Services');
     var service = services.find(function(row) {
       var active = row['فعال'] === undefined ? true : isTruthy_(row['فعال']);
-      var name = String(firstField_(row,['نام خدمت','Service Name','Name','Title','عنوان'])||'').trim();
-      var price = toNumber_(firstField_(row,['قیمت','Price','Base Price','Original Price','مبلغ']));
+      var name = String(firstField_(row,['نام خدمت','Service Name','service_name','Name','name','Title','title','عنوان'])||'').trim();
+      var price = toNumber_(firstField_(row,['قیمت','Price','price','Base Price','base_price','service_price','Original Price','مبلغ']));
       return active && name && price > 0;
     });
     if(!service) throw new Error('هیچ خدمت فعال و دارای قیمت برای تست پیدا نشد.');
     result.serviceFound = true;
 
-    var serviceName = String(firstField_(service,['نام خدمت','Service Name','Name','Title','عنوان'])||'').trim();
-    var serviceId = String(firstField_(service,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||'').trim();
+    var serviceName = String(firstField_(service,['نام خدمت','Service Name','service_name','Name','name','Title','title','عنوان'])||'').trim();
+    var serviceId = String(firstField_(service,['Service ID','ServiceId','serviceId','service_id','ID','Id','id','شناسه خدمت'])||'').trim();
 
     var dates = getAvailableDates_({});
     if(!dates.ok || !dates.dates || !dates.dates.length) throw new Error('هیچ تاریخ شمسی قابل رزروی برای تست پیدا نشد.');
@@ -4814,8 +4814,8 @@ function testPaymentFlowRejectWithoutProof() {
     var services=getSheetObjects_('Services');
     var service=services.find(function(row){
       var active=row['فعال']===undefined?true:isTruthy_(row['فعال']);
-      var name=String(firstField_(row,['نام خدمت','Service Name','Name','Title','عنوان'])||'').trim();
-      var price=toNumber_(firstField_(row,['قیمت','Price','Base Price','Original Price','مبلغ']));
+      var name=String(firstField_(row,['نام خدمت','Service Name','service_name','Name','name','Title','title','عنوان'])||'').trim();
+      var price=toNumber_(firstField_(row,['قیمت','Price','price','Base Price','base_price','service_price','Original Price','مبلغ']));
       return active&&name&&price>0;
     });
     if(!service)throw new Error('هیچ خدمت فعال و دارای قیمت برای تست پیدا نشد.');
@@ -4831,8 +4831,8 @@ function testPaymentFlowRejectWithoutProof() {
     var create=createBooking_({
       requestId:'PAYNO-'+unique,telegramId:'PAYNO-TG-'+unique,customerId:'PAYNO-CUS-'+unique,
       firstName:'PAYMENT',lastName:'NO-PROOF',mobile:'PAYNO-'+unique,
-      serviceId:String(firstField_(service,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||''),
-      serviceName:String(firstField_(service,['نام خدمت','Service Name','Name','Title','عنوان'])||''),
+      serviceId:String(firstField_(service,['Service ID','ServiceId','serviceId','service_id','ID','Id','id','شناسه خدمت'])||''),
+      serviceName:String(firstField_(service,['نام خدمت','Service Name','service_name','Name','name','Title','title','عنوان'])||''),
       appointmentDate:date,appointmentTime:normalizeTime_(free.time),discountCode:''
     });
     if(!create.ok)throw new Error('Create failed: '+JSON.stringify(create));
@@ -4887,8 +4887,8 @@ function testPaymentApprovalFlow() {
     var services=getSheetObjects_('Services');
     var service=services.find(function(row){
       var active=row['فعال']===undefined?true:isTruthy_(row['فعال']);
-      var name=String(firstField_(row,['نام خدمت','Service Name','Name','Title','عنوان'])||'').trim();
-      var price=toNumber_(firstField_(row,['قیمت','Price','Base Price','Original Price','مبلغ']));
+      var name=String(firstField_(row,['نام خدمت','Service Name','service_name','Name','name','Title','title','عنوان'])||'').trim();
+      var price=toNumber_(firstField_(row,['قیمت','Price','price','Base Price','base_price','service_price','Original Price','مبلغ']));
       return active&&name&&price>0;
     });
     if(!service)throw new Error('هیچ خدمت فعال و دارای قیمت برای تست پیدا نشد.');
@@ -4908,8 +4908,8 @@ function testPaymentApprovalFlow() {
     result.slotFound=true;
 
     var unique=String(new Date().getTime());
-    var serviceId=String(firstField_(service,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||'');
-    var serviceName=String(firstField_(service,['نام خدمت','Service Name','Name','Title','عنوان'])||'');
+    var serviceId=String(firstField_(service,['Service ID','ServiceId','serviceId','service_id','ID','Id','id','شناسه خدمت'])||'');
+    var serviceName=String(firstField_(service,['نام خدمت','Service Name','service_name','Name','name','Title','title','عنوان'])||'');
     var create=createBooking_({
       requestId:'PAYAPP-'+unique,
       telegramId:'PAYAPP-TG-'+unique,
@@ -5018,8 +5018,8 @@ function testPaymentFlowDuplicate() {
     var services=getSheetObjects_('Services');
     var service=services.find(function(row){
       var active=row['فعال']===undefined?true:isTruthy_(row['فعال']);
-      var name=String(firstField_(row,['نام خدمت','Service Name','Name','Title','عنوان'])||'').trim();
-      var price=toNumber_(firstField_(row,['قیمت','Price','Base Price','Original Price','مبلغ']));
+      var name=String(firstField_(row,['نام خدمت','Service Name','service_name','Name','name','Title','title','عنوان'])||'').trim();
+      var price=toNumber_(firstField_(row,['قیمت','Price','price','Base Price','base_price','service_price','Original Price','مبلغ']));
       return active&&name&&price>0;
     });
     if(!service)throw new Error('هیچ خدمت فعال و دارای قیمت برای تست پیدا نشد.');
@@ -5039,8 +5039,8 @@ function testPaymentFlowDuplicate() {
     result.slotFound=true;
 
     var unique=String(new Date().getTime());
-    var serviceId=String(firstField_(service,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||'');
-    var serviceName=String(firstField_(service,['نام خدمت','Service Name','Name','Title','عنوان'])||'');
+    var serviceId=String(firstField_(service,['Service ID','ServiceId','serviceId','service_id','ID','Id','id','شناسه خدمت'])||'');
+    var serviceName=String(firstField_(service,['نام خدمت','Service Name','service_name','Name','name','Title','title','عنوان'])||'');
     var create=createBooking_({
       requestId:'PAYDUP-'+unique,
       telegramId:'PAYDUP-TG-'+unique,
@@ -5139,8 +5139,8 @@ function testApprovalBlockedBeforePayment() {
     var services=getSheetObjects_('Services');
     var service=services.find(function(row){
       var active=row['فعال']===undefined?true:isTruthy_(row['فعال']);
-      var name=String(firstField_(row,['نام خدمت','Service Name','Name','Title','عنوان'])||'').trim();
-      var price=toNumber_(firstField_(row,['قیمت','Price','Base Price','Original Price','مبلغ']));
+      var name=String(firstField_(row,['نام خدمت','Service Name','service_name','Name','name','Title','title','عنوان'])||'').trim();
+      var price=toNumber_(firstField_(row,['قیمت','Price','price','Base Price','base_price','service_price','Original Price','مبلغ']));
       return active&&name&&price>0;
     });
     if(!service)throw new Error('هیچ خدمت فعال و دارای قیمت برای تست پیدا نشد.');
@@ -5156,8 +5156,8 @@ function testApprovalBlockedBeforePayment() {
     var create=createBooking_({
       requestId:'PAYBLOCK-'+unique,telegramId:'PAYBLOCK-TG-'+unique,customerId:'PAYBLOCK-CUS-'+unique,
       firstName:'PAYMENT',lastName:'BLOCK',mobile:'PAYBLOCK-'+unique,
-      serviceId:String(firstField_(service,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||''),
-      serviceName:String(firstField_(service,['نام خدمت','Service Name','Name','Title','عنوان'])||''),
+      serviceId:String(firstField_(service,['Service ID','ServiceId','serviceId','service_id','ID','Id','id','شناسه خدمت'])||''),
+      serviceName:String(firstField_(service,['نام خدمت','Service Name','service_name','Name','name','Title','title','عنوان'])||''),
       appointmentDate:date,appointmentTime:normalizeTime_(free.time),discountCode:''
     });
     if(!create||!create.ok)throw new Error('Create failed: '+JSON.stringify(create));

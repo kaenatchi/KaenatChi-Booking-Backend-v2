@@ -3575,20 +3575,48 @@ function validateDiscount_(request){
   };
 }
 
+function logBookingFailureDiagnostic_(request, stage, code, message) {
+  try {
+    var req = request || {};
+    var date = String(req.date || req.appointmentDate || '').trim();
+    var time = String(req.time || req.appointmentTime || '').trim();
+    var requestId = String(req.requestId || req.clientRequestId || req.clientTrackingCode || '').trim();
+    var serviceId = String(req.serviceId || '').trim();
+    var serviceName = String(req.serviceName || req.service || '').trim();
+    appendBookingLog_({
+      action: 'BOOKING_REJECTED',
+      bookingId: '',
+      slotKey: date && time ? buildSlotKey_(date, time) : '',
+      details: [
+        'stage=' + stage,
+        'error=' + code,
+        'message=' + String(message || '').slice(0, 180),
+        'requestId=' + requestId,
+        'serviceId=' + serviceId,
+        'serviceName=' + serviceName.slice(0, 100),
+        'date=' + date,
+        'time=' + time
+      ].join(' | ')
+    });
+  } catch (diagnosticError) {
+    console.error('BOOKING_FAILURE_DIAGNOSTIC_LOG_FAILED', diagnosticError);
+  }
+}
+
 function createBooking_(request){
   return withBookingLock_(function(){
     var date=normalizeJalaliDate_(request.date||request.appointmentDate);
     var time=normalizeTime_(request.time||request.appointmentTime);
-    if(!date||!time)return fail_('DATE_TIME_REQUIRED','تاریخ و ساعت الزامی است.');
-    if(!isDateAvailable_(date))return fail_('DATE_NOT_AVAILABLE','این تاریخ قابل رزرو نیست.');
+    if(!date||!time){var m='تاریخ و ساعت الزامی است.';logBookingFailureDiagnostic_(request,'date_time','DATE_TIME_REQUIRED',m);return fail_('DATE_TIME_REQUIRED',m);}
+    if(!isDateAvailable_(date)){var m='این تاریخ قابل رزرو نیست.';logBookingFailureDiagnostic_(request,'date_available','DATE_NOT_AVAILABLE',m);return fail_('DATE_NOT_AVAILABLE',m);}
     var schedule=getScheduleForDate_(date);
     var allowed=schedule.ranges.some(function(r){return generateSlots_(r.startTime,r.endTime,r.slotDuration).indexOf(time)!==-1;});
-    if(!allowed)return fail_('SLOT_NOT_AVAILABLE','این ساعت در برنامه کاری قرار ندارد.');
+    if(!allowed){var m='این ساعت در برنامه کاری قرار ندارد.';logBookingFailureDiagnostic_(request,'slot_schedule','SLOT_NOT_AVAILABLE',m);return fail_('SLOT_NOT_AVAILABLE',m);}
     var slotKey=buildSlotKey_(date,time);
-    if(getSlotStatus_(slotKey,date,time)!==CONFIG.SLOT_STATUS.FREE)return fail_('SLOT_UNAVAILABLE','این زمان قبلاً رزرو یا موقتاً نگه داشته شده است.');
+    if(getSlotStatus_(slotKey,date,time)!==CONFIG.SLOT_STATUS.FREE){var m='این زمان قبلاً رزرو یا موقتاً نگه داشته شده است.';logBookingFailureDiagnostic_(request,'slot_status','SLOT_UNAVAILABLE',m);return fail_('SLOT_UNAVAILABLE',m);}
 
     var service=findServiceRecord_(String(request.serviceId||''),String(request.serviceName||request.service||''));
-    if(!service)return fail_('SERVICE_NOT_FOUND','خدمت انتخاب‌شده پیدا نشد.');
+    if(!service){var m='خدمت انتخاب‌شده پیدا نشد.';logBookingFailureDiagnostic_(request,'service_lookup','SERVICE_NOT_FOUND',m);return fail_('SERVICE_NOT_FOUND',m);}
     var basePrice=toNumber_(service.price);
     var discountCode=String(request.discountCode||request.vipCode||'').trim();
     var discount=validateDiscount_({

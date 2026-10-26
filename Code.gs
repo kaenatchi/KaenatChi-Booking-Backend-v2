@@ -1931,108 +1931,37 @@ function getBlockedSlots_() {
    ===================================================== */
 
 function getAvailableDates_(request) {
-
-  const settings = getBookingSettings_();
-
-  const minAdvance =
-    Number(settings.settings['Minimum Advance'] || 0);
-
-  const maxAdvance =
-    Number(settings.settings['Maximum Advance'] || 30);
-
-  if (maxAdvance < minAdvance) {
-    return {
-      ok: false,
-      error: 'INVALID_ADVANCE_RANGE',
-      message: 'بازه مجاز رزرو صحیح نیست.'
-    };
-  }
-
   /*
-   * PERFORMANCE FIX:
-   * Read Schedule and BlockedDates once per request.
-   * Then evaluate all Jalali dates in memory.
-   *
-   * This preserves the existing availability rules while
-   * removing repeated Google Sheets reads from the date loop.
+   * Product rule: only tomorrow and the day after tomorrow are
+   * eligible. The server enforces this independently of UI settings.
    */
-  const scheduleRows =
-    getSheetObjects_(
-      CONFIG.SHEETS.SCHEDULE
-    );
-
-  const blockedDateRows =
-    getSheetObjects_(
-      CONFIG.SHEETS.BLOCKED_DATES
-    );
-
+  const scheduleRows = getSheetObjects_(CONFIG.SHEETS.SCHEDULE);
+  const blockedDateRows = getSheetObjects_(CONFIG.SHEETS.BLOCKED_DATES);
   const todayJalali = getTodayJalali_();
-
   const dates = [];
 
-  for (
-    let offset = minAdvance;
-    offset <= maxAdvance;
-    offset++
-  ) {
+  for (let offset = 1; offset <= 2; offset++) {
+    const jalali = addJalaliDays_(todayJalali, offset);
 
-    const jalali =
-      addJalaliDays_(
-        todayJalali,
-        offset
-      );
+    const blocked = blockedDateRows.some(function(row) {
+      return normalizeJalaliDate_(row.Date) === jalali && isTruthy_(row.Active);
+    });
+    if (blocked) continue;
 
-    const blocked =
-      blockedDateRows.some(function(row) {
-
-        return (
-          normalizeJalaliDate_(row.Date) === jalali &&
-          isTruthy_(row.Active)
-        );
-
-      });
-
-    if (blocked) {
-      continue;
-    }
-
-    const dayName =
-      getPersianDayNameFromJalali_(jalali);
-
-    const hasActiveSchedule =
-      scheduleRows.some(function(row) {
-
-        const scheduleDay =
-          String(row.Day || '').trim();
-
-        const baseDay =
-          scheduleDay
-            .replace(/\s+(صبح|عصر)$/u, '')
-            .trim();
-
-        return (
-          normalizePersianDayName_(baseDay) ===
-            normalizePersianDayName_(dayName) &&
-          isTruthy_(row.Active)
-        );
-
-      });
+    const dayName = getPersianDayNameFromJalali_(jalali);
+    const hasActiveSchedule = scheduleRows.some(function(row) {
+      const scheduleDay = String(row.Day || '').trim();
+      const baseDay = scheduleDay.replace(/\s+(صبح|عصر)$/u, '').trim();
+      return normalizePersianDayName_(baseDay) === normalizePersianDayName_(dayName) &&
+        isTruthy_(row.Active);
+    });
 
     if (hasActiveSchedule) {
-
-      dates.push({
-        date: jalali,
-        dayOfWeek: dayName,
-        available: true
-      });
-
+      dates.push({ date: jalali, dayOfWeek: dayName, available: true });
     }
   }
 
-  return {
-    ok: true,
-    dates: dates
-  };
+  return { ok: true, dates: dates };
 }
 
 
@@ -2048,6 +1977,16 @@ function getAvailableSlots_(request) {
       ok: false,
       error: 'DATE_REQUIRED',
       message: 'تاریخ الزامی است.'
+    };
+  }
+
+  if (!isWithinBookingWindow_(date)) {
+    return {
+      ok: false,
+      error: 'DATE_NOT_AVAILABLE',
+      message: 'فقط فردا و پس‌فردا امکان انتخاب تاریخ وجود دارد.',
+      date: date,
+      slots: []
     };
   }
 
@@ -2255,11 +2194,19 @@ function getScheduleForDate_(jalaliDate) {
    13. DATE AVAILABILITY
    ===================================================== */
 
+function isWithinBookingWindow_(jalaliDate) {
+  const date = normalizeJalaliDate_(jalaliDate);
+  if (!date) return false;
+
+  const today = getTodayJalali_();
+  return date === addJalaliDays_(today, 1) ||
+    date === addJalaliDays_(today, 2);
+}
+
 function isDateAvailable_(jalaliDate) {
+  if (!isWithinBookingWindow_(jalaliDate)) return false;
 
-  const schedule =
-    getScheduleForDate_(jalaliDate);
-
+  const schedule = getScheduleForDate_(jalaliDate);
   return schedule.active;
 }
 

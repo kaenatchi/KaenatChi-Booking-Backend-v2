@@ -3399,7 +3399,7 @@ function getServices_(request) {
       return a===''||isTruthy_(a);
     }).map(function(r){
       return {
-        id:String(firstField_(r,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||''),
+        id:String(firstField_(r,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||serviceIdFromName_(firstField_(r,['نام خدمت','Service Name','Name','Title','عنوان'])),
         name:String(firstField_(r,['نام خدمت','Service Name','Name','Title','عنوان'])||''),
         category:String(firstField_(r,['دسته','Category','Service Category'])||''),
         description:String(firstField_(r,['توضیح کوتاه','Description','Short Description','توضیحات'])||''),
@@ -3708,6 +3708,17 @@ function releaseExpiredHolds_(request){
   });
 }
 
+function serviceIdFromName_(name){
+  var value=String(name||'').trim().normalize('NFC');
+  if(!value)return '';
+  var hash=2166136261;
+  for(var i=0;i<value.length;i++){
+    hash^=value.charCodeAt(i);
+    hash=Math.imul(hash,16777619);
+  }
+  return 'svc-'+(hash>>>0).toString(36);
+}
+
 function findServiceRecord_(serviceId,serviceName){
   var names=['Services','services'];
   var requestedId=String(serviceId||'').trim();
@@ -3731,8 +3742,9 @@ function findServiceRecord_(serviceId,serviceName){
 
     if(requestedId){
       found=rows.find(function(r){
+        var name=firstField_(r,['نام خدمت','Service Name','Name','Title','عنوان']);
         var id=String(firstField_(r,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||'').trim();
-        return id===requestedId;
+        return id===requestedId || (!id && serviceIdFromName_(name)===requestedId);
       });
     }
 
@@ -3744,7 +3756,7 @@ function findServiceRecord_(serviceId,serviceName){
     }
 
     if(found)return {
-      id:String(firstField_(found,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||requestedId||''),
+      id:String(firstField_(found,['Service ID','ServiceId','ID','Id','id','شناسه خدمت'])||serviceIdFromName_(firstField_(found,['نام خدمت','Service Name','Name','Title','عنوان'])||requestedName)||requestedId||''),
       name:String(firstField_(found,['نام خدمت','Service Name','Name','Title','عنوان'])||requestedName||''),
       price:toNumber_(firstField_(found,['قیمت','Price','Base Price','Original Price','مبلغ']))
     };

@@ -5817,3 +5817,40 @@ function testAppointmentReminderDiagnostic() {
     return result;
   }
 }
+
+/*
+ * Expired booking-hold cleanup.
+ * Run setupExpiredHoldCleanupTrigger_() ONCE from the Apps Script editor.
+ * This creates one recurring 5-minute trigger; it does not run on each
+ * customer request and does not touch confirmed bookings or payment-proof holds.
+ */
+function setupExpiredHoldCleanupTrigger_() {
+  var functionName = 'runExpiredHoldCleanupTrigger_';
+  var existing = ScriptApp.getProjectTriggers().filter(function(trigger) {
+    return trigger.getHandlerFunction() === functionName;
+  });
+
+  if (!existing.length) {
+    ScriptApp.newTrigger(functionName)
+      .timeBased()
+      .everyMinutes(5)
+      .create();
+  }
+
+  return {
+    ok: true,
+    triggerCount: existing.length || 1,
+    message: 'Expired booking-hold cleanup is scheduled every 5 minutes.'
+  };
+}
+
+function runExpiredHoldCleanupTrigger_() {
+  try {
+    return releaseExpiredHolds_({});
+  } catch (error) {
+    console.error('Expired hold cleanup failed: ' +
+      String(error && error.message ? error.message : error));
+    throw error;
+  }
+}
+

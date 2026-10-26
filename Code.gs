@@ -3838,8 +3838,18 @@ function updateRowFields_(sheetName,rowNumber,fields){
 }
 
 function appendBookingLog_(entry){
+  var bookingId=String(entry.bookingId||'').trim();
+  var booking=bookingId?getBookingByIdObject_(bookingId):null;
+
   appendObjectRow_(CONFIG.SHEETS.BOOKING_LOGS,{},{
-    'Log ID':generateId_('LOG'),'Booking ID':entry.bookingId||'','Action':entry.action||'','Slot Key':entry.slotKey||'','Details':entry.details||'','Created At':new Date()
+    'Log ID':generateId_('LOG'),
+    'Booking ID':bookingId,
+    'Request ID':entry.requestId||(booking&&booking['Request ID'])||'',
+    'Action':entry.action||'',
+    'Status':entry.status||(booking&&(booking['Appointment Status']||booking['Payment Status']))||'',
+    'Telegram ID':entry.telegramId||(booking&&booking['Telegram ID'])||'',
+    'Details':entry.details||'',
+    'Created At':new Date()
   });
 }
 

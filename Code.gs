@@ -3818,10 +3818,20 @@ function appendObjectRow_(sheetName,source,values){
    * BEFORE writing the row.
    */
   var dateColumnIndex=headers.indexOf('Appointment Date');
+  var timeColumnIndex=headers.indexOf('Appointment Time');
 
+  // Keep Jalali dates and appointment times as literal text.
+  // If the time column is formatted as a Sheets time, getValues() returns
+  // a Date object and timezone conversion can shift 11:00 to another hour.
   if(dateColumnIndex!==-1){
     sheet
       .getRange(1,dateColumnIndex+1,sheet.getMaxRows(),1)
+      .setNumberFormat('@');
+  }
+
+  if(timeColumnIndex!==-1){
+    sheet
+      .getRange(1,timeColumnIndex+1,sheet.getMaxRows(),1)
       .setNumberFormat('@');
   }
 

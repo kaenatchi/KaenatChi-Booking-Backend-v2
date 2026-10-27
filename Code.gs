@@ -1,25 +1,3 @@
-KAENATCHI — LIVE APPS SCRIPT BASELINE
-
-Purpose:
-Reference copy of the currently deployed Google Apps Script source,
-provided only for investigating these two issues:
-
-1. Unreliable booking/payment Telegram notifications.
-2. Repeated Telegram messages after rejecting a payment receipt.
-
-STRICT SCOPE:
-- Read-only reference; not the production source of truth.
-- Do not deploy this file.
-- Do not merge it into main.
-- Do not modify other Kaenatchi features.
-- Do not change architecture, Sheets schema, booking rules,
-  prices, UI, reminders, or slot-release logic.
-- Compare with the existing fix PR #46 before proposing changes.
-- Any proposed production change requires explicit user approval.
-
-This file is a reference snapshot, not proof that its contents
-match the deployed version until verified.
-
 /*******************************************************
  * KaenatChi Booking Backend v2
  * Core Backend - Phase 1
@@ -241,11 +219,6 @@ function doPost(e) {
           telegramUpdate &&
           telegramUpdate.callback_query
         ) {
-          // Telegram may redeliver callback updates; handle each update once.
-          if (isDuplicateTelegramUpdate_(telegramUpdate.update_id)) {
-            return jsonResponse_({ok:true, duplicate:true});
-          }
-
           var telegramWebhookSecret = String(
             PropertiesService
               .getScriptProperties()
@@ -265,6 +238,11 @@ function doPost(e) {
               ok:false,
               error:'TELEGRAM_WEBHOOK_UNAUTHORIZED'
             });
+          }
+
+          // Authenticate first, then deduplicate Telegram callback updates.
+          if (isDuplicateTelegramUpdate_(telegramUpdate.update_id)) {
+            return jsonResponse_({ok:true, duplicate:true});
           }
 
           return jsonResponse_(

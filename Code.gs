@@ -1070,10 +1070,16 @@ function buildBookingTelegramText_(booking, eventType) {
   );
 }
 
-function sendBookingTelegramNotifications_(booking, eventType) {
+function sendBookingTelegramNotifications_(booking, eventType, alreadyDelivered) {
   var config=getTelegramConfig_();
   var text=buildBookingTelegramText_(booking,eventType);
   var results=[];
+  var delivered = Array.isArray(alreadyDelivered) ? alreadyDelivered.slice() : [];
+  function hasDelivered(key) { return delivered.indexOf(key) !== -1; }
+  function recordResult(key, result) {
+    results.push(result);
+    if (result && result.ok === true && !hasDelivered(key)) delivered.push(key);
+  }
 
   /*
    * Only payment_received needs admin action buttons.
@@ -1086,16 +1092,14 @@ function sendBookingTelegramNotifications_(booking, eventType) {
         )
       : null;
 
-  if(config.adminChatId){
-    results.push(
-      sendTelegramMessage_(
-        config.adminChatId,
-        text,
-        replyMarkup
-      )
-    );
-  } else {
-    results.push({
+  if(config.adminChatId && !hasDelivered('admin')){
+    recordResult('admin', sendTelegramMessage_(
+      config.adminChatId,
+      text,
+      replyMarkup
+    ));
+  } else if (!config.adminChatId && !hasDelivered('admin')) {
+    recordResult('admin', {
       ok:false,
       skipped:true,
       reason:'ADMIN_CHAT_ID_NOT_CONFIGURED'
@@ -1103,18 +1107,20 @@ function sendBookingTelegramNotifications_(booking, eventType) {
   }
 
   var customerChatId=String(booking['Telegram ID']||'').trim();
-  if(customerChatId && customerChatId!==config.adminChatId){
-    results.push(
-      sendTelegramMessage_(
-        customerChatId,
-        text
-      )
-    );
+  if(customerChatId && customerChatId!==config.adminChatId && !hasDelivered('customer')){
+    recordResult('customer', sendTelegramMessage_(
+      customerChatId,
+      text
+    ));
   }
 
+  var allDelivered = !!config.adminChatId && hasDelivered('admin') &&
+    (!customerChatId || customerChatId===config.adminChatId || hasDelivered('customer'));
+
   return {
-    ok: results.some(function(item){ return item && item.ok === true; }),
-    results: results
+    ok: allDelivered,
+    results: results,
+    deliveredRecipients: delivered
   };
 }
 
@@ -1143,11 +1149,26 @@ function queueBookingTelegramNotification_(booking, eventType) {
       queue = [];
     }
 
+    var bookingId = String(booking['Booking ID'] || '').trim();
+    var normalizedEventType = String(eventType || '').trim();
+    if (!bookingId || !normalizedEventType) {
+      return {ok:false,queued:false,reason:'BOOKING_ID_OR_EVENT_TYPE_MISSING'};
+    }
+
+    var duplicate = queue.some(function(item) {
+      return String(item.bookingId || '') === bookingId &&
+        String(item.eventType || '') === normalizedEventType;
+    });
+    if (duplicate) {
+      return {ok:true,queued:false,duplicate:true};
+    }
+
     queue.push({
-      bookingId: String(booking['Booking ID'] || ''),
-      eventType: String(eventType || ''),
+      bookingId: bookingId,
+      eventType: normalizedEventType,
       queuedAt: new Date().toISOString(),
-      attempts: 0
+      attempts: 0,
+      deliveredRecipients: []
     });
 
     if (queue.length > 100) {
@@ -1245,13 +1266,17 @@ function processBookingTelegramNotificationQueue_() {
       var booking = getBookingByIdObject_(item.bookingId);
 
       if (!booking) {
-        return;
+        throw new Error('BOOKING_NOT_FOUND_FOR_NOTIFICATION');
       }
 
       var result = sendBookingTelegramNotifications_(
         booking,
-        String(item.eventType || '')
+        String(item.eventType || ''),
+        item.deliveredRecipients || []
       );
+      if (result && Array.isArray(result.deliveredRecipients)) {
+        item.deliveredRecipients = result.deliveredRecipients;
+      }
 
       /*
        * sendBookingTelegramNotifications_ historically did not return a
@@ -1314,7 +1339,22 @@ function processBookingTelegramNotificationQueue_() {
       existing = [];
     }
 
-    var combined = existing.concat(failed);
+    var combined = existing.slice();
+    failed.forEach(function(retryItem) {
+      var key = String(retryItem.bookingId || '') + '|' + String(retryItem.eventType || '');
+      var existingIndex = combined.findIndex(function(existingItem) {
+        return String(existingItem.bookingId || '') + '|' + String(existingItem.eventType || '') === key;
+      });
+      if (existingIndex === -1) {
+        combined.push(retryItem);
+      } else {
+        var current = combined[existingIndex];
+        current.attempts = Math.max(Number(current.attempts || 0), Number(retryItem.attempts || 0));
+        current.deliveredRecipients = Array.from(new Set(
+          (current.deliveredRecipients || []).concat(retryItem.deliveredRecipients || [])
+        ));
+      }
+    });
 
     if (combined.length > 100) {
       combined = combined.slice(combined.length - 100);
@@ -3722,6 +3762,19 @@ function rejectBooking_(request){
   return withBookingLock_(function(){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
     if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+
+    if (
+      String(b['Appointment Status'] || '') === CONFIG.STATUSES.BOOKING_REJECTED &&
+      String(b['Payment Status'] || '') === CONFIG.STATUSES.PAYMENT_REJECTED
+    ) {
+      return {
+        ok:true,
+        bookingId:b['Booking ID'],
+        status:CONFIG.STATUSES.BOOKING_REJECTED,
+        alreadyRejected:true
+      };
+    }
+
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
       'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),

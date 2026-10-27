@@ -1070,10 +1070,16 @@ function buildBookingTelegramText_(booking, eventType) {
   );
 }
 
-function sendBookingTelegramNotifications_(booking, eventType) {
+function sendBookingTelegramNotifications_(booking, eventType, alreadyDelivered) {
   var config=getTelegramConfig_();
   var text=buildBookingTelegramText_(booking,eventType);
   var results=[];
+  var delivered = Array.isArray(alreadyDelivered) ? alreadyDelivered.slice() : [];
+  function hasDelivered(key) { return delivered.indexOf(key) !== -1; }
+  function recordResult(key, result) {
+    results.push(result);
+    if (result && result.ok === true && !hasDelivered(key)) delivered.push(key);
+  }
 
   /*
    * Only payment_received needs admin action buttons.
@@ -1086,16 +1092,14 @@ function sendBookingTelegramNotifications_(booking, eventType) {
         )
       : null;
 
-  if(config.adminChatId){
-    results.push(
-      sendTelegramMessage_(
-        config.adminChatId,
-        text,
-        replyMarkup
-      )
-    );
-  } else {
-    results.push({
+  if(config.adminChatId && !hasDelivered('admin')){
+    recordResult('admin', sendTelegramMessage_(
+      config.adminChatId,
+      text,
+      replyMarkup
+    ));
+  } else if (!config.adminChatId && !hasDelivered('admin')) {
+    recordResult('admin', {
       ok:false,
       skipped:true,
       reason:'ADMIN_CHAT_ID_NOT_CONFIGURED'
@@ -1103,18 +1107,20 @@ function sendBookingTelegramNotifications_(booking, eventType) {
   }
 
   var customerChatId=String(booking['Telegram ID']||'').trim();
-  if(customerChatId && customerChatId!==config.adminChatId){
-    results.push(
-      sendTelegramMessage_(
-        customerChatId,
-        text
-      )
-    );
+  if(customerChatId && customerChatId!==config.adminChatId && !hasDelivered('customer')){
+    recordResult('customer', sendTelegramMessage_(
+      customerChatId,
+      text
+    ));
   }
 
+  var allDelivered = !!config.adminChatId && hasDelivered('admin') &&
+    (!customerChatId || customerChatId===config.adminChatId || hasDelivered('customer'));
+
   return {
-    ok: results.some(function(item){ return item && item.ok === true; }),
-    results: results
+    ok: allDelivered,
+    results: results,
+    deliveredRecipients: delivered
   };
 }
 
@@ -1125,13 +1131,16 @@ function sendBookingTelegramNotifications_(booking, eventType) {
  * request itself.
  */
 function queueBookingTelegramNotification_(booking, eventType) {
+  /*
+   * This function is called by booking/payment handlers that already hold
+   * withBookingLock_'s ScriptLock. Do NOT acquire ScriptLock again here:
+   * nested acquisition can time out and silently drop the notification.
+   *
+   * The existing caller lock serializes these queue writes with the worker.
+   */
   try {
-    /*
-     * CUSTOMER REQUEST PATH:
-     * Only persist the notification item. No trigger creation, no Telegram
-     * network call, and no extra ScriptApp work is allowed here.
-     */
     var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
+    var triggerKey = 'KAENATCHI_TELEGRAM_TRIGGER_SCHEDULED';
     var props = PropertiesService.getScriptProperties();
     var raw = String(props.getProperty(queueKey) || '[]');
     var queue = [];
@@ -1143,12 +1152,31 @@ function queueBookingTelegramNotification_(booking, eventType) {
       queue = [];
     }
 
-    queue.push({
-      bookingId: String(booking['Booking ID'] || ''),
-      eventType: String(eventType || ''),
-      queuedAt: new Date().toISOString(),
-      attempts: 0
+    var bookingId = String(booking && booking['Booking ID'] || '').trim();
+    var normalizedEventType = String(eventType || '').trim();
+
+    if (!bookingId || !normalizedEventType) {
+      return {
+        ok: false,
+        queued: false,
+        reason: 'BOOKING_ID_OR_EVENT_TYPE_MISSING'
+      };
+    }
+
+    var duplicate = queue.some(function(item) {
+      return String(item.bookingId || '') === bookingId &&
+        String(item.eventType || '') === normalizedEventType;
     });
+
+    if (!duplicate) {
+      queue.push({
+        bookingId: bookingId,
+        eventType: normalizedEventType,
+        queuedAt: new Date().toISOString(),
+        attempts: 0,
+        deliveredRecipients: []
+      });
+    }
 
     if (queue.length > 100) {
       queue = queue.slice(queue.length - 100);
@@ -1156,27 +1184,39 @@ function queueBookingTelegramNotification_(booking, eventType) {
 
     props.setProperty(queueKey, JSON.stringify(queue));
 
-    return {ok:true,queued:true};
+    // Preserve prompt delivery without taking a nested ScriptLock.
+    if (String(props.getProperty(triggerKey) || '') !== '1') {
+      ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
+        .timeBased()
+        .after(5000)
+        .create();
 
+      props.setProperty(triggerKey, '1');
+    }
+
+    return {
+      ok: true,
+      queued: !duplicate,
+      duplicate: duplicate
+    };
   } catch (error) {
     /*
-     * Notification failure must NEVER turn a successful booking/payment
-     * into a failed customer request.
+     * Notification failure must not turn a successful booking/payment
+     * into a failed customer request. The recurring worker remains a fallback.
      */
     console.warn(
       'Telegram notification queue failed: ' +
       String(error && error.message ? error.message : error)
     );
 
-    return {ok:false,queued:false};
+    return {
+      ok: false,
+      queued: false,
+      reason: String(error && error.message ? error.message : error)
+    };
   }
 }
 
-/*
- * Run this function ONCE from the Apps Script editor.
- * It creates exactly one recurring worker for Telegram notifications.
- * The worker is deliberately outside the customer booking/payment request.
- */
 function setupBookingTelegramQueueTrigger_() {
   var functionName = 'processBookingTelegramNotificationQueue_';
   var triggers = ScriptApp.getProjectTriggers();
@@ -1223,6 +1263,28 @@ function processBookingTelegramNotificationQueue_() {
       items = [];
     }
 
+    /*
+     * Older queue contents may already contain the same booking/event more
+     * than once. Collapse those duplicates before sending anything, while
+     * preserving delivery progress from every copy.
+     */
+    var uniqueItems = [];
+    items.forEach(function(item) {
+      var itemKey = String(item.bookingId || '') + '|' + String(item.eventType || '');
+      var match = uniqueItems.find(function(existingItem) {
+        return String(existingItem.bookingId || '') + '|' + String(existingItem.eventType || '') === itemKey;
+      });
+      if (!match) {
+        uniqueItems.push(item);
+      } else {
+        match.attempts = Math.max(Number(match.attempts || 0), Number(item.attempts || 0));
+        match.deliveredRecipients = Array.from(new Set(
+          (match.deliveredRecipients || []).concat(item.deliveredRecipients || [])
+        ));
+      }
+    });
+    items = uniqueItems;
+
     props.setProperty(queueKey, '[]');
     props.deleteProperty(triggerKey);
 
@@ -1232,9 +1294,17 @@ function processBookingTelegramNotificationQueue_() {
 
   /*
    * Appointment reminders share the existing one-minute Telegram worker.
-   * This runs even when the notification queue is empty.
+   * A reminder failure must not prevent already-queued booking/payment
+   * notifications from being delivered.
    */
-  processAppointmentReminders_();
+  try {
+    processAppointmentReminders_();
+  } catch (reminderError) {
+    console.warn(
+      'Appointment reminder worker failed; continuing Telegram notification queue: ' +
+      String(reminderError && reminderError.message ? reminderError.message : reminderError)
+    );
+  }
 
   if (!items.length) {
     return;
@@ -1245,13 +1315,17 @@ function processBookingTelegramNotificationQueue_() {
       var booking = getBookingByIdObject_(item.bookingId);
 
       if (!booking) {
-        return;
+        throw new Error('BOOKING_NOT_FOUND_FOR_NOTIFICATION');
       }
 
       var result = sendBookingTelegramNotifications_(
         booking,
-        String(item.eventType || '')
+        String(item.eventType || ''),
+        item.deliveredRecipients || []
       );
+      if (result && Array.isArray(result.deliveredRecipients)) {
+        item.deliveredRecipients = result.deliveredRecipients;
+      }
 
       /*
        * sendBookingTelegramNotifications_ historically did not return a
@@ -1314,7 +1388,22 @@ function processBookingTelegramNotificationQueue_() {
       existing = [];
     }
 
-    var combined = existing.concat(failed);
+    var combined = existing.slice();
+    failed.forEach(function(retryItem) {
+      var key = String(retryItem.bookingId || '') + '|' + String(retryItem.eventType || '');
+      var existingIndex = combined.findIndex(function(existingItem) {
+        return String(existingItem.bookingId || '') + '|' + String(existingItem.eventType || '') === key;
+      });
+      if (existingIndex === -1) {
+        combined.push(retryItem);
+      } else {
+        var current = combined[existingIndex];
+        current.attempts = Math.max(Number(current.attempts || 0), Number(retryItem.attempts || 0));
+        current.deliveredRecipients = Array.from(new Set(
+          (current.deliveredRecipients || []).concat(retryItem.deliveredRecipients || [])
+        ));
+      }
+    });
 
     if (combined.length > 100) {
       combined = combined.slice(combined.length - 100);
@@ -3722,6 +3811,19 @@ function rejectBooking_(request){
   return withBookingLock_(function(){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
     if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+
+    if (
+      String(b['Appointment Status'] || '') === CONFIG.STATUSES.BOOKING_REJECTED &&
+      String(b['Payment Status'] || '') === CONFIG.STATUSES.PAYMENT_REJECTED
+    ) {
+      return {
+        ok:true,
+        bookingId:b['Booking ID'],
+        status:CONFIG.STATUSES.BOOKING_REJECTED,
+        alreadyRejected:true
+      };
+    }
+
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
       'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),

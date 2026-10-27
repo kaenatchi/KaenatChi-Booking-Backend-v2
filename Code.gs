@@ -1244,6 +1244,28 @@ function processBookingTelegramNotificationQueue_() {
       items = [];
     }
 
+    /*
+     * Older queue contents may already contain the same booking/event more
+     * than once. Collapse those duplicates before sending anything, while
+     * preserving delivery progress from every copy.
+     */
+    var uniqueItems = [];
+    items.forEach(function(item) {
+      var itemKey = String(item.bookingId || '') + '|' + String(item.eventType || '');
+      var match = uniqueItems.find(function(existingItem) {
+        return String(existingItem.bookingId || '') + '|' + String(existingItem.eventType || '') === itemKey;
+      });
+      if (!match) {
+        uniqueItems.push(item);
+      } else {
+        match.attempts = Math.max(Number(match.attempts || 0), Number(item.attempts || 0));
+        match.deliveredRecipients = Array.from(new Set(
+          (match.deliveredRecipients || []).concat(item.deliveredRecipients || [])
+        ));
+      }
+    });
+    items = uniqueItems;
+
     props.setProperty(queueKey, '[]');
     props.deleteProperty(triggerKey);
 

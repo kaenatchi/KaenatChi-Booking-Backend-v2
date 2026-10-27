@@ -1131,13 +1131,16 @@ function sendBookingTelegramNotifications_(booking, eventType, alreadyDelivered)
  * request itself.
  */
 function queueBookingTelegramNotification_(booking, eventType) {
+  /*
+   * This function is called by booking/payment handlers that already hold
+   * withBookingLock_'s ScriptLock. Do NOT acquire ScriptLock again here:
+   * nested acquisition can time out and silently drop the notification.
+   *
+   * The existing caller lock serializes these queue writes with the worker.
+   */
   try {
-    /*
-     * CUSTOMER REQUEST PATH:
-     * Only persist the notification item. No trigger creation, no Telegram
-     * network call, and no extra ScriptApp work is allowed here.
-     */
     var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
+    var triggerKey = 'KAENATCHI_TELEGRAM_TRIGGER_SCHEDULED';
     var props = PropertiesService.getScriptProperties();
     var raw = String(props.getProperty(queueKey) || '[]');
     var queue = [];
@@ -1149,27 +1152,31 @@ function queueBookingTelegramNotification_(booking, eventType) {
       queue = [];
     }
 
-    var bookingId = String(booking['Booking ID'] || '').trim();
+    var bookingId = String(booking && booking['Booking ID'] || '').trim();
     var normalizedEventType = String(eventType || '').trim();
+
     if (!bookingId || !normalizedEventType) {
-      return {ok:false,queued:false,reason:'BOOKING_ID_OR_EVENT_TYPE_MISSING'};
+      return {
+        ok: false,
+        queued: false,
+        reason: 'BOOKING_ID_OR_EVENT_TYPE_MISSING'
+      };
     }
 
     var duplicate = queue.some(function(item) {
       return String(item.bookingId || '') === bookingId &&
         String(item.eventType || '') === normalizedEventType;
     });
-    if (duplicate) {
-      return {ok:true,queued:false,duplicate:true};
-    }
 
-    queue.push({
-      bookingId: bookingId,
-      eventType: normalizedEventType,
-      queuedAt: new Date().toISOString(),
-      attempts: 0,
-      deliveredRecipients: []
-    });
+    if (!duplicate) {
+      queue.push({
+        bookingId: bookingId,
+        eventType: normalizedEventType,
+        queuedAt: new Date().toISOString(),
+        attempts: 0,
+        deliveredRecipients: []
+      });
+    }
 
     if (queue.length > 100) {
       queue = queue.slice(queue.length - 100);
@@ -1177,27 +1184,39 @@ function queueBookingTelegramNotification_(booking, eventType) {
 
     props.setProperty(queueKey, JSON.stringify(queue));
 
-    return {ok:true,queued:true};
+    // Preserve prompt delivery without taking a nested ScriptLock.
+    if (String(props.getProperty(triggerKey) || '') !== '1') {
+      ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
+        .timeBased()
+        .after(5000)
+        .create();
 
+      props.setProperty(triggerKey, '1');
+    }
+
+    return {
+      ok: true,
+      queued: !duplicate,
+      duplicate: duplicate
+    };
   } catch (error) {
     /*
-     * Notification failure must NEVER turn a successful booking/payment
-     * into a failed customer request.
+     * Notification failure must not turn a successful booking/payment
+     * into a failed customer request. The recurring worker remains a fallback.
      */
     console.warn(
       'Telegram notification queue failed: ' +
       String(error && error.message ? error.message : error)
     );
 
-    return {ok:false,queued:false};
+    return {
+      ok: false,
+      queued: false,
+      reason: String(error && error.message ? error.message : error)
+    };
   }
 }
 
-/*
- * Run this function ONCE from the Apps Script editor.
- * It creates exactly one recurring worker for Telegram notifications.
- * The worker is deliberately outside the customer booking/payment request.
- */
 function setupBookingTelegramQueueTrigger_() {
   var functionName = 'processBookingTelegramNotificationQueue_';
   var triggers = ScriptApp.getProjectTriggers();

@@ -1253,9 +1253,17 @@ function processBookingTelegramNotificationQueue_() {
 
   /*
    * Appointment reminders share the existing one-minute Telegram worker.
-   * This runs even when the notification queue is empty.
+   * A reminder failure must not prevent already-queued booking/payment
+   * notifications from being delivered.
    */
-  processAppointmentReminders_();
+  try {
+    processAppointmentReminders_();
+  } catch (reminderError) {
+    console.warn(
+      'Appointment reminder worker failed; continuing Telegram notification queue: ' +
+      String(reminderError && reminderError.message ? reminderError.message : reminderError)
+    );
+  }
 
   if (!items.length) {
     return;

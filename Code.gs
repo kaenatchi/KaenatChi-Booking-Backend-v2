@@ -240,6 +240,11 @@ function doPost(e) {
             });
           }
 
+          // Authenticate first, then deduplicate Telegram callback updates.
+          if (isDuplicateTelegramUpdate_(telegramUpdate.update_id)) {
+            return jsonResponse_({ok:true, duplicate:true});
+          }
+
           return jsonResponse_(
             handleTelegramCallbackQuery_(
               telegramUpdate.callback_query
@@ -1288,163 +1293,107 @@ function processBookingTelegramNotificationQueue_() {
   var triggerKey = 'KAENATCHI_TELEGRAM_TRIGGER_SCHEDULED';
   var items = [];
   var failed = [];
-
   var lock = LockService.getScriptLock();
   lock.waitLock(5000);
 
   try {
     var props = PropertiesService.getScriptProperties();
-    var raw = String(props.getProperty(queueKey) || '[]');
-
     try {
-      items = JSON.parse(raw);
+      items = JSON.parse(String(props.getProperty(queueKey) || '[]'));
       if (!Array.isArray(items)) items = [];
-    } catch (parseError) {
-      items = [];
-    }
+    } catch (parseError) { items = []; }
 
-    // Remove duplicate pending notifications for the same booking and event.
     var uniqueItems = [];
     var seen = {};
-
     items.forEach(function(item) {
-      var key = String(item.bookingId || '') + '|' +
-        String(item.eventType || '');
-
+      var key = String(item.bookingId || '') + '|' + String(item.eventType || '');
       if (key === '|') return;
-
       if (!seen[key]) {
         seen[key] = item;
         uniqueItems.push(item);
       } else {
         var existing = seen[key];
-
-        existing.attempts = Math.max(
-          Number(existing.attempts || 0),
-          Number(item.attempts || 0)
-        );
-
+        existing.attempts = Math.max(Number(existing.attempts || 0), Number(item.attempts || 0));
         existing.deliveredRecipients = Array.from(new Set(
-          (existing.deliveredRecipients || []).concat(
-            item.deliveredRecipients || []
-          )
+          (existing.deliveredRecipients || []).concat(item.deliveredRecipients || [])
         ));
       }
     });
-
     items = uniqueItems;
-
     props.setProperty(queueKey, '[]');
     props.deleteProperty(triggerKey);
-
   } finally {
     lock.releaseLock();
   }
 
-  processAppointmentReminders_();
+  // Reminder failures must not block booking/payment notifications.
+  try {
+    processAppointmentReminders_();
+  } catch (reminderError) {
+    console.warn('Appointment reminder worker failed; continuing notification queue: ' +
+      String(reminderError && reminderError.message ? reminderError.message : reminderError));
+  }
 
   if (!items.length) return;
-
   items.forEach(function(item) {
     try {
       var booking = getBookingByIdObject_(item.bookingId);
-      if (!booking) return;
+      if (!booking) throw new Error('BOOKING_NOT_FOUND_FOR_NOTIFICATION');
 
       var result = sendBookingTelegramNotifications_(
-        booking,
-        String(item.eventType || ''),
-        item.deliveredRecipients || []
+        booking, String(item.eventType || ''), item.deliveredRecipients || []
       );
-
       if (result && Array.isArray(result.deliveredRecipients)) {
         item.deliveredRecipients = result.deliveredRecipients;
       }
-
-      if (result && result.ok === false) {
-        throw new Error('Telegram delivery failed.');
-      }
-
+      if (result && result.ok === false) throw new Error('Telegram delivery failed.');
     } catch (error) {
       var attempts = Number(item.attempts || 0) + 1;
-
       if (attempts <= 5) {
         item.attempts = attempts;
-        item.lastError = String(
-          error && error.message ? error.message : error
-        );
+        item.lastError = String(error && error.message ? error.message : error);
         item.retryAt = new Date().toISOString();
         failed.push(item);
       }
-
-      console.warn(
-        'Queued Telegram notification failed for booking ' +
-        String(item.bookingId || '') +
-        ' (attempt ' + attempts + '): ' +
-        String(error && error.message ? error.message : error)
-      );
+      console.warn('Queued Telegram notification failed for booking ' +
+        String(item.bookingId || '') + ' (attempt ' + attempts + '): ' +
+        String(error && error.message ? error.message : error));
     }
   });
-
   if (!failed.length) return;
 
   lock.waitLock(5000);
-
   try {
     var props2 = PropertiesService.getScriptProperties();
-    var raw2 = String(props2.getProperty(queueKey) || '[]');
-    var existing = [];
-
+    var existingQueue = [];
     try {
-      existing = JSON.parse(raw2);
-      if (!Array.isArray(existing)) existing = [];
-    } catch (parseError2) {
-      existing = [];
-    }
+      existingQueue = JSON.parse(String(props2.getProperty(queueKey) || '[]'));
+      if (!Array.isArray(existingQueue)) existingQueue = [];
+    } catch (parseError2) { existingQueue = []; }
 
-    var combined = existing.slice();
-
+    var combined = existingQueue.slice();
     failed.forEach(function(retryItem) {
-      var key = String(retryItem.bookingId || '') + '|' +
-        String(retryItem.eventType || '');
-
-      var existingIndex = combined.findIndex(function(existingItem) {
+      var key = String(retryItem.bookingId || '') + '|' + String(retryItem.eventType || '');
+      var index = combined.findIndex(function(existingItem) {
         return String(existingItem.bookingId || '') + '|' +
           String(existingItem.eventType || '') === key;
       });
-
-      if (existingIndex === -1) {
-        combined.push(retryItem);
-      } else {
-        var current = combined[existingIndex];
-
-        current.attempts = Math.max(
-          Number(current.attempts || 0),
-          Number(retryItem.attempts || 0)
-        );
-
+      if (index === -1) combined.push(retryItem);
+      else {
+        var current = combined[index];
+        current.attempts = Math.max(Number(current.attempts || 0), Number(retryItem.attempts || 0));
         current.deliveredRecipients = Array.from(new Set(
-          (current.deliveredRecipients || []).concat(
-            retryItem.deliveredRecipients || []
-          )
+          (current.deliveredRecipients || []).concat(retryItem.deliveredRecipients || [])
         ));
       }
     });
-
-    if (combined.length > 100) {
-      combined = combined.slice(combined.length - 100);
-    }
-
+    if (combined.length > 100) combined = combined.slice(combined.length - 100);
     props2.setProperty(queueKey, JSON.stringify(combined));
-
     if (String(props2.getProperty(triggerKey) || '') !== '1') {
       ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
-        .timeBased()
-        .after(5000)
-        .create();
-
+        .timeBased().after(5000).create();
       props2.setProperty(triggerKey, '1');
     }
-
   } finally {
     lock.releaseLock();
   }
@@ -6371,85 +6320,57 @@ function isDuplicateTelegramUpdate_(updateId) {
 }
 
 function queueBookingTelegramNotification_(booking, eventType) {
-  var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
-  var triggerKey = 'KAENATCHI_TELEGRAM_TRIGGER_SCHEDULED';
-  var lock = LockService.getScriptLock();
-
+  /*
+   * Current enqueue callers already hold withBookingLock_()'s ScriptLock.
+   * Re-acquiring the same lock here can time out and silently lose notices.
+   */
   try {
-    lock.waitLock(5000);
-
+    var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
+    var triggerKey = 'KAENATCHI_TELEGRAM_TRIGGER_SCHEDULED';
+    var props = PropertiesService.getScriptProperties();
+    var queue = [];
     try {
-      var props = PropertiesService.getScriptProperties();
-      var raw = String(props.getProperty(queueKey) || '[]');
-      var queue = [];
-
-      try {
-        queue = JSON.parse(raw);
-        if (!Array.isArray(queue)) queue = [];
-      } catch (parseError) {
-        queue = [];
-      }
-
-      var bookingId = String(booking['Booking ID'] || '');
-      var type = String(eventType || '');
-
-      if (!bookingId || !type) {
-        return {
-          ok: false,
-          queued: false,
-          reason: 'MISSING_BOOKING_ID_OR_EVENT_TYPE'
-        };
-      }
-
-      var alreadyQueued = queue.some(function(item) {
-        return String(item.bookingId || '') === bookingId &&
-          String(item.eventType || '') === type;
-      });
-
-      if (!alreadyQueued) {
-        queue.push({
-          bookingId: bookingId,
-          eventType: type,
-          queuedAt: new Date().toISOString(),
-          attempts: 0,
-          deliveredRecipients: []
-        });
-      }
-
-      if (queue.length > 100) {
-        queue = queue.slice(queue.length - 100);
-      }
-
-      props.setProperty(queueKey, JSON.stringify(queue));
-
-      if (String(props.getProperty(triggerKey) || '') !== '1') {
-        ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
-          .timeBased()
-          .after(5000)
-          .create();
-
-        props.setProperty(triggerKey, '1');
-      }
-
-      return {
-        ok: true,
-        queued: true,
-        duplicate: alreadyQueued
-      };
-
-    } finally {
-      lock.releaseLock();
+      queue = JSON.parse(String(props.getProperty(queueKey) || '[]'));
+      if (!Array.isArray(queue)) queue = [];
+    } catch (parseError) {
+      queue = [];
     }
-  } catch (error) {
-    console.warn(
-      'Telegram notification queue failed: ' +
-      String(error && error.message ? error.message : error)
-    );
 
+    var bookingId = String(booking && booking['Booking ID'] || '').trim();
+    var type = String(eventType || '').trim();
+    if (!bookingId || !type) {
+      return {ok:false, queued:false, reason:'MISSING_BOOKING_ID_OR_EVENT_TYPE'};
+    }
+
+    var alreadyQueued = queue.some(function(item) {
+      return String(item.bookingId || '') === bookingId &&
+        String(item.eventType || '') === type;
+    });
+
+    if (!alreadyQueued) {
+      queue.push({
+        bookingId:bookingId,
+        eventType:type,
+        queuedAt:new Date().toISOString(),
+        attempts:0,
+        deliveredRecipients:[]
+      });
+    }
+    if (queue.length > 100) queue = queue.slice(queue.length - 100);
+    props.setProperty(queueKey, JSON.stringify(queue));
+
+    if (String(props.getProperty(triggerKey) || '') !== '1') {
+      ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
+        .timeBased().after(5000).create();
+      props.setProperty(triggerKey, '1');
+    }
+    return {ok:true, queued:!alreadyQueued, duplicate:alreadyQueued};
+  } catch (error) {
+    console.warn('Telegram notification queue failed: ' +
+      String(error && error.message ? error.message : error));
     return {
-      ok: false,
-      queued: false,
-      reason: String(error && error.message ? error.message : error)
+      ok:false, queued:false,
+      reason:String(error && error.message ? error.message : error)
     };
   }
 }

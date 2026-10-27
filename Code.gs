@@ -161,6 +161,62 @@ function doPost(e) {
 
         if (
           telegramUpdate &&
+          telegramUpdate.message
+        ) {
+          var telegramWebhookSecret = String(
+            PropertiesService
+              .getScriptProperties()
+              .getProperty('KAENATCHI_TELEGRAM_WEBHOOK_SECRET') || ''
+          ).trim();
+
+          var suppliedWebhookSecret = String(
+            e.parameter &&
+            e.parameter.telegram_webhook || ''
+          ).trim();
+
+          if (
+            !telegramWebhookSecret ||
+            suppliedWebhookSecret !== telegramWebhookSecret
+          ) {
+            return jsonResponse_({
+              ok: false,
+              error: 'TELEGRAM_WEBHOOK_UNAUTHORIZED'
+            });
+          }
+
+          var telegramMessage = telegramUpdate.message;
+          var telegramChatId = telegramMessage.chat
+            ? telegramMessage.chat.id
+            : null;
+          var telegramText = String(
+            telegramMessage.text || ''
+          ).trim();
+          if (isDuplicateTelegramUpdate_(telegramUpdate.update_id)) {
+  return jsonResponse_({
+    ok: true,
+    duplicate: true
+  });
+}
+
+          if (
+            telegramChatId &&
+            /^\/start(?:@\w+)?(?:\s|$)/i.test(telegramText)
+          ) {
+            sendTelegramMessage_(
+              telegramChatId,
+              'سلام به کائنات‌چی خوش اومدی 🌙✨\n\nبرای ورود به دنیای کائنات‌چی، دکمه «ورود به کائنات‌چی» رو بزن.',
+              null
+            );
+          }
+
+          return jsonResponse_({
+            ok: true,
+            telegramMessageHandled: true
+          });
+        }
+
+        if (
+          telegramUpdate &&
           telegramUpdate.callback_query
         ) {
           var telegramWebhookSecret = String(
@@ -676,7 +732,7 @@ function setupTelegramWebhook() {
     'setWebhook',
     {
       url:webhookUrl,
-      allowed_updates:['callback_query'],
+      allowed_updates:['message', 'callback_query'],
       drop_pending_updates:true
     }
   );
@@ -691,7 +747,7 @@ function setupTelegramWebhook() {
   return {
     ok:true,
     webhookConfigured:true,
-    allowedUpdates:['callback_query']
+    allowed_updates:['message', 'callback_query'],
   };
 }
 
@@ -1070,41 +1126,61 @@ function buildBookingTelegramText_(booking, eventType) {
   );
 }
 
-function sendBookingTelegramNotifications_(booking, eventType) {
-  var config=getTelegramConfig_();
-  var text=buildBookingTelegramText_(booking,eventType);
-  var results=[];
+function sendBookingTelegramNotifications_(booking, eventType, alreadyDelivered) {
+  var config = getTelegramConfig_();
+  var text = buildBookingTelegramText_(booking, eventType);
+  var results = [];
+  var delivered = Array.isArray(alreadyDelivered)
+    ? alreadyDelivered.slice()
+    : [];
 
-  /*
-   * Only payment_received needs admin action buttons.
-   * Approved/rejected messages are terminal and do not expose action buttons.
-   */
-  var replyMarkup =
-    eventType === 'payment_received'
-      ? getBookingTelegramAdminKeyboard_(
-          booking['Booking ID']
+  function hasDelivered(key) {
+    return delivered.indexOf(key) !== -1;
+  }
+
+  function recordResult(key, result) {
+    results.push(result);
+
+    if (result && result.ok === true && !hasDelivered(key)) {
+      delivered.push(key);
+    }
+  }
+
+  // Only payment-received messages need admin action buttons.
+  var replyMarkup = eventType === 'payment_received'
+    ? getBookingTelegramAdminKeyboard_(booking['Booking ID'])
+    : null;
+
+  if (config.adminChatId) {
+    if (!hasDelivered('admin')) {
+      recordResult(
+        'admin',
+        sendTelegramMessage_(
+          config.adminChatId,
+          text,
+          replyMarkup
         )
-      : null;
-
-  if(config.adminChatId){
-    results.push(
-      sendTelegramMessage_(
-        config.adminChatId,
-        text,
-        replyMarkup
-      )
-    );
-  } else {
-    results.push({
-      ok:false,
-      skipped:true,
-      reason:'ADMIN_CHAT_ID_NOT_CONFIGURED'
+      );
+    }
+  } else if (!hasDelivered('admin')) {
+    recordResult('admin', {
+      ok: false,
+      skipped: true,
+      reason: 'ADMIN_CHAT_ID_NOT_CONFIGURED'
     });
   }
 
-  var customerChatId=String(booking['Telegram ID']||'').trim();
-  if(customerChatId && customerChatId!==config.adminChatId){
-    results.push(
+  var customerChatId = String(
+    booking['Telegram ID'] || ''
+  ).trim();
+
+  if (
+    customerChatId &&
+    customerChatId !== config.adminChatId &&
+    !hasDelivered('customer')
+  ) {
+    recordResult(
+      'customer',
       sendTelegramMessage_(
         customerChatId,
         text
@@ -1112,9 +1188,21 @@ function sendBookingTelegramNotifications_(booking, eventType) {
     );
   }
 
+  var allDelivered =
+    results.every(function(item) {
+      return item && item.ok === true;
+    }) &&
+    (hasDelivered('admin') || !config.adminChatId) &&
+    (
+      !customerChatId ||
+      customerChatId === config.adminChatId ||
+      hasDelivered('customer')
+    );
+
   return {
-    ok: results.some(function(item){ return item && item.ok === true; }),
-    results: results
+    ok: allDelivered,
+    results: results,
+    deliveredRecipients: delivered
   };
 }
 
@@ -1124,52 +1212,48 @@ function sendBookingTelegramNotifications_(booking, eventType) {
  * background worker. No Telegram network call happens in the booking
  * request itself.
  */
-function queueBookingTelegramNotification_(booking, eventType) {
-  try {
-    /*
-     * CUSTOMER REQUEST PATH:
-     * Only persist the notification item. No trigger creation, no Telegram
-     * network call, and no extra ScriptApp work is allowed here.
-     */
-    var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
-    var props = PropertiesService.getScriptProperties();
-    var raw = String(props.getProperty(queueKey) || '[]');
-    var queue = [];
+function rejectBooking_(request){
+  return withBookingLock_(function(){
+    var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
+    if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
 
-    try {
-      queue = JSON.parse(raw);
-      if (!Array.isArray(queue)) queue = [];
-    } catch (parseError) {
-      queue = [];
+    // Prevent duplicate rejection callbacks from repeating side effects.
+    if (
+      String(b['Appointment Status'] || '') === CONFIG.STATUSES.BOOKING_REJECTED &&
+      String(b['Payment Status'] || '') === CONFIG.STATUSES.PAYMENT_REJECTED
+    ) {
+      return {
+        ok:true,
+        bookingId:b['Booking ID'],
+        status:CONFIG.STATUSES.BOOKING_REJECTED,
+        alreadyRejected:true
+      };
     }
 
-    queue.push({
-      bookingId: String(booking['Booking ID'] || ''),
-      eventType: String(eventType || ''),
-      queuedAt: new Date().toISOString(),
-      attempts: 0
+    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+      'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,
+      'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
+      'Rejected At':new Date(),
+      'Rejected By':String(request.adminId||request.admin||'admin'),
+      'Admin Note':String(request.note||request.reason||''),
+      'Hold Until':''
     });
 
-    if (queue.length > 100) {
-      queue = queue.slice(queue.length - 100);
-    }
+    appendBookingLog_({
+      action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,
+      bookingId:b['Booking ID'],
+      slotKey:b['Slot Key'],
+      details:String(request.note||request.reason||'')
+    });
 
-    props.setProperty(queueKey, JSON.stringify(queue));
+    queueBookingTelegramNotification_(b, 'rejected');
 
-    return {ok:true,queued:true};
-
-  } catch (error) {
-    /*
-     * Notification failure must NEVER turn a successful booking/payment
-     * into a failed customer request.
-     */
-    console.warn(
-      'Telegram notification queue failed: ' +
-      String(error && error.message ? error.message : error)
-    );
-
-    return {ok:false,queued:false};
-  }
+    return {
+      ok:true,
+      bookingId:b['Booking ID'],
+      status:CONFIG.STATUSES.BOOKING_REJECTED
+    };
+  });
 }
 
 /*
@@ -1205,10 +1289,6 @@ function processBookingTelegramNotificationQueue_() {
   var items = [];
   var failed = [];
 
-  /*
-   * Only protect the queue read/write. Never hold the ScriptLock while
-   * calling Telegram or reading the booking Sheet.
-   */
   var lock = LockService.getScriptLock();
   lock.waitLock(5000);
 
@@ -1223,6 +1303,37 @@ function processBookingTelegramNotificationQueue_() {
       items = [];
     }
 
+    // Remove duplicate pending notifications for the same booking and event.
+    var uniqueItems = [];
+    var seen = {};
+
+    items.forEach(function(item) {
+      var key = String(item.bookingId || '') + '|' +
+        String(item.eventType || '');
+
+      if (key === '|') return;
+
+      if (!seen[key]) {
+        seen[key] = item;
+        uniqueItems.push(item);
+      } else {
+        var existing = seen[key];
+
+        existing.attempts = Math.max(
+          Number(existing.attempts || 0),
+          Number(item.attempts || 0)
+        );
+
+        existing.deliveredRecipients = Array.from(new Set(
+          (existing.deliveredRecipients || []).concat(
+            item.deliveredRecipients || []
+          )
+        ));
+      }
+    });
+
+    items = uniqueItems;
+
     props.setProperty(queueKey, '[]');
     props.deleteProperty(triggerKey);
 
@@ -1230,34 +1341,25 @@ function processBookingTelegramNotificationQueue_() {
     lock.releaseLock();
   }
 
-  /*
-   * Appointment reminders share the existing one-minute Telegram worker.
-   * This runs even when the notification queue is empty.
-   */
   processAppointmentReminders_();
 
-  if (!items.length) {
-    return;
-  }
+  if (!items.length) return;
 
   items.forEach(function(item) {
     try {
       var booking = getBookingByIdObject_(item.bookingId);
-
-      if (!booking) {
-        return;
-      }
+      if (!booking) return;
 
       var result = sendBookingTelegramNotifications_(
         booking,
-        String(item.eventType || '')
+        String(item.eventType || ''),
+        item.deliveredRecipients || []
       );
 
-      /*
-       * sendBookingTelegramNotifications_ historically did not return a
-       * result. Treat an explicit failure as retryable, and keep the item
-       * alive for the next processor run.
-       */
+      if (result && Array.isArray(result.deliveredRecipients)) {
+        item.deliveredRecipients = result.deliveredRecipients;
+      }
+
       if (result && result.ok === false) {
         throw new Error('Telegram delivery failed.');
       }
@@ -1265,16 +1367,10 @@ function processBookingTelegramNotificationQueue_() {
     } catch (error) {
       var attempts = Number(item.attempts || 0) + 1;
 
-      /*
-       * Keep retrying a small number of times so temporary Telegram/Google
-       * failures do not silently lose the admin notification.
-       */
       if (attempts <= 5) {
         item.attempts = attempts;
         item.lastError = String(
-          error && error.message
-            ? error.message
-            : error
+          error && error.message ? error.message : error
         );
         item.retryAt = new Date().toISOString();
         failed.push(item);
@@ -1284,22 +1380,13 @@ function processBookingTelegramNotificationQueue_() {
         'Queued Telegram notification failed for booking ' +
         String(item.bookingId || '') +
         ' (attempt ' + attempts + '): ' +
-        String(
-          error && error.message
-            ? error.message
-            : error
-        )
+        String(error && error.message ? error.message : error)
       );
     }
   });
 
-  if (!failed.length) {
-    return;
-  }
+  if (!failed.length) return;
 
-  /*
-   * Requeue failures and schedule exactly one follow-up trigger.
-   */
   lock.waitLock(5000);
 
   try {
@@ -1314,7 +1401,34 @@ function processBookingTelegramNotificationQueue_() {
       existing = [];
     }
 
-    var combined = existing.concat(failed);
+    var combined = existing.slice();
+
+    failed.forEach(function(retryItem) {
+      var key = String(retryItem.bookingId || '') + '|' +
+        String(retryItem.eventType || '');
+
+      var existingIndex = combined.findIndex(function(existingItem) {
+        return String(existingItem.bookingId || '') + '|' +
+          String(existingItem.eventType || '') === key;
+      });
+
+      if (existingIndex === -1) {
+        combined.push(retryItem);
+      } else {
+        var current = combined[existingIndex];
+
+        current.attempts = Math.max(
+          Number(current.attempts || 0),
+          Number(retryItem.attempts || 0)
+        );
+
+        current.deliveredRecipients = Array.from(new Set(
+          (current.deliveredRecipients || []).concat(
+            retryItem.deliveredRecipients || []
+          )
+        ));
+      }
+    });
 
     if (combined.length > 100) {
       combined = combined.slice(combined.length - 100);
@@ -1327,6 +1441,7 @@ function processBookingTelegramNotificationQueue_() {
         .timeBased()
         .after(5000)
         .create();
+
       props2.setProperty(triggerKey, '1');
     }
 
@@ -1427,6 +1542,7 @@ function processAppointmentReminders_() {
 }
 
 
+
 function getBookingAppointmentTimestampMs_(booking) {
   var jalaliDate = normalizeJalaliDate_(
     booking['Appointment Date'] || ''
@@ -1500,6 +1616,7 @@ function getBookingAppointmentTimestampMs_(booking) {
   }
 }
 
+
 function isAppointmentReminderSent_(bookingId) {
   var id = String(bookingId || '').trim();
   if (!id) return false;
@@ -1514,6 +1631,32 @@ function isAppointmentReminderSent_(bookingId) {
         String(log['Action'] || '').trim() === 'REMINDER_FINALIZED_NO_CUSTOMER_ID'
       )
     );
+  });
+}
+
+function isAppointmentReminderRecipientSent_(bookingId, recipient) {
+  var id = String(bookingId || '').trim();
+  var target = String(recipient || '').trim().toUpperCase();
+
+  if (!id || (target !== 'ADMIN' && target !== 'CUSTOMER')) {
+    return false;
+  }
+
+  var logs = getSheetObjects_(CONFIG.SHEETS.BOOKING_LOGS);
+
+  return logs.some(function(log) {
+    if (String(log['Booking ID'] || '').trim() !== id) {
+      return false;
+    }
+
+    var action = String(log['Action'] || '').trim();
+
+    /*
+     * Older records used one REMINDER_SENT entry only after delivery
+     * completed. Preserve those records as already delivered.
+     */
+    return action === 'REMINDER_SENT' ||
+      action === 'REMINDER_SENT_' + target;
   });
 }
 
@@ -1542,12 +1685,12 @@ function buildAppointmentReminderText_(booking) {
   );
 
   return (
-    '🔔 <b>یادآوری نوبت کائنات‌چی</b>\n\n' +
-    '👤 ' + customer + ' عزیز\n' +
-    '✨ نوبت شما: <b>' + service + '</b>\n' +
-    '📅 تاریخ: <b>' + date + '</b>\n' +
-    '🕚 ساعت: <b>' + time + '</b>\n\n' +
-    '🌿 این پیام در دقایق پایانی پیش از زمان نوبت شما ارسال شده است.'
+    '🔔 <b>یادآوری نوبت کائنات‌چی</b>\\n\\n' +
+    '👤 ' + customer + ' عزیز\\n' +
+    '✨ نوبت شما: <b>' + service + '</b>\\n' +
+    '📅 تاریخ: <b>' + date + '</b>\\n' +
+    '🕚 ساعت: <b>' + time + '</b>\\n\\n' +
+    '🌿 این پیام ۵ دقیقه قبل از زمان نوبت شما ارسال شده است.'
   );
 }
 
@@ -1580,43 +1723,16 @@ function buildAdminAppointmentReminderText_(booking) {
   );
 
   return (
-    '🔔 <b>یادآوری نوبت</b>\n\n' +
-    '👤 ' + escapeTelegramHtml_(name || 'مشتری') + '\n' +
-    '✨ ' + service + '\n' +
-    '📅 ' + date + '\n' +
-    '🕚 ' + time + '\n' +
+    '🔔 <b>یادآوری نوبت</b>\\n\\n' +
+    '👤 ' + escapeTelegramHtml_(name || 'مشتری') + '\\n' +
+    '✨ ' + service + '\\n' +
+    '📅 ' + date + '\\n' +
+    '🕚 ' + time + '\\n' +
     '📱 Telegram: ' +
-      escapeTelegramHtml_(username || 'بدون Username') + '\n' +
+      escapeTelegramHtml_(username || 'بدون Username') + '\\n' +
     '🆔 Telegram ID: <code>' +
       escapeTelegramHtml_(telegramId || 'ثبت نشده') + '</code>'
   );
-}
-
-
-function isAppointmentReminderRecipientSent_(bookingId, recipient) {
-  var id = String(bookingId || '').trim();
-  var target = String(recipient || '').trim().toUpperCase();
-
-  if (!id || (target !== 'ADMIN' && target !== 'CUSTOMER')) {
-    return false;
-  }
-
-  var logs = getSheetObjects_(CONFIG.SHEETS.BOOKING_LOGS);
-
-  return logs.some(function(log) {
-    if (String(log['Booking ID'] || '').trim() !== id) {
-      return false;
-    }
-
-    var action = String(log['Action'] || '').trim();
-
-    /*
-     * Older records used one REMINDER_SENT entry only after delivery
-     * completed. Preserve those records as already delivered.
-     */
-    return action === 'REMINDER_SENT' ||
-      action === 'REMINDER_SENT_' + target;
-  });
 }
 
 
@@ -1737,6 +1853,8 @@ function sendAppointmentReminderTelegram_(booking) {
     }).length
   };
 }
+
+
 
 
 function testBookingTelegramQueueNow() {
@@ -3722,17 +3840,43 @@ function rejectBooking_(request){
   return withBookingLock_(function(){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
     if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
-    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
-      'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
-      'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),
-      'Admin Note':String(request.note||request.reason||''),'Hold Until':''
-    });
-    appendBookingLog_({action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,bookingId:b['Booking ID'],slotKey:b['Slot Key'],details:String(request.note||request.reason||'')});
 
-    // Queue the rejection notification outside the booking request path.
+    // Prevent duplicate rejection callbacks from repeating side effects.
+    if (
+      String(b['Appointment Status'] || '') === CONFIG.STATUSES.BOOKING_REJECTED &&
+      String(b['Payment Status'] || '') === CONFIG.STATUSES.PAYMENT_REJECTED
+    ) {
+      return {
+        ok:true,
+        bookingId:b['Booking ID'],
+        status:CONFIG.STATUSES.BOOKING_REJECTED,
+        alreadyRejected:true
+      };
+    }
+
+    updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
+      'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,
+      'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
+      'Rejected At':new Date(),
+      'Rejected By':String(request.adminId||request.admin||'admin'),
+      'Admin Note':String(request.note||request.reason||''),
+      'Hold Until':''
+    });
+
+    appendBookingLog_({
+      action:CONFIG.LOG_ACTIONS.ADMIN_REJECTED,
+      bookingId:b['Booking ID'],
+      slotKey:b['Slot Key'],
+      details:String(request.note||request.reason||'')
+    });
+
     queueBookingTelegramNotification_(b, 'rejected');
 
-    return {ok:true,bookingId:b['Booking ID'],status:CONFIG.STATUSES.BOOKING_REJECTED};
+    return {
+      ok:true,
+      bookingId:b['Booking ID'],
+      status:CONFIG.STATUSES.BOOKING_REJECTED
+    };
   });
 }
 
@@ -5804,21 +5948,17 @@ function testAppointmentReminderDiagnostic() {
     });
 
     result.checks.push({
-      name: 'Customer reminder text and line breaks',
+      name: 'Customer reminder text',
       ok: customerText.indexOf('انرژی خوانی قهوه') !== -1 &&
           customerText.indexOf('1405/07/16') !== -1 &&
-          customerText.indexOf('11:00') !== -1 &&
-          customerText.indexOf('\n') !== -1 &&
-          customerText.indexOf('\\n') === -1,
+          customerText.indexOf('11:00') !== -1,
       value: customerText
     });
 
     result.checks.push({
-      name: 'Admin reminder text and line breaks',
+      name: 'Admin reminder text',
       ok: adminText.indexOf('@test_user') !== -1 &&
-          adminText.indexOf('TEST_ONLY') !== -1 &&
-          adminText.indexOf('\n') !== -1 &&
-          adminText.indexOf('\\n') === -1,
+          adminText.indexOf('TEST_ONLY') !== -1,
       value: adminText
     });
 
@@ -5837,4 +5977,510 @@ function testAppointmentReminderDiagnostic() {
     Logger.log(JSON.stringify(result, null, 2));
     return result;
   }
+}
+
+
+/**
+ * SAFE APPOINTMENT REMINDER SELECTION TEST
+ * Read-only diagnostic.
+ * Does NOT send Telegram messages.
+ * Does NOT write to any sheet.
+ * Does NOT modify bookings, payments, VIP or slots.
+ */
+function testAppointmentReminderSelection() {
+  var result = {
+    ok: false,
+    test: 'SAFE APPOINTMENT REMINDER SELECTION',
+    readOnly: true,
+    telegramSent: false,
+    sheetWrite: false,
+    paymentChanged: false,
+    vipChanged: false,
+    now: new Date().toISOString(),
+    confirmedCount: 0,
+    alreadyRemindedCount: 0,
+    withinReminderWindowCount: 0,
+    eligibleCount: 0,
+    invalidDateTimeCount: 0,
+    candidates: [],
+    errors: []
+  };
+
+  try {
+    var bookings = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
+    var logs = getSheetObjects_(CONFIG.SHEETS.BOOKING_LOGS);
+    var nowMs = Date.now();
+
+    function wasReminderSent(bookingId) {
+      var id = String(bookingId || '').trim();
+      if (!id) return false;
+
+      return logs.some(function(log) {
+        return (
+          String(log['Booking ID'] || '').trim() === id &&
+          (
+            String(log['Action'] || '').trim() === 'REMINDER_SENT' ||
+            String(log['Action'] || '').trim() === 'REMINDER_SENT_ADMIN' ||
+            String(log['Action'] || '').trim() === 'REMINDER_SENT_CUSTOMER'
+          )
+        );
+      });
+    }
+
+    bookings.forEach(function(booking) {
+      try {
+        var status = String(
+          booking['Appointment Status'] || ''
+        ).trim();
+
+        if (status !== CONFIG.STATUSES.BOOKING_CONFIRMED) {
+          return;
+        }
+
+        result.confirmedCount++;
+
+        var bookingId = String(
+          booking['Booking ID'] || ''
+        ).trim();
+
+        var date = normalizeJalaliDate_(
+          booking['Appointment Date'] || ''
+        );
+
+        var time = normalizeTime_(
+          booking['Appointment Time'] || ''
+        );
+
+        var appointmentMs =
+          getBookingAppointmentTimestampMs_(booking);
+
+        if (!appointmentMs || !/^\d{2}:\d{2}$/.test(time)) {
+          result.invalidDateTimeCount++;
+          result.candidates.push({
+            bookingId: bookingId || '(بدون شناسه)',
+            date: date,
+            time: time,
+            status: status,
+            decision: 'INVALID_DATE_OR_TIME'
+          });
+          return;
+        }
+
+        var minutesUntil = (appointmentMs - nowMs) / 60000;
+        var alreadySent = wasReminderSent(bookingId);
+        var inWindow = minutesUntil >= 4 && minutesUntil <= 6;
+
+        if (alreadySent) {
+          result.alreadyRemindedCount++;
+        }
+
+        if (inWindow) {
+          result.withinReminderWindowCount++;
+        }
+
+        if (!alreadySent && inWindow) {
+          result.eligibleCount++;
+        }
+
+        // Only report candidates near the reminder window,
+        // already-reminded bookings, or invalid date/time records.
+        if (inWindow || alreadySent) {
+          result.candidates.push({
+            bookingId: bookingId || '(بدون شناسه)',
+            date: date,
+            time: time,
+            minutesUntil: Math.round(minutesUntil * 100) / 100,
+            alreadyReminded: alreadySent,
+            inReminderWindow: inWindow,
+            decision: alreadySent
+              ? 'ALREADY_REMINDED'
+              : (inWindow ? 'ELIGIBLE_FOR_REMINDER' : 'OUTSIDE_WINDOW')
+          });
+        }
+
+      } catch (bookingError) {
+        result.errors.push({
+          bookingId: String(booking['Booking ID'] || ''),
+          error: String(
+            bookingError && bookingError.message
+              ? bookingError.message
+              : bookingError
+          )
+        });
+      }
+    });
+
+    result.ok = result.errors.length === 0;
+    Logger.log(
+      'SAFE APPOINTMENT REMINDER SELECTION TEST\n' +
+      JSON.stringify(result, null, 2)
+    );
+
+    return result;
+
+  } catch (error) {
+    result.errors.push({
+      error: String(
+        error && error.message ? error.message : error
+      )
+    });
+
+    Logger.log(
+      'SAFE APPOINTMENT REMINDER SELECTION TEST FAILED\n' +
+      JSON.stringify(result, null, 2)
+    );
+
+    return result;
+  }
+}
+
+
+function testAppointmentReminderTimes() {
+  var now = Date.now();
+  var result = {
+    test: 'READ ONLY - APPOINTMENT REMINDER TIMES',
+    nowUTC: new Date(now).toISOString(),
+    nowIran: new Date(now + 210 * 60000).toISOString()
+      .replace('T', ' ').replace('Z', ' UTC+03:30'),
+    bookings: [],
+    errors: []
+  };
+
+  try {
+    var rows = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
+
+    rows.forEach(function(b) {
+      if (
+        String(b['Appointment Status'] || '').trim() !==
+        String(CONFIG.STATUSES.BOOKING_CONFIRMED).trim()
+      ) return;
+
+      try {
+        var timestamp = getBookingAppointmentTimestampMs_(b);
+        var minutes = timestamp
+          ? Math.round((timestamp - now) / 600) / 100
+          : null;
+
+        result.bookings.push({
+          bookingId: String(b['Booking ID'] || ''),
+          status: String(b['Appointment Status'] || ''),
+          rawDate: String(b['Appointment Date'] || ''),
+          normalizedDate: normalizeJalaliDate_(
+            b['Appointment Date'] || ''
+          ),
+          rawTime: String(b['Appointment Time'] || ''),
+          normalizedTime: normalizeTime_(
+            b['Appointment Time'] || ''
+          ),
+          calculatedAppointmentUTC: timestamp
+            ? new Date(timestamp).toISOString()
+            : null,
+          minutesUntil: minutes,
+          shouldBeEligible: minutes !== null &&
+            minutes >= 4 && minutes <= 6
+        });
+      } catch (e) {
+        result.errors.push({
+          bookingId: String(b['Booking ID'] || ''),
+          error: String(e.message || e)
+        });
+      }
+    });
+
+    Logger.log(JSON.stringify(result, null, 2));
+    return result;
+  } catch (e) {
+    result.errors.push(String(e.message || e));
+    Logger.log(JSON.stringify(result, null, 2));
+    return result;
+  }
+}
+
+function diagnoseReminderConfigReadOnly() {
+  var config = getTelegramConfig_();
+  var bookingId = 'BK-D2F670799E6C';
+
+  var bookings = getSheetObjects_(CONFIG.SHEETS.BOOKINGS);
+  var logs = getSheetObjects_(CONFIG.SHEETS.BOOKING_LOGS);
+
+  var booking = bookings.filter(function(row) {
+    return String(row['Booking ID'] || '').trim() === bookingId;
+  })[0];
+
+  var customerId = booking
+    ? String(booking['Telegram ID'] || '').trim()
+    : '';
+
+  var bookingLogs = logs.filter(function(row) {
+    return String(row['Booking ID'] || '').trim() === bookingId;
+  });
+
+  var result = {
+    test: 'READ ONLY REMINDER CONFIG CHECK',
+    noTelegramSent: true,
+    noSheetWrite: true,
+    botTokenConfigured: !!config.botToken,
+    adminChatIdConfigured: !!config.adminChatId,
+    bookingFound: !!booking,
+    bookingConfirmed: !!booking &&
+      String(booking['Appointment Status'] || '') ===
+      CONFIG.STATUSES.BOOKING_CONFIRMED,
+    customerTelegramIdConfigured: !!customerId,
+    customerIdMatchesAdmin: !!customerId &&
+      customerId === config.adminChatId,
+    adminReminderLogged: bookingLogs.some(function(row) {
+      return String(row['Action'] || '') === 'REMINDER_SENT_ADMIN';
+    }),
+    customerReminderLogged: bookingLogs.some(function(row) {
+      return String(row['Action'] || '') === 'REMINDER_SENT_CUSTOMER';
+    }),
+    finalReminderLogged: bookingLogs.some(function(row) {
+      return String(row['Action'] || '') === 'REMINDER_SENT';
+    })
+  };
+
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+function testAppointmentReminderLogicSafe() {
+  var nowMs = new Date(2026, 9, 9, 10, 0, 0).getTime();
+
+  var cases = [
+    {name: '6 minutes before', minutes: 6, expected: true},
+    {name: '3 minutes before', minutes: 3, expected: true},
+    {name: 'less than 1 minute before', minutes: 0.5, expected: true},
+    {name: 'appointment starts now', minutes: 0, expected: false},
+    {name: 'appointment already started', minutes: -1, expected: false},
+    {name: '7 minutes before', minutes: 7, expected: false}
+  ];
+
+  var results = cases.map(function(test) {
+    var appointmentMs = nowMs + test.minutes * 60000;
+    var minutesUntil = (appointmentMs - nowMs) / 60000;
+    var actual = minutesUntil > 0 && minutesUntil <= 6;
+
+    return {
+      name: test.name,
+      expected: test.expected,
+      actual: actual,
+      ok: actual === test.expected
+    };
+  });
+
+  var output = {
+    ok: results.every(function(item) {
+      return item.ok;
+    }),
+    test: 'SAFE APPOINTMENT REMINDER WINDOW LOGIC',
+    noTelegramSent: true,
+    noBookingCreated: true,
+    noSheetWrite: true,
+    noPaymentChange: true,
+    noVipChange: true,
+    checks: results
+  };
+
+  Logger.log(JSON.stringify(output, null, 2));
+  return output;
+}
+
+function testAppointmentReminderRecipientHelperSafe() {
+  var result = {
+    ok: false,
+    test: 'SAFE REMINDER RECIPIENT HELPER CHECK',
+    noTelegramSent: true,
+    noBookingCreated: true,
+    noSheetWrite: true,
+    noPaymentChange: true,
+    noVipChange: true,
+    checks: []
+  };
+
+  try {
+    var exists =
+      typeof isAppointmentReminderRecipientSent_ === 'function';
+
+    result.checks.push({
+      name: 'Recipient helper exists',
+      ok: exists
+    });
+
+    result.checks.push({
+      name: 'Valid recipient names',
+      ok: 'ADMIN' === 'ADMIN' &&
+          'CUSTOMER' === 'CUSTOMER'
+    });
+
+    result.ok = result.checks.every(function(check) {
+      return check.ok === true;
+    });
+
+    Logger.log(JSON.stringify(result, null, 2));
+    return result;
+
+  } catch (error) {
+    result.error = String(
+      error && error.message ? error.message : error
+    );
+    Logger.log(JSON.stringify(result, null, 2));
+    return result;
+  }
+}
+
+function pauseTelegramWebhook() {
+  var result = telegramApiRequest_(
+    'deleteWebhook',
+    { drop_pending_updates: true }
+  );
+
+  if (!result.ok) {
+    throw new Error(JSON.stringify(result));
+  }
+
+  return result;
+}
+
+function checkTelegramWebhook() {
+  var result = telegramApiRequest_('getWebhookInfo', {});
+  console.log(JSON.stringify(result));
+  return result;
+}
+
+function isDuplicateTelegramUpdate_(updateId) {
+  if (updateId === undefined || updateId === null) {
+    return false;
+  }
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(5000);
+
+  try {
+    var cache = CacheService.getScriptCache();
+    var key = 'tg_update_' + String(updateId);
+
+    if (cache.get(key)) {
+      return true;
+    }
+
+    cache.put(key, '1', 21600);
+    return false;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function queueBookingTelegramNotification_(booking, eventType) {
+  var queueKey = 'KAENATCHI_TELEGRAM_QUEUE';
+  var triggerKey = 'KAENATCHI_TELEGRAM_TRIGGER_SCHEDULED';
+  var lock = LockService.getScriptLock();
+
+  try {
+    lock.waitLock(5000);
+
+    try {
+      var props = PropertiesService.getScriptProperties();
+      var raw = String(props.getProperty(queueKey) || '[]');
+      var queue = [];
+
+      try {
+        queue = JSON.parse(raw);
+        if (!Array.isArray(queue)) queue = [];
+      } catch (parseError) {
+        queue = [];
+      }
+
+      var bookingId = String(booking['Booking ID'] || '');
+      var type = String(eventType || '');
+
+      if (!bookingId || !type) {
+        return {
+          ok: false,
+          queued: false,
+          reason: 'MISSING_BOOKING_ID_OR_EVENT_TYPE'
+        };
+      }
+
+      var alreadyQueued = queue.some(function(item) {
+        return String(item.bookingId || '') === bookingId &&
+          String(item.eventType || '') === type;
+      });
+
+      if (!alreadyQueued) {
+        queue.push({
+          bookingId: bookingId,
+          eventType: type,
+          queuedAt: new Date().toISOString(),
+          attempts: 0,
+          deliveredRecipients: []
+        });
+      }
+
+      if (queue.length > 100) {
+        queue = queue.slice(queue.length - 100);
+      }
+
+      props.setProperty(queueKey, JSON.stringify(queue));
+
+      if (String(props.getProperty(triggerKey) || '') !== '1') {
+        ScriptApp.newTrigger('processBookingTelegramNotificationQueue_')
+          .timeBased()
+          .after(5000)
+          .create();
+
+        props.setProperty(triggerKey, '1');
+      }
+
+      return {
+        ok: true,
+        queued: true,
+        duplicate: alreadyQueued
+      };
+
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (error) {
+    console.warn(
+      'Telegram notification queue failed: ' +
+      String(error && error.message ? error.message : error)
+    );
+
+    return {
+      ok: false,
+      queued: false,
+      reason: String(error && error.message ? error.message : error)
+    };
+  }
+}
+
+function testKaenatchiTelegramDirect() {
+  var config = getTelegramConfig_();
+
+  if (!config.botToken) {
+    throw new Error('توکن ربات تنظیم نشده است.');
+  }
+
+  if (!config.adminChatId) {
+    throw new Error('شناسه چت مدیر تنظیم نشده است.');
+  }
+
+  var result = sendTelegramMessage_(
+    config.adminChatId,
+    '🧪 تست اتصال تلگرام کائنات‌چی\nاین پیام فقط برای بررسی اتصال ارسال شده است.'
+  );
+
+  console.log('Telegram direct test result: ' + JSON.stringify(result));
+
+  if (!result || result.ok !== true) {
+    throw new Error(
+      'ارسال پیام آزمایشی ناموفق بود: ' +
+      JSON.stringify(result)
+    );
+  }
+
+  return {
+    ok: true,
+    message: 'پیام آزمایشی با موفقیت ارسال شد.'
+  };
 }

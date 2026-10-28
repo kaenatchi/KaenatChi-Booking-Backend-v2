@@ -650,7 +650,7 @@ function setupTelegramWebhook() {
   }
 
   var deploymentUrl =
-    'https://script.google.com/macros/s/AKfycbyEh9txZP7nWdLoTtNvbQn_aKxiI0syH3M8Qh0TXR6C6AFC5rEuyidq1tMo5ufpKdXzHg/exec';
+    'https://script.google.com/macros/s/AKfycbzlFoGUBucjGGQ5clU3aOKrfxd7MbpSVHbOKeRMyLHa3J-SzcDcRk7P0Y4SHHOrg1wPIw/exec';
 
   var secret = String(
     props.getProperty('KAENATCHI_TELEGRAM_WEBHOOK_SECRET') || ''

@@ -3722,6 +3722,24 @@ function rejectBooking_(request){
   return withBookingLock_(function(){
     var b=getBookingByIdObject_(request.bookingId||request.trackingCode);
     if(!b)return fail_('BOOKING_NOT_FOUND','نوبت پیدا نشد.');
+
+    /*
+     * Telegram may redeliver a callback when webhook processing is slow.
+     * Make rejection idempotent: once rejected, do not append another log
+     * entry or enqueue another customer/admin notification.
+     */
+    if(
+      String(b['Appointment Status']||'')===CONFIG.STATUSES.BOOKING_REJECTED ||
+      String(b['Payment Status']||'')===CONFIG.STATUSES.PAYMENT_REJECTED
+    ){
+      return {
+        ok:true,
+        bookingId:b['Booking ID'],
+        status:CONFIG.STATUSES.BOOKING_REJECTED,
+        alreadyProcessed:true
+      };
+    }
+
     updateRowFields_(CONFIG.SHEETS.BOOKINGS,b._row,{
       'Appointment Status':CONFIG.STATUSES.BOOKING_REJECTED,'Payment Status':CONFIG.STATUSES.PAYMENT_REJECTED,
       'Rejected At':new Date(),'Rejected By':String(request.adminId||request.admin||'admin'),
